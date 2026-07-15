@@ -214,6 +214,28 @@ class TestPipeline:
         with pytest.raises(TypeError):
             run_pipeline("/tmp/input", "/tmp/output", "not-a-segmenter", input_dataset_revision="r1", pipeline_version="v1")
 
+        # Same path
+        with pytest.raises(ValueError, match="same path"):
+            run_pipeline("/tmp/same", "/tmp/same", segmenter, input_dataset_revision="r1", pipeline_version="v1")
+
+        # Overlapping: input is ancestor of output
+        with pytest.raises(ValueError, match="ancestor|overlap"):
+            run_pipeline("/tmp/ancestor", "/tmp/ancestor/child", segmenter, input_dataset_revision="r1", pipeline_version="v1")
+
+        # Overlapping: output is ancestor of input
+        with pytest.raises(ValueError, match="ancestor|overlap"):
+            run_pipeline("/tmp/ancestor/child", "/tmp/ancestor", segmenter, input_dataset_revision="r1", pipeline_version="v1")
+
+        # Sibling paths allowed (does not raise ValueError for path overlap)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sib1 = Path(tmpdir) / "sib1"
+            sib2 = Path(tmpdir) / "sib2"
+            sib1.mkdir()
+            res = run_pipeline(sib1, sib2, segmenter, input_dataset_revision="r1", pipeline_version="v1")
+            assert isinstance(res, PipelineResult)
+            assert res.processed_regions_count == 0
+
+
         # Ensure segmenter is never called
         assert segmenter.calls_count == 0
 

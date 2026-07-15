@@ -39,6 +39,15 @@ def run_pipeline(
     if not isinstance(segmenter, SentenceSegmenter):
         raise TypeError("segmenter must implement the SentenceSegmenter protocol")
 
+    in_path = Path(input_root).resolve()
+    out_path = Path(output_dir).resolve()
+    if in_path == out_path:
+        raise ValueError("Input root and output directory cannot be the same path")
+    if in_path in out_path.parents:
+        raise ValueError("Input root cannot be an ancestor of output directory (paths overlap)")
+    if out_path in in_path.parents:
+        raise ValueError("Output directory cannot be an ancestor of input root (paths overlap)")
+
     if isinstance(batch_size, bool) or not isinstance(batch_size, int) or batch_size <= 0:
         raise ValueError("batch_size must be a positive integer")
 
