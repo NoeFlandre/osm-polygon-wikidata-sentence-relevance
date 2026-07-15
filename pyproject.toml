@@ -12,6 +12,9 @@ dependencies = [
 segmentation = [
     "wtpsplit>=2.2.1,<3",
 ]
+hub = [
+    "huggingface_hub>=0.20.0",
+]
 
 [dependency-groups]
 dev = [
