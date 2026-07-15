@@ -68,11 +68,42 @@ uv run python main.py
 
 **Phase 2 (ingestion & joins)** is complete: shard discovery, Parquet loading, and the deterministic Wikipedia/Wikivoyage section-to-polygon join producing `JOINED_SECTIONS_SCHEMA`.
 
-**Phase 3 (preprocessing & segmentation)** is complete: deterministic preprocessing (section-path parsing, OSM-tag parsing, sentence normalization) and the injected-segmenter table transformation (`segment_joined_sections`) that builds `SEGMENTED_SENTENCES_SCHEMA` with batching, validation, and reporting.
+**Phase 3 (preprocessing & segmentation)** is complete: deterministic preprocessing (section-path parsing, OSM-tag parsing, sentence normalization), the injected-segmenter table transformation (`segment_joined_sections`) that builds `SEGMENTED_SENTENCES_SCHEMA` with batching, validation, and reporting, and an optional `SaTSentenceSegmenter` adapter for the wtpsplit multilingual SaT model (installed via the `segmentation` extra, see below).
 
 Not yet implemented:
 
-- The real multilingual sentence-segmentation model adapter (only the `SentenceSegmenter` protocol and a validation boundary exist).
 - Phase 4 deduplication, classification, dataset upload, and any CLI.
 
-Later phases will add the model adapter and Phase 4 pipeline stages.
+Later phases will add Phase 4 pipeline stages.
+
+## Optional Segmentation Model (wtpsplit / SaT)
+
+The base install (`uv sync`) is intentionally lightweight and does **not**
+pull in a heavy ML dependency. A concrete segmenter backed by
+[wtpsplit](https://github.com/segment-any-text/wtpsplit)'s multilingual SaT model
+is provided as an optional extra:
+
+```bash
+uv sync --extra segmentation
+```
+
+This installs `wtpsplit>=2.2.1,<3` in addition to the core dependencies.
+
+Notes:
+
+- Model weights are downloaded and cached by the underlying `wtpsplit` library
+  on first use. **No model weights are stored in this repository.**
+- Importing `osm_polygon_sentence_relevance.sat_adapter` is side-effect-free;
+  the model is constructed lazily on the first non-empty `split_batch` call.
+- Plain `uv sync` and the full test suite continue to work without
+  wtpsplit installed.
+
+Usage example:
+
+```python
+from osm_polygon_sentence_relevance.sat_adapter import SaTSentenceSegmenter
+from osm_polygon_sentence_relevance.segmentation import split_validated_batch
+
+segmenter = SaTSentenceSegmenter()  # defaults to "sat-3l-sm"
+groups = split_validated_batch(segmenter, ["First sentence. Second one."], ["en"])
+```

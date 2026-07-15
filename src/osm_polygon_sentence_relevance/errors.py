@@ -109,3 +109,10 @@ class JoinIntegrityError(Exception):
             f"{source}/{table_name} integrity violation on {key!r}: "
             f"{violation} (sample: [{detail}])"
         )
+
+
+# ---------------------------------------------------------------------------
+# Finalization errors (Phase 4)
+# ---------------------------------------------------------------------------
+class FinalizationError(ValueError):
+    """Raised when sentence finalization fails or violates its contract."""
