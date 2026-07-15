@@ -158,8 +158,13 @@ def finalize_sentence_dataset(
 
     # 3. Handle empty input
     if table.num_rows == 0:
+        metadata = {
+            b"input_dataset_revision": input_dataset_revision.encode("utf-8"),
+            b"pipeline_version": pipeline_version.encode("utf-8"),
+        }
+        empty_schema = OUTPUT_SENTENCE_SCHEMA.with_metadata(metadata)
         return FinalizedDataset(
-            table=OUTPUT_SENTENCE_SCHEMA.empty_table(),
+            table=empty_schema.empty_table(),
             report=FinalizationReport(
                 input_sentence_occurrence_count=0,
                 output_sentence_count=0,
@@ -287,7 +292,11 @@ def finalize_sentence_dataset(
         col_data = [r[field.name] for r in output_rows]
         out_dict[field.name] = pa.array(col_data, type=field.type)
 
-    out_table = pa.table(out_dict, schema=OUTPUT_SENTENCE_SCHEMA)
+    metadata = {
+        b"input_dataset_revision": input_dataset_revision.encode("utf-8"),
+        b"pipeline_version": pipeline_version.encode("utf-8"),
+    }
+    out_table = pa.table(out_dict, schema=OUTPUT_SENTENCE_SCHEMA.with_metadata(metadata))
 
     # 9. Report metrics
     input_count = len(rows)

@@ -116,3 +116,10 @@ class JoinIntegrityError(Exception):
 # ---------------------------------------------------------------------------
 class FinalizationError(ValueError):
     """Raised when sentence finalization fails or violates its contract."""
+
+
+# ---------------------------------------------------------------------------
+# Export errors (Phase 5A)
+# ---------------------------------------------------------------------------
+class ExportError(ValueError):
+    """Raised when local dataset export fails."""
