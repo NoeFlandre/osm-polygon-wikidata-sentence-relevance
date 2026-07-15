@@ -123,3 +123,10 @@ class FinalizationError(ValueError):
 # ---------------------------------------------------------------------------
 class ExportError(ValueError):
     """Raised when local dataset export fails."""
+
+
+# ---------------------------------------------------------------------------
+# Acquisition errors (Phase 6B)
+# ---------------------------------------------------------------------------
+class AcquisitionError(ValueError):
+    """Raised when Hugging Face dataset acquisition fails."""
