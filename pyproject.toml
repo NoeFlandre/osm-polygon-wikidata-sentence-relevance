@@ -1,0 +1,24 @@
+[project]
+name = "osm-polygon-sentence-relevance"
+version = "0.1.0"
+description = "Sentence-level relevance dataset derived from OSM polygons, Wikipedia, and Wikivoyage."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "pyarrow",
+]
+
+[dependency-groups]
+dev = [
+    "pytest",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
