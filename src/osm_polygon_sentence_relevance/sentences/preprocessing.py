@@ -16,7 +16,7 @@ import json
 import re
 import unicodedata
 
-from osm_polygon_sentence_relevance.errors import PreprocessingError
+from osm_polygon_sentence_relevance.contracts.errors import PreprocessingError
 
 # Zero-width characters that are silently removed.
 _ZERO_WIDTH_REMOVE = ("\u200b", "\u2060", "\ufeff")

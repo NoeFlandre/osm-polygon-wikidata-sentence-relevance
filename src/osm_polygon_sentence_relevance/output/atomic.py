@@ -15,7 +15,7 @@ import shutil
 import uuid
 from pathlib import Path
 
-from osm_polygon_sentence_relevance.errors import ExportError
+from osm_polygon_sentence_relevance.contracts.errors import ExportError
 
 
 def install_atomic(

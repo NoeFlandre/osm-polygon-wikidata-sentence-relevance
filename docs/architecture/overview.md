@@ -7,13 +7,18 @@ scope and not yet implemented.
 
 The package is organized into domain packages under
 `src/osm_polygon_sentence_relevance/`. Cross-cutting contracts
-(`constants.py`, `schemas.py`, `settings.py`, `errors.py`) remain at the root.
+(`constants`, `errors`, `schemas`, `settings`) now live in the canonical
+`contracts/` package; the previous top-level `constants.py`, `errors.py`,
+`schemas.py`, and `settings.py` are thin compatibility facades.
 
 ## Pipeline stages and module ownership
 
 | Stage | Module | Responsibility |
 |-------|--------|----------------|
-| Schema contracts | `schemas.py` | Immutable Arrow schemas for all six input tables and the output sentence table. |
+| Schema contracts | `contracts/schemas/` | Immutable Arrow schemas for all six input tables and the output sentence table. |
+| Cross-cutting constants | `contracts/constants.py` | Dataset IDs, pipeline version, allowed sources/paths. |
+| Cross-cutting errors | `contracts/errors.py` | Exception hierarchy. |
+| Settings | `application/settings.py` | Frozen `PipelineSettings` with portable data-dir precedence. |
 | Shard discovery | `ingestion/discovery.py` | Locate per-region Parquet shards under an input root. |
 | Loading | `ingestion/loading.py` | Project only required columns and validate against schemas. |
 | Acquisition | `ingestion/acquisition.py` | Read-only Hugging Face snapshot acquisition. |
@@ -28,14 +33,16 @@ The package is organized into domain packages under
 
 ## Compatibility-facade policy
 
-The implementation lives in the domain packages above. Thin compatibility
-facades remain at the previous top-level module paths (`cli`, `pipeline`,
-`acquisition`, `discovery`, `loading`, `preprocessing`, `segmentation`,
-`sat_adapter`, `sentence_table`, `finalization`, `exporter`). Each facade
-has only a module docstring, explicit re-exports, an accurate `__all__`, and
-no logic, no warnings, and no import-time side effects. Production code
-imports via canonical domain paths; never via a facade. Tests and external
-consumers may continue to import from the legacy paths.
+The implementation lives in the domain packages above (and `contracts/`).
+Thin compatibility facades remain at the previous top-level module paths
+(`cli`, `pipeline`, `acquisition`, `discovery`, `loading`,
+`preprocessing`, `segmentation`, `sat_adapter`, `sentence_table`,
+`finalization`, `exporter`, plus `constants`, `errors`, `schemas`,
+`settings`). Each facade has only a module docstring, explicit re-exports,
+an accurate `__all__`, and no logic, no warnings, and no import-time side
+effects. Production code imports via canonical domain paths; never via a
+facade. Tests and external consumers may continue to import from the legacy
+paths.
 
 ## Local versus Hub input flow
 

@@ -23,7 +23,8 @@ pre-1.0 (alpha).
 ## Repository layout
 
 - `src/osm_polygon_sentence_relevance/` — the package, organized into
-  `application/`, `ingestion/`, `sentences/`, `joins/`, `output/`.
+  `application/`, `contracts/`, `ingestion/`, `sentences/`, `joins/`,
+  `output/`, with thin compatibility facades at the package root.
 - `tests/` — mirrored unit/integration/compatibility structure with shared
   `tests/support/` factories.
 - `docs/` — this documentation tree.

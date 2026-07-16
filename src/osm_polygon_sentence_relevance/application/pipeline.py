@@ -5,13 +5,13 @@ from pathlib import Path
 
 import pyarrow as pa
 
+from osm_polygon_sentence_relevance.contracts.schemas import SEGMENTED_SENTENCES_SCHEMA
 from osm_polygon_sentence_relevance.ingestion.discovery import discover_shards
 from osm_polygon_sentence_relevance.joins import build_region_section_occurrences
 from osm_polygon_sentence_relevance.output.exporter import (
     ExportResult,
     export_finalized_dataset,
 )
-from osm_polygon_sentence_relevance.schemas import SEGMENTED_SENTENCES_SCHEMA
 from osm_polygon_sentence_relevance.sentences.finalization import (
     FinalizationReport,
     finalize_sentence_dataset,

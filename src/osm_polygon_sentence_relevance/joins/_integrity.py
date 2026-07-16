@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pyarrow as pa
 
-from osm_polygon_sentence_relevance.errors import JoinIntegrityError
+from osm_polygon_sentence_relevance.contracts.errors import JoinIntegrityError
 
 
 def _check_non_empty(

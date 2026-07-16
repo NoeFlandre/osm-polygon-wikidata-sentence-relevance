@@ -9,6 +9,22 @@ All canonical modules live under
 
 ## Canonical imports
 
+### `osm_polygon_sentence_relevance.contracts` (cross-cutting contracts)
+
+- `contracts.constants` — `INPUT_DATASET_ID`, `OUTPUT_DATASET_ID`,
+  `DEFAULT_INPUT_REVISION`, `PIPELINE_VERSION`, `ALLOWED_SOURCES`,
+  `SCHEMA_NAMES`, `ALLOWED_INPUT_PATHS`.
+- `contracts.errors` — `ConfigurationError`, `SchemaContractError`,
+  `UnknownTableError`, `MissingColumnsError`, `IncompatibleTypesError`,
+  `PreprocessingError`, `SegmentationError`, `ShardDiscoveryError`,
+  `JoinIntegrityError`, `FinalizationError`, `ExportError`,
+  `AcquisitionError`.
+- `contracts.schemas` — all PyArrow schemas (`POLYGONS_SCHEMA`,
+  `POLYGON_ARTICLES_SCHEMA`, `WIKIPEDIA_DOCUMENTS_SCHEMA`,
+  `WIKIVOYAGE_DOCUMENTS_SCHEMA`, `SECTIONS_SCHEMA`, `OUTPUT_SENTENCE_SCHEMA`,
+  `JOINED_SECTIONS_SCHEMA`, `SEGMENTED_SENTENCES_SCHEMA`), `SCHEMA_REGISTRY`,
+  and `validate_table_schema`.
+
 ### `osm_polygon_sentence_relevance.application`
 
 - `main(args=None, *, model_factory=None, acquisition_fn=None) -> int`
@@ -22,6 +38,9 @@ All canonical modules live under
 - `acquisition.acquire_dataset_snapshot(dataset_id, requested_revision, *,
   hub_api=None, download_fn=None) -> AcquisitionResult`
   (optional `huggingface_hub` extra; lazy import)
+- `acquisition.ALLOW_PATTERNS`, `acquisition.IGNORE_PATTERNS`
+  (snapshot allow/ignore glob patterns — these live on
+  `ingestion.acquisition`, **not** on `constants`)
 - `discovery.RegionShardSet`
 - `discovery.discover_shards(root) -> list[RegionShardSet]`
 - `loading.load_validated_table(name, path, *, columns=...) -> pa.Table`
@@ -59,35 +78,28 @@ All canonical modules live under
 - `export_finalized_dataset(dataset, output_dir, *, overwrite=False)
   -> ExportResult`
 
-### Root contracts
+### Root compatibility facades
 
-- `constants` — `INPUT_DATASET_ID`, `ALLOWED_INPUT_PATHS`, `ALLOW_PATTERNS`,
-  `IGNORE_PATTERNS`, `ALLOWED_SOURCES`, `PIPELINE_VERSION`.
-- `schemas` — all PyArrow schemas (`OUTPUT_SENTENCE_SCHEMA`,
-  `SEGMENTED_SENTENCES_SCHEMA`, `JOINED_SECTIONS_SCHEMA`, input schemas).
-- `settings` — `PipelineSettings`.
-- `errors` — `ConfigurationError`, `SchemaContractError`,
-  `PreprocessingError`, `SegmentationError`, `ShardDiscoveryError`,
-  `JoinIntegrityError`, `FinalizationError`, `ExportError`,
-  `AcquisitionError`.
+These top-level modules are thin facades that re-export the canonical
+symbols (implementation lives under `contracts/`, `application/`,
+`ingestion/`, `sentences/`, `joins/`, `output/`). They are stable but
+new code should prefer the canonical paths above.
 
-## Compatibility imports
-
-The following legacy top-level modules remain as thin facades that
-re-export the canonical symbols. They are stable but new code should
-prefer the canonical paths above.
-
-- `osm_polygon_sentence_relevance.acquisition`
-- `osm_polygon_sentence_relevance.cli`
-- `osm_polygon_sentence_relevance.discovery`
-- `osm_polygon_sentence_relevance.exporter`
-- `osm_polygon_sentence_relevance.finalization`
-- `osm_polygon_sentence_relevance.loading`
-- `osm_polygon_sentence_relevance.pipeline`
-- `osm_polygon_sentence_relevance.preprocessing`
-- `osm_polygon_sentence_relevance.sat_adapter`
-- `osm_polygon_sentence_relevance.segmentation`
-- `osm_polygon_sentence_relevance.sentence_table`
+- `constants` (facade) — re-exports `contracts.constants`
+- `schemas` (facade) — re-exports `contracts.schemas`
+- `settings` (facade) — re-exports `application.settings`
+- `errors` (facade) — re-exports `contracts.errors`
+- `acquisition` (facade) — re-exports `ingestion.acquisition`
+- `cli` (facade) — re-exports `application.cli`
+- `discovery` (facade) — re-exports `ingestion.discovery`
+- `exporter` (facade) — re-exports `output.exporter`
+- `finalization` (facade) — re-exports `sentences.finalization`
+- `loading` (facade) — re-exports `ingestion.loading`
+- `pipeline` (facade) — re-exports `application.pipeline`
+- `preprocessing` (facade) — re-exports `sentences.preprocessing`
+- `sat_adapter` (facade) — re-exports `sentences.sat`
+- `segmentation` (facade) — re-exports `sentences.segmentation`
+- `sentence_table` (facade) — re-exports `sentences.table`
 
 Do not rely on private underscore modules (`_export` is gone; the
 equivalent helpers now live under `output/`).

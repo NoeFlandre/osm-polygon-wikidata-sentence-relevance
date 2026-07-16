@@ -90,13 +90,15 @@ def test_relative_markdown_links_resolve(doc_rel: str) -> None:
 
 def test_readme_dataset_ids_match_constants() -> None:
     """README dataset links must use the canonical constants."""
-    constants = _read(_resolve("src/osm_polygon_sentence_relevance/constants.py"))
+    constants = _read(
+        _resolve("src/osm_polygon_sentence_relevance/contracts/constants.py")
+    )
     readme = _read(_resolve("README.md"))
 
     input_id_match = re.search(r'INPUT_DATASET_ID:\s*str\s*=\s*"([^"]+)"', constants)
     output_id_match = re.search(r'OUTPUT_DATASET_ID:\s*str\s*=\s*"([^"]+)"', constants)
-    assert input_id_match, "INPUT_DATASET_ID not found in constants.py"
-    assert output_id_match, "OUTPUT_DATASET_ID not found in constants.py"
+    assert input_id_match, "INPUT_DATASET_ID not found in contracts/constants.py"
+    assert output_id_match, "OUTPUT_DATASET_ID not found in contracts/constants.py"
 
     assert input_id_match.group(1) in readme
     assert output_id_match.group(1) in readme
@@ -254,3 +256,51 @@ def test_no_unpublished_output_dataset_claim(doc_rel: str) -> None:
     assert forbidden not in text.lower(), (
         f"{doc_rel}: must not claim the output dataset is already published"
     )
+
+
+# ---------------------------------------------------------------------------
+# API reference accuracy: canonical module paths and ownership
+# ---------------------------------------------------------------------------
+
+
+def test_api_reference_uses_contracts_canonical_paths() -> None:
+    """docs/reference/api.md must point at the canonical contracts modules."""
+    api = _read(_resolve("docs/reference/api.md"))
+    assert "contracts.constants" in api
+    assert "contracts.errors" in api
+    assert "contracts.schemas" in api
+    # Settings ownership is canonical at application/settings.
+    assert "application/settings" in api or "application.settings" in api
+
+
+def test_api_reference_does_not_put_allow_patterns_under_constants() -> None:
+    """The API reference must not claim ALLOW_PATTERNS/IGNORE_PATTERNS live
+    on ``constants``; they belong to ``ingestion.acquisition``."""
+    api = _read(_resolve("docs/reference/api.md"))
+    # The erroneous 'constants — ... ALLOW_PATTERNS, IGNORE_PATTERNS ...'
+    # phrasing must not appear.
+    assert "ALLOW_PATTERNS`,\n  `IGNORE_PATTERNS`" not in api.replace(" ", "")
+    # Positive: the correct location is documented.
+    assert "acquisition.ALLOW_PATTERNS" in api
+    assert "acquisition.IGNORE_PATTERNS" in api
+
+
+def test_no_stale_seagate_or_external_drive_claims() -> None:
+    """No doc may still claim the legacy Seagate/external-drive data dir."""
+    markers = ["/Volumes/", "Seagate", "external-drive", "external drive path"]
+    for doc_rel in [
+        "README.md",
+        "docs/index.md",
+        "docs/architecture/overview.md",
+        "docs/guides/development.md",
+        "docs/guides/getting-started.md",
+        "docs/guides/reproducibility.md",
+        "docs/reference/api.md",
+        "docs/reference/cli.md",
+        "docs/reference/data-contract.md",
+    ]:
+        text = _read(_resolve(doc_rel))
+        for marker in markers:
+            assert marker not in text, (
+                f"{doc_rel}: stale machine-path marker '{marker}' must not appear"
+            )

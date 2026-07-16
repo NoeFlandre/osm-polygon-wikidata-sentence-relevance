@@ -10,8 +10,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from osm_polygon_sentence_relevance.constants import ALLOWED_INPUT_PATHS
-from osm_polygon_sentence_relevance.errors import ShardDiscoveryError
+from osm_polygon_sentence_relevance.contracts.constants import ALLOWED_INPUT_PATHS
+from osm_polygon_sentence_relevance.contracts.errors import ShardDiscoveryError
 
 # Mapping from ALLOWED_INPUT_PATHS entries to logical table names.
 _PATH_TO_TABLE: dict[str, str] = {

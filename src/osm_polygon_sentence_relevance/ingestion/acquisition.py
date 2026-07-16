@@ -5,7 +5,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from osm_polygon_sentence_relevance.errors import AcquisitionError
+from osm_polygon_sentence_relevance.contracts.errors import AcquisitionError
 from osm_polygon_sentence_relevance.ingestion.discovery import discover_shards
 
 # Keep allow/ignore patterns as module-level immutable constants
