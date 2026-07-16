@@ -32,7 +32,7 @@ class TestAllowedInputPaths:
 
 class TestAllowedSources:
     def test_exactly_two_sources(self):
-        assert ALLOWED_SOURCES == frozenset({"wikipedia", "wikivoyage"})
+        assert frozenset({"wikipedia", "wikivoyage"}) == ALLOWED_SOURCES
 
 
 class TestSchemaNames:

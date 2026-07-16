@@ -31,9 +31,7 @@ class TestDevelopmentDependencies:
         groups = data.get("dependency-groups", {})
         dev = groups.get("dev", [])
         pytest_entries = [d for d in dev if isinstance(d, str) and "pytest" in d]
-        assert pytest_entries, (
-            "pytest must be declared in [dependency-groups] dev"
-        )
+        assert pytest_entries, "pytest must be declared in [dependency-groups] dev"
 
     def test_pytest_not_only_in_optional_dependencies(self):
         data = _load_pyproject()

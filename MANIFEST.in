@@ -1,0 +1,11 @@
+# Files included in the source distribution.
+# The wheel does not install any documentation; the docs/ tree lives in
+# the project tree and is shipped in the sdist for offline reference.
+include README.md
+include pyproject.toml
+
+recursive-include docs *.md
+
+# Explicitly exclude the local-only coding-agent handoff guide from
+# every source distribution and wheel.
+prune .local-docs

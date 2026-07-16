@@ -1,15 +1,17 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import hashlib
 import json
+from dataclasses import dataclass
+from typing import Any
+
 import pyarrow as pa
 
 from osm_polygon_sentence_relevance.constants import ALLOWED_SOURCES
 from osm_polygon_sentence_relevance.errors import FinalizationError
 from osm_polygon_sentence_relevance.schemas import (
-    SEGMENTED_SENTENCES_SCHEMA,
     OUTPUT_SENTENCE_SCHEMA,
+    SEGMENTED_SENTENCES_SCHEMA,
 )
 
 
@@ -89,7 +91,7 @@ def deterministic_sentence_id(
     return hashlib.sha256(json_str.encode("utf-8")).hexdigest().lower()
 
 
-def _row_to_stable_string(row: dict) -> str:
+def _row_to_stable_string(row: dict[str, Any]) -> str:
     """Construct a stable, canonical JSON string representation of the complete row.
 
     This maps the row fields based on SEGMENTED_SENTENCES_SCHEMA, ensuring a
@@ -102,7 +104,6 @@ def _row_to_stable_string(row: dict) -> str:
         separators=(",", ":"),
         ensure_ascii=False,
     )
-
 
 
 def finalize_sentence_dataset(
@@ -133,7 +134,9 @@ def finalize_sentence_dataset(
     if not isinstance(pipeline_version, str):
         raise FinalizationError("pipeline_version must be a string")
     if not input_dataset_revision.strip():
-        raise FinalizationError("input_dataset_revision cannot be blank or whitespace-only")
+        raise FinalizationError(
+            "input_dataset_revision cannot be blank or whitespace-only"
+        )
     if not pipeline_version.strip():
         raise FinalizationError("pipeline_version cannot be blank or whitespace-only")
 
@@ -150,11 +153,10 @@ def finalize_sentence_dataset(
                 f"Type mismatch for field '{field.name}': "
                 f"expected {field.type}, got {actual_field.type}"
             )
-        if not field.nullable:
-            if table.column(field.name).null_count > 0:
-                raise FinalizationError(
-                    f"Field '{field.name}' is non-nullable but contains nulls"
-                )
+        if not field.nullable and table.column(field.name).null_count > 0:
+            raise FinalizationError(
+                f"Field '{field.name}' is non-nullable but contains nulls"
+            )
 
     # 3. Handle empty input
     if table.num_rows == 0:
@@ -182,7 +184,7 @@ def finalize_sentence_dataset(
     # 5. Context before deduplication: group by (polygon_id, source, document_id, section_id)
     rows = table.to_pylist()
 
-    groups = {}
+    groups: dict[tuple[str, str, str, str], list[dict[str, Any]]] = {}
     for r in rows:
         key = (r["polygon_id"], r["source"], r["document_id"], r["section_id"])
         groups.setdefault(key, []).append(r)
@@ -200,7 +202,7 @@ def finalize_sentence_dataset(
             )
 
     # 6. Exact deduplication key: (polygon_id, language, sentence_text_normalized)
-    dedup_groups = {}
+    dedup_groups: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
     for r in rows:
         dedup_key = (r["polygon_id"], r["language"], r["sentence_text_normalized"])
         dedup_groups.setdefault(dedup_key, []).append(r)
@@ -208,10 +210,12 @@ def finalize_sentence_dataset(
     output_rows = []
     cross_source_duplicate_group_count = 0
 
-    for dedup_key, group_rows in dedup_groups.items():
+    for _dedup_key, group_rows in dedup_groups.items():
         # Canonical occurrence selection:
         # Wikipedia before Wikivoyage; then document_id; section_index; section_id; sentence_index; stable row representation.
-        def canonical_sort_key(item):
+        def canonical_sort_key(
+            item: dict[str, Any],
+        ) -> tuple[Any, Any, Any, Any, Any, Any]:
             src_val = 0 if item["source"] == "wikipedia" else 1
             stable_val = _row_to_stable_string(item)
             return (
@@ -237,7 +241,7 @@ def finalize_sentence_dataset(
 
         # Deduplication fields
         dup_count = len(group_rows)
-        dup_sources = sorted(list({item["source"] for item in group_rows}))
+        dup_sources = sorted({item["source"] for item in group_rows})
 
         # Track cross-source groups
         sources_set = {item["source"] for item in group_rows}
@@ -296,7 +300,9 @@ def finalize_sentence_dataset(
         b"input_dataset_revision": input_dataset_revision.encode("utf-8"),
         b"pipeline_version": pipeline_version.encode("utf-8"),
     }
-    out_table = pa.table(out_dict, schema=OUTPUT_SENTENCE_SCHEMA.with_metadata(metadata))
+    out_table = pa.table(
+        out_dict, schema=OUTPUT_SENTENCE_SCHEMA.with_metadata(metadata)
+    )
 
     # 9. Report metrics
     input_count = len(rows)

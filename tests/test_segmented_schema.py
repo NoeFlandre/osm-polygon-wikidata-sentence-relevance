@@ -6,7 +6,6 @@ import pyarrow as pa
 
 from osm_polygon_sentence_relevance.schemas import SEGMENTED_SENTENCES_SCHEMA
 
-
 EXPECTED_FIELDS = [
     ("polygon_id", pa.string(), False),
     ("wikidata", pa.string(), False),

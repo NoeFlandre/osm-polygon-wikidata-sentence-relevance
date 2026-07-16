@@ -23,7 +23,7 @@ class TestParseSectionPath:
         assert parse_section_path("[]") == []
 
     @pytest.mark.parametrize(
-        "raw,expected",
+        ("raw", "expected"),
         [
             ('["Introduction"]', ["Introduction"]),
             ('["a", "b", "c"]', ["a", "b", "c"]),
@@ -147,9 +147,7 @@ class TestNormalizeSentence:
         assert normalize_sentence(text) == "La ville est ancienne."
 
     def test_repeated_leading_markers_removed(self):
-        text = (
-            "[ edit | edit ] [ edit | history ] The river flows north."
-        )
+        text = "[ edit | edit ] [ edit | history ] The river flows north."
         assert normalize_sentence(text) == "The river flows north."
 
     def test_bracketed_content_later_remains(self):
@@ -168,9 +166,7 @@ class TestEditMarkerRequiresPipe:
         assert normalize_sentence("[ edit | source ] Text.") == "Text."
 
     def test_non_english_marker_with_pipe(self):
-        assert (
-            normalize_sentence("[ سمول | سرچينه سمول ] متن.") == "متن."
-        )
+        assert normalize_sentence("[ سمول | سرچينه سمول ] متن.") == "متن."
 
     def test_repeated_valid_markers(self):
         text = "[ edit | source ] [ edit | history ] The river flows north."

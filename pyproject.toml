@@ -19,6 +19,8 @@ hub = [
 [dependency-groups]
 dev = [
     "pytest",
+    "ruff>=0.14,<0.15",
+    "mypy>=1.18,<3",
 ]
 
 [build-system]
@@ -34,3 +36,66 @@ osm-polygon-sentence-relevance = "osm_polygon_sentence_relevance.cli:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 88
+src = ["src", "tests"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors (correctness)
+    "W",    # pycodestyle warnings
+    "F",    # Pyflakes: unused imports/variables
+    "I",    # isort: import ordering
+    "UP",   # pyupgrade: safe modernization
+    "B",    # flake8-bugbear: common correctness bugs
+    "C4",   # flake8-comprehensions
+    "SIM",  # flake8-simplify
+    "PT",   # flake8-pytest-style
+    "RUF100",  # unused-noqa: catches stale or ineffective suppression comments
+]
+ignore = [
+    "E501",  # line length handled by formatter
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["osm_polygon_sentence_relevance"]
+
+
+# ---------------------------------------------------------------------------
+# mypy: practical static type gate (src/ only, Python 3.12).
+# Optional heavy dependencies (wtpsplit, huggingface_hub) are not installed
+# in the base dev environment; their imports are type-checked lazily at
+# runtime, so missing stubs are scoped per-module rather than globally.
+# ---------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.12"
+files = ["src"]
+check_untyped_defs = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_unreachable = true
+disallow_untyped_defs = true
+
+[[tool.mypy.overrides]]
+# wtpsplit is only imported lazily inside SaTSentenceSegmenter._get_model.
+# It is an optional extra; stubs are not guaranteed in the base env.
+module = "wtpsplit.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# pyarrow does not ship type stubs or a py.typed marker; treat its
+# surface as untyped rather than blocking the src/ gate.
+module = "pyarrow.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# huggingface_hub is only imported lazily inside acquire_dataset_snapshot.
+# It is an optional extra; stubs are not guaranteed in the base env.
+module = "huggingface_hub.*"
+ignore_missing_imports = true

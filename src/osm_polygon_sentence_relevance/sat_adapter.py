@@ -17,17 +17,22 @@ repository.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from typing import Any
+from typing import Any, Protocol, cast
 
 from osm_polygon_sentence_relevance.errors import SegmentationError
-from osm_polygon_sentence_relevance.segmentation import SentenceSegmenter
 
 
-def _lazy_import_sat():
+class _SaTModel(Protocol):
+    """Minimal structural type for the wtpsplit SaT model surface we use."""
+
+    def split(self, texts: list[str], **kwargs: object) -> Sequence[Sequence[str]]: ...
+
+
+def _lazy_import_sat() -> Callable[..., object]:
     """Import ``wtpsplit.SaT`` lazily, raising a helpful error if missing."""
     try:
         from wtpsplit import SaT
-    except ImportError as exc:  # noqa: BLE001 - surface a guided message
+    except ImportError as exc:  # intentionally broad: surface a guided message
         raise SegmentationError(
             "SaTSentenceSegmenter requires the optional 'wtpsplit' dependency. "
             "Install it with: uv sync --extra segmentation"
@@ -68,25 +73,25 @@ class SaTSentenceSegmenter:
         # this segmenter's behavior.
         self._model_kwargs: dict[str, Any] = dict(model_kwargs or {})
         self._split_kwargs: dict[str, Any] = dict(split_kwargs or {})
-        self._model: object | None = None
+        self._model: _SaTModel | None = None
 
-    def _get_model(self) -> object:
+    def _get_model(self) -> _SaTModel:
         if self._model is not None:
             return self._model
-        factory = self._model_factory
-        if factory is None:
-            factory = _lazy_import_sat()
+        if self._model_factory is None:
+            model_factory_callable: Callable[..., object] = _lazy_import_sat()
+        else:
+            model_factory_callable = self._model_factory
         try:
-            model = factory(self._model_name, **self._model_kwargs)
+            model = model_factory_callable(self._model_name, **self._model_kwargs)
         except SegmentationError:
             raise
-        except Exception as exc:  # noqa: BLE001 - wrap any construction error
+        except Exception as exc:  # intentionally broad: wrap any construction error
             raise SegmentationError(
-                f"SaTSentenceSegmenter: failed to construct model "
-                f"{self._model_name!r}"
+                f"SaTSentenceSegmenter: failed to construct model {self._model_name!r}"
             ) from exc
-        self._model = model
-        return model
+        self._model = cast("_SaTModel", model)
+        return self._model
 
     def split_batch(
         self,
@@ -105,7 +110,7 @@ class SaTSentenceSegmenter:
         model = self._get_model()
         try:
             raw = model.split(list(texts), **self._split_kwargs)
-        except Exception as exc:  # noqa: BLE001 - wrap any inference error
+        except Exception as exc:  # intentionally broad: wrap any inference error
             raise SegmentationError(
                 "SaTSentenceSegmenter: model inference failed"
             ) from exc

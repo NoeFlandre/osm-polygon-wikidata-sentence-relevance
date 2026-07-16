@@ -12,16 +12,15 @@ import pyarrow.parquet as pq
 import pytest
 
 from osm_polygon_sentence_relevance.errors import (
-    IncompatibleTypesError,
     MissingColumnsError,
-    SchemaContractError,
 )
 from osm_polygon_sentence_relevance.schemas import POLYGONS_SCHEMA
-
 from tests.helpers import make_polygon_row, rows_to_table
 
 
-def _write_polygons_parquet(tmp_path: Path, rows: list[dict[str, list]] | None = None) -> Path:
+def _write_polygons_parquet(
+    tmp_path: Path, rows: list[dict[str, list]] | None = None
+) -> Path:
     """Write a minimal polygons Parquet file and return its path."""
     if rows is None:
         rows = [make_polygon_row()]
@@ -61,7 +60,9 @@ class TestSchemaMismatch:
         # Write a file missing a column
         row = make_polygon_row()
         del row["polygon_id"]
-        truncated_schema = pa.schema([f for f in POLYGONS_SCHEMA if f.name != "polygon_id"])
+        truncated_schema = pa.schema(
+            [f for f in POLYGONS_SCHEMA if f.name != "polygon_id"]
+        )
         table = rows_to_table([row], truncated_schema)
         fpath = tmp_path / "bad.parquet"
         pq.write_table(table, fpath)
@@ -77,7 +78,9 @@ class TestProjection:
         from osm_polygon_sentence_relevance.loading import load_validated_table
 
         fpath = _write_polygons_parquet(tmp_path)
-        result = load_validated_table("polygons", fpath, columns=("polygon_id", "region"))
+        result = load_validated_table(
+            "polygons", fpath, columns=("polygon_id", "region")
+        )
         assert result.column_names == ["polygon_id", "region"]
         assert result.num_rows == 1
 
@@ -86,4 +89,6 @@ class TestProjection:
 
         fpath = _write_polygons_parquet(tmp_path)
         with pytest.raises(ValueError, match="nonexistent_col"):
-            load_validated_table("polygons", fpath, columns=("polygon_id", "nonexistent_col"))
+            load_validated_table(
+                "polygons", fpath, columns=("polygon_id", "nonexistent_col")
+            )

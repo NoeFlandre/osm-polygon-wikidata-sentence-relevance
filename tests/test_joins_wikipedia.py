@@ -16,10 +16,9 @@ from osm_polygon_sentence_relevance.schemas import (
     SECTIONS_SCHEMA,
     WIKIPEDIA_DOCUMENTS_SCHEMA,
 )
-
 from tests.helpers import (
-    make_polygon_row,
     make_polygon_article_row,
+    make_polygon_row,
     make_section_row,
     make_wikipedia_document_row,
     rows_to_table,
@@ -48,24 +47,49 @@ class TestWikipediaJoinExpansion:
     def test_two_polygons_one_article(self):
         from osm_polygon_sentence_relevance.joins import join_wikipedia_sections
 
-        polygons = _polygons_table([
-            make_polygon_row(polygon_id="poly-1", wikidata="Q889", name="Polygon A"),
-            make_polygon_row(polygon_id="poly-2", wikidata="Q889", name="Polygon B"),
-        ])
-        polygon_articles = _pa_table([
-            make_polygon_article_row(polygon_id="poly-1", article_id="art-1"),
-            make_polygon_article_row(polygon_id="poly-2", article_id="art-1"),
-        ])
-        wp_docs = _wp_docs_table([
-            make_wikipedia_document_row(document_id="doc-1", article_id="art-1"),
-        ])
-        wp_sections = _wp_sections_table([
-            make_section_row(section_id="sec-1", document_id="doc-1", article_id="art-1", section_index=0),
-            make_section_row(section_id="sec-2", document_id="doc-1", article_id="art-1", section_index=1,
-                             heading="History", text="History of Afghanistan."),
-        ])
+        polygons = _polygons_table(
+            [
+                make_polygon_row(
+                    polygon_id="poly-1", wikidata="Q889", name="Polygon A"
+                ),
+                make_polygon_row(
+                    polygon_id="poly-2", wikidata="Q889", name="Polygon B"
+                ),
+            ]
+        )
+        polygon_articles = _pa_table(
+            [
+                make_polygon_article_row(polygon_id="poly-1", article_id="art-1"),
+                make_polygon_article_row(polygon_id="poly-2", article_id="art-1"),
+            ]
+        )
+        wp_docs = _wp_docs_table(
+            [
+                make_wikipedia_document_row(document_id="doc-1", article_id="art-1"),
+            ]
+        )
+        wp_sections = _wp_sections_table(
+            [
+                make_section_row(
+                    section_id="sec-1",
+                    document_id="doc-1",
+                    article_id="art-1",
+                    section_index=0,
+                ),
+                make_section_row(
+                    section_id="sec-2",
+                    document_id="doc-1",
+                    article_id="art-1",
+                    section_index=1,
+                    heading="History",
+                    text="History of Afghanistan.",
+                ),
+            ]
+        )
 
-        result = join_wikipedia_sections(polygons, polygon_articles, wp_docs, wp_sections)
+        result = join_wikipedia_sections(
+            polygons, polygon_articles, wp_docs, wp_sections
+        )
 
         # 2 polygons × 2 sections = 4 rows
         assert result.num_rows == 4
@@ -79,23 +103,43 @@ class TestWikipediaJoinExpansion:
     def test_field_mappings(self):
         from osm_polygon_sentence_relevance.joins import join_wikipedia_sections
 
-        polygons = _polygons_table([
-            make_polygon_row(polygon_id="poly-1", name="Poly Name",
-                             tags='{"key":"val"}', osm_primary_tag="place=city"),
-        ])
-        polygon_articles = _pa_table([
-            make_polygon_article_row(polygon_id="poly-1", article_id="art-1"),
-        ])
-        wp_docs = _wp_docs_table([
-            make_wikipedia_document_row(document_id="doc-1", article_id="art-1",
-                                        title="Afghanistan Page"),
-        ])
-        wp_sections = _wp_sections_table([
-            make_section_row(section_id="sec-1", document_id="doc-1", article_id="art-1",
-                             text="Section text here.", section_path='["Intro"]'),
-        ])
+        polygons = _polygons_table(
+            [
+                make_polygon_row(
+                    polygon_id="poly-1",
+                    name="Poly Name",
+                    tags='{"key":"val"}',
+                    osm_primary_tag="place=city",
+                ),
+            ]
+        )
+        polygon_articles = _pa_table(
+            [
+                make_polygon_article_row(polygon_id="poly-1", article_id="art-1"),
+            ]
+        )
+        wp_docs = _wp_docs_table(
+            [
+                make_wikipedia_document_row(
+                    document_id="doc-1", article_id="art-1", title="Afghanistan Page"
+                ),
+            ]
+        )
+        wp_sections = _wp_sections_table(
+            [
+                make_section_row(
+                    section_id="sec-1",
+                    document_id="doc-1",
+                    article_id="art-1",
+                    text="Section text here.",
+                    section_path='["Intro"]',
+                ),
+            ]
+        )
 
-        result = join_wikipedia_sections(polygons, polygon_articles, wp_docs, wp_sections)
+        result = join_wikipedia_sections(
+            polygons, polygon_articles, wp_docs, wp_sections
+        )
         row = {col: result.column(col).to_pylist()[0] for col in result.column_names}
 
         assert row["page_title"] == "Afghanistan Page"
@@ -115,11 +159,17 @@ class TestWikipediaOrphanChecks:
         from osm_polygon_sentence_relevance.joins import join_wikipedia_sections
 
         polygons = _polygons_table([make_polygon_row(polygon_id="poly-1")])
-        polygon_articles = _pa_table([
-            make_polygon_article_row(polygon_id="poly-MISSING", article_id="art-1"),
-        ])
-        wp_docs = _wp_docs_table([make_wikipedia_document_row(document_id="doc-1", article_id="art-1")])
-        wp_sections = _wp_sections_table([make_section_row(section_id="sec-1", document_id="doc-1")])
+        polygon_articles = _pa_table(
+            [
+                make_polygon_article_row(polygon_id="poly-MISSING", article_id="art-1"),
+            ]
+        )
+        wp_docs = _wp_docs_table(
+            [make_wikipedia_document_row(document_id="doc-1", article_id="art-1")]
+        )
+        wp_sections = _wp_sections_table(
+            [make_section_row(section_id="sec-1", document_id="doc-1")]
+        )
 
         with pytest.raises(JoinIntegrityError, match="polygon_id"):
             join_wikipedia_sections(polygons, polygon_articles, wp_docs, wp_sections)
@@ -128,11 +178,17 @@ class TestWikipediaOrphanChecks:
         from osm_polygon_sentence_relevance.joins import join_wikipedia_sections
 
         polygons = _polygons_table([make_polygon_row(polygon_id="poly-1")])
-        polygon_articles = _pa_table([
-            make_polygon_article_row(polygon_id="poly-1", article_id="art-MISSING"),
-        ])
-        wp_docs = _wp_docs_table([make_wikipedia_document_row(document_id="doc-1", article_id="art-1")])
-        wp_sections = _wp_sections_table([make_section_row(section_id="sec-1", document_id="doc-1")])
+        polygon_articles = _pa_table(
+            [
+                make_polygon_article_row(polygon_id="poly-1", article_id="art-MISSING"),
+            ]
+        )
+        wp_docs = _wp_docs_table(
+            [make_wikipedia_document_row(document_id="doc-1", article_id="art-1")]
+        )
+        wp_sections = _wp_sections_table(
+            [make_section_row(section_id="sec-1", document_id="doc-1")]
+        )
 
         with pytest.raises(JoinIntegrityError, match="article_id"):
             join_wikipedia_sections(polygons, polygon_articles, wp_docs, wp_sections)
@@ -141,13 +197,19 @@ class TestWikipediaOrphanChecks:
         from osm_polygon_sentence_relevance.joins import join_wikipedia_sections
 
         polygons = _polygons_table([make_polygon_row(polygon_id="poly-1")])
-        polygon_articles = _pa_table([
-            make_polygon_article_row(polygon_id="poly-1", article_id="art-1"),
-        ])
-        wp_docs = _wp_docs_table([make_wikipedia_document_row(document_id="doc-1", article_id="art-1")])
-        wp_sections = _wp_sections_table([
-            make_section_row(section_id="sec-1", document_id="doc-ORPHAN"),
-        ])
+        polygon_articles = _pa_table(
+            [
+                make_polygon_article_row(polygon_id="poly-1", article_id="art-1"),
+            ]
+        )
+        wp_docs = _wp_docs_table(
+            [make_wikipedia_document_row(document_id="doc-1", article_id="art-1")]
+        )
+        wp_sections = _wp_sections_table(
+            [
+                make_section_row(section_id="sec-1", document_id="doc-ORPHAN"),
+            ]
+        )
 
         with pytest.raises(JoinIntegrityError, match="document_id"):
             join_wikipedia_sections(polygons, polygon_articles, wp_docs, wp_sections)
@@ -159,15 +221,23 @@ class TestWikipediaDuplicateKeys:
     def test_duplicate_polygon_id(self):
         from osm_polygon_sentence_relevance.joins import join_wikipedia_sections
 
-        polygons = _polygons_table([
-            make_polygon_row(polygon_id="poly-1"),
-            make_polygon_row(polygon_id="poly-1"),
-        ])
-        polygon_articles = _pa_table([
-            make_polygon_article_row(polygon_id="poly-1", article_id="art-1"),
-        ])
-        wp_docs = _wp_docs_table([make_wikipedia_document_row(document_id="doc-1", article_id="art-1")])
-        wp_sections = _wp_sections_table([make_section_row(section_id="sec-1", document_id="doc-1")])
+        polygons = _polygons_table(
+            [
+                make_polygon_row(polygon_id="poly-1"),
+                make_polygon_row(polygon_id="poly-1"),
+            ]
+        )
+        polygon_articles = _pa_table(
+            [
+                make_polygon_article_row(polygon_id="poly-1", article_id="art-1"),
+            ]
+        )
+        wp_docs = _wp_docs_table(
+            [make_wikipedia_document_row(document_id="doc-1", article_id="art-1")]
+        )
+        wp_sections = _wp_sections_table(
+            [make_section_row(section_id="sec-1", document_id="doc-1")]
+        )
 
         with pytest.raises(JoinIntegrityError, match="polygon_id"):
             join_wikipedia_sections(polygons, polygon_articles, wp_docs, wp_sections)
@@ -176,14 +246,20 @@ class TestWikipediaDuplicateKeys:
         from osm_polygon_sentence_relevance.joins import join_wikipedia_sections
 
         polygons = _polygons_table([make_polygon_row(polygon_id="poly-1")])
-        polygon_articles = _pa_table([
-            make_polygon_article_row(polygon_id="poly-1", article_id="art-1"),
-        ])
-        wp_docs = _wp_docs_table([
-            make_wikipedia_document_row(document_id="doc-1", article_id="art-1"),
-            make_wikipedia_document_row(document_id="doc-1", article_id="art-2"),
-        ])
-        wp_sections = _wp_sections_table([make_section_row(section_id="sec-1", document_id="doc-1")])
+        polygon_articles = _pa_table(
+            [
+                make_polygon_article_row(polygon_id="poly-1", article_id="art-1"),
+            ]
+        )
+        wp_docs = _wp_docs_table(
+            [
+                make_wikipedia_document_row(document_id="doc-1", article_id="art-1"),
+                make_wikipedia_document_row(document_id="doc-1", article_id="art-2"),
+            ]
+        )
+        wp_sections = _wp_sections_table(
+            [make_section_row(section_id="sec-1", document_id="doc-1")]
+        )
 
         with pytest.raises(JoinIntegrityError, match="document_id"):
             join_wikipedia_sections(polygons, polygon_articles, wp_docs, wp_sections)
@@ -192,12 +268,18 @@ class TestWikipediaDuplicateKeys:
         from osm_polygon_sentence_relevance.joins import join_wikipedia_sections
 
         polygons = _polygons_table([make_polygon_row(polygon_id="poly-1")])
-        polygon_articles = _pa_table([
-            make_polygon_article_row(polygon_id="poly-1", article_id="art-1"),
-            make_polygon_article_row(polygon_id="poly-1", article_id="art-1"),
-        ])
-        wp_docs = _wp_docs_table([make_wikipedia_document_row(document_id="doc-1", article_id="art-1")])
-        wp_sections = _wp_sections_table([make_section_row(section_id="sec-1", document_id="doc-1")])
+        polygon_articles = _pa_table(
+            [
+                make_polygon_article_row(polygon_id="poly-1", article_id="art-1"),
+                make_polygon_article_row(polygon_id="poly-1", article_id="art-1"),
+            ]
+        )
+        wp_docs = _wp_docs_table(
+            [make_wikipedia_document_row(document_id="doc-1", article_id="art-1")]
+        )
+        wp_sections = _wp_sections_table(
+            [make_section_row(section_id="sec-1", document_id="doc-1")]
+        )
 
         with pytest.raises(JoinIntegrityError, match="polygon_id.*article_id"):
             join_wikipedia_sections(polygons, polygon_articles, wp_docs, wp_sections)

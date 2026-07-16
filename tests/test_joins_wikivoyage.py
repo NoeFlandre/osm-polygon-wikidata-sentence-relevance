@@ -15,7 +15,6 @@ from osm_polygon_sentence_relevance.schemas import (
     SECTIONS_SCHEMA,
     WIKIVOYAGE_DOCUMENTS_SCHEMA,
 )
-
 from tests.helpers import (
     make_polygon_row,
     make_section_row,
@@ -42,22 +41,39 @@ class TestWikivoyageJoinExpansion:
     def test_two_polygons_one_wikidata(self):
         from osm_polygon_sentence_relevance.joins import join_wikivoyage_sections
 
-        polygons = _polygons([
-            make_polygon_row(polygon_id="poly-1", wikidata="Q889", name="Poly A"),
-            make_polygon_row(polygon_id="poly-2", wikidata="Q889", name="Poly B"),
-        ])
-        wv_docs = _wv_docs([
-            make_wikivoyage_document_row(document_id="doc-wv-1", wikidata="Q889"),
-        ])
-        wv_secs = _wv_sections([
-            make_section_row(section_id="sec-wv-1", document_id="doc-wv-1",
-                             article_id="", project="wikivoyage",
-                             site="en.wikivoyage.org", section_index=0),
-            make_section_row(section_id="sec-wv-2", document_id="doc-wv-1",
-                             article_id="", project="wikivoyage",
-                             site="en.wikivoyage.org", section_index=1,
-                             heading="Getting there", text="Fly to Kabul."),
-        ])
+        polygons = _polygons(
+            [
+                make_polygon_row(polygon_id="poly-1", wikidata="Q889", name="Poly A"),
+                make_polygon_row(polygon_id="poly-2", wikidata="Q889", name="Poly B"),
+            ]
+        )
+        wv_docs = _wv_docs(
+            [
+                make_wikivoyage_document_row(document_id="doc-wv-1", wikidata="Q889"),
+            ]
+        )
+        wv_secs = _wv_sections(
+            [
+                make_section_row(
+                    section_id="sec-wv-1",
+                    document_id="doc-wv-1",
+                    article_id="",
+                    project="wikivoyage",
+                    site="en.wikivoyage.org",
+                    section_index=0,
+                ),
+                make_section_row(
+                    section_id="sec-wv-2",
+                    document_id="doc-wv-1",
+                    article_id="",
+                    project="wikivoyage",
+                    site="en.wikivoyage.org",
+                    section_index=1,
+                    heading="Getting there",
+                    text="Fly to Kabul.",
+                ),
+            ]
+        )
 
         result = join_wikivoyage_sections(polygons, wv_docs, wv_secs)
 
@@ -75,14 +91,24 @@ class TestBlankArticleIdConversion:
         from osm_polygon_sentence_relevance.joins import join_wikivoyage_sections
 
         polygons = _polygons([make_polygon_row(polygon_id="poly-1", wikidata="Q889")])
-        wv_docs = _wv_docs([
-            make_wikivoyage_document_row(document_id="doc-wv-1", article_id="", wikidata="Q889"),
-        ])
-        wv_secs = _wv_sections([
-            make_section_row(section_id="sec-wv-1", document_id="doc-wv-1",
-                             article_id="", project="wikivoyage",
-                             site="en.wikivoyage.org"),
-        ])
+        wv_docs = _wv_docs(
+            [
+                make_wikivoyage_document_row(
+                    document_id="doc-wv-1", article_id="", wikidata="Q889"
+                ),
+            ]
+        )
+        wv_secs = _wv_sections(
+            [
+                make_section_row(
+                    section_id="sec-wv-1",
+                    document_id="doc-wv-1",
+                    article_id="",
+                    project="wikivoyage",
+                    site="en.wikivoyage.org",
+                ),
+            ]
+        )
 
         result = join_wikivoyage_sections(polygons, wv_docs, wv_secs)
         article_ids = result.column("article_id").to_pylist()
@@ -92,14 +118,24 @@ class TestBlankArticleIdConversion:
         from osm_polygon_sentence_relevance.joins import join_wikivoyage_sections
 
         polygons = _polygons([make_polygon_row(polygon_id="poly-1", wikidata="Q889")])
-        wv_docs = _wv_docs([
-            make_wikivoyage_document_row(document_id="doc-wv-1", article_id="art-real", wikidata="Q889"),
-        ])
-        wv_secs = _wv_sections([
-            make_section_row(section_id="sec-wv-1", document_id="doc-wv-1",
-                             article_id="art-real", project="wikivoyage",
-                             site="en.wikivoyage.org"),
-        ])
+        wv_docs = _wv_docs(
+            [
+                make_wikivoyage_document_row(
+                    document_id="doc-wv-1", article_id="art-real", wikidata="Q889"
+                ),
+            ]
+        )
+        wv_secs = _wv_sections(
+            [
+                make_section_row(
+                    section_id="sec-wv-1",
+                    document_id="doc-wv-1",
+                    article_id="art-real",
+                    project="wikivoyage",
+                    site="en.wikivoyage.org",
+                ),
+            ]
+        )
 
         result = join_wikivoyage_sections(polygons, wv_docs, wv_secs)
         assert result.column("article_id").to_pylist() == ["art-real"]
@@ -112,14 +148,22 @@ class TestWikivoyageOrphans:
         from osm_polygon_sentence_relevance.joins import join_wikivoyage_sections
 
         polygons = _polygons([make_polygon_row(polygon_id="poly-1", wikidata="Q111")])
-        wv_docs = _wv_docs([
-            make_wikivoyage_document_row(document_id="doc-wv-1", wikidata="Q999"),
-        ])
-        wv_secs = _wv_sections([
-            make_section_row(section_id="sec-wv-1", document_id="doc-wv-1",
-                             article_id="", project="wikivoyage",
-                             site="en.wikivoyage.org"),
-        ])
+        wv_docs = _wv_docs(
+            [
+                make_wikivoyage_document_row(document_id="doc-wv-1", wikidata="Q999"),
+            ]
+        )
+        wv_secs = _wv_sections(
+            [
+                make_section_row(
+                    section_id="sec-wv-1",
+                    document_id="doc-wv-1",
+                    article_id="",
+                    project="wikivoyage",
+                    site="en.wikivoyage.org",
+                ),
+            ]
+        )
 
         with pytest.raises(JoinIntegrityError, match="wikidata"):
             join_wikivoyage_sections(polygons, wv_docs, wv_secs)
@@ -128,14 +172,22 @@ class TestWikivoyageOrphans:
         from osm_polygon_sentence_relevance.joins import join_wikivoyage_sections
 
         polygons = _polygons([make_polygon_row(polygon_id="poly-1", wikidata="Q889")])
-        wv_docs = _wv_docs([
-            make_wikivoyage_document_row(document_id="doc-wv-1", wikidata="Q889"),
-        ])
-        wv_secs = _wv_sections([
-            make_section_row(section_id="sec-wv-1", document_id="doc-ORPHAN",
-                             article_id="", project="wikivoyage",
-                             site="en.wikivoyage.org"),
-        ])
+        wv_docs = _wv_docs(
+            [
+                make_wikivoyage_document_row(document_id="doc-wv-1", wikidata="Q889"),
+            ]
+        )
+        wv_secs = _wv_sections(
+            [
+                make_section_row(
+                    section_id="sec-wv-1",
+                    document_id="doc-ORPHAN",
+                    article_id="",
+                    project="wikivoyage",
+                    site="en.wikivoyage.org",
+                ),
+            ]
+        )
 
         with pytest.raises(JoinIntegrityError, match="document_id"):
             join_wikivoyage_sections(polygons, wv_docs, wv_secs)

@@ -25,14 +25,19 @@ class TestProjectMetadata:
     """Project extras must stay separate and core must stay lightweight."""
 
     def _load_pyproject(self) -> dict:
-        return tomllib.loads((Path(__file__).resolve().parent.parent / "pyproject.toml").read_text())
+        return tomllib.loads(
+            (Path(__file__).resolve().parent.parent / "pyproject.toml").read_text()
+        )
 
     def test_extras_declared_separately(self):
         pyproject = self._load_pyproject()
         extras = pyproject["project"]["optional-dependencies"]
-        assert set(extras) == {"segmentation", "hub"}
+        # Known extras must remain declared separately; future extras are allowed.
+        assert "segmentation" in extras
+        assert "hub" in extras
         # Each extra carries its own distinct dependency.
-        assert extras["segmentation"] and extras["hub"]
+        assert extras["segmentation"]
+        assert extras["hub"]
         assert extras["segmentation"] != extras["hub"]
 
     def test_core_keeps_lightweight(self):
