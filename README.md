@@ -1,14 +1,15 @@
 # OSM Polygon – Wikidata Sentence Relevance
 
+[![CI](https://github.com/NoeFlandre/osm-polygon-wikidata-sentence-relevance/actions/workflows/ci.yml/badge.svg)](https://github.com/NoeFlandre/osm-polygon-wikidata-sentence-relevance/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](.python-version)
+
 A sentence-level dataset derived from OpenStreetMap polygon metadata,
 Wikipedia, and Wikivoyage article sections. The goal is to produce a flat,
 deduplicated table of sentences linked to their source polygon, section,
 and document metadata — suitable for downstream relevance modelling.
 
-See [`docs/architecture.md`](docs/architecture.md),
-[`docs/reproducibility.md`](docs/reproducibility.md), and
-[`docs/data-contract.md`](docs/data-contract.md) for module ownership,
-reproduction commands, and the data contract.
+Documentation index: [`docs/index.md`](docs/index.md).
 
 ## Project Repositories
 
@@ -16,60 +17,39 @@ reproduction commands, and the data contract.
 - **Hugging Face (output dataset)**: [NoeFlandre/osm-polygon-wikidata-sentence-relevance](https://huggingface.co/datasets/NoeFlandre/osm-polygon-wikidata-sentence-relevance)
 - **Hugging Face (input dataset)**: [NoeFlandre/osm-polygon-wikidata-only](https://huggingface.co/datasets/NoeFlandre/osm-polygon-wikidata-only)
 
-## Current Implementation Status (through Phase 6C)
+## Current status
 
-Implemented:
+The package is pre-1.0 (version `0.1.0`, alpha). It provides a
+deterministic, local-first pipeline that:
 
-- **Phase 1** — src-layout package, PyArrow schema contracts (six input
-  tables + output sentence table), immutable pipeline settings.
-- **Phase 2** — shard discovery, Parquet loading, deterministic Wikipedia
-  and Wikivoyage section→polygon joins (`JOINED_SECTIONS_SCHEMA`).
-- **Phase 3** — deterministic preprocessing, injected segmenter table
-  transformation (`SEGMENTED_SENTENCES_SCHEMA`) with the optional
-  `SaTSentenceSegmenter` adapter for the wtpsplit multilingual SaT model.
-- **Phase 4** — exact deduplication, deterministic sentence/content IDs,
-  `OUTPUT_SENTENCE_SCHEMA` finalization.
-- **Phase 5** — atomic, deterministic local export with rollback-safe
-  overwrite and checksummed manifest.
-- **Phase 6 A** — local-build CLI with strict path/config validation.
-- **Phase 6 B** — read-only Hugging Face input-snapshot acquisition
-  (snapshot validation, SHA-1 immutable revision resolution, inclusive
-  Parquet-only download with `articles/` exclusion).
-- **Phase 6 C** — CLI integration of the two mutually-exclusive input
-  modes (local vs Hub); Hub mode resolves the mutable revision to a
-  commit SHA before any model construction.
+- discovers per-region Parquet shards and validates them against immutable
+  PyArrow schemas;
+- builds deterministic Wikipedia and Wikivoyage section→polygon joins;
+- segments sections into sentences with an injected segmenter;
+- deduplicates exactly, computes deterministic sentence/content IDs, and
+  validates the output (`OUTPUT_SENTENCE_SCHEMA`);
+- exports the dataset atomically with a checksummed manifest.
 
-**Not implemented (explicitly out of scope for the current series):**
+**Not implemented (out of scope):**
 
-- Phase 7 and beyond, including Hugging Face publishing / dataset
-  upload of the produced dataset.
+- Hugging Face dataset publishing / upload of the produced dataset.
 - Sentence classification or labelling.
-- Concurrency, resumability, or incremental rebuilds.
-- Performance rewrites.
+- Concurrency, resumable, or incremental builds.
 
-## Development Setup
+## Development setup
 
 This project uses [uv](https://github.com/astral-sh/uv) for Python
-package and environment management.
-
-### Prerequisites
-
-- Python 3.12+ (managed by `uv`)
-- `uv` package manager
-
-### Installation
+package and environment management. Requires Python 3.12+.
 
 ```bash
-uv sync
-```
-
-### Running Tests
-
-```bash
+uv sync --extra hub --extra segmentation
 uv run pytest -q
 ```
 
-## Building the Dataset (CLI)
+See [`docs/guides/development.md`](docs/guides/development.md) for the
+full contributor workflow and verification gates.
+
+## Building the dataset (CLI)
 
 The CLI is the public entry point: `osm-polygon-sentence-relevance`. It
 ships with the base install and accepts two mutually-exclusive input modes.
@@ -101,7 +81,7 @@ In Hub mode, the resolved immutable commit SHA is what enters the
 pipeline and the manifest. No HF token is accepted, printed, or persisted;
 standard `huggingface_hub` authentication is used.
 
-## Optional Extras
+## Optional extras
 
 The base install pulls in only `pyarrow`. Two extras are available:
 
@@ -114,9 +94,17 @@ side-effect-free when the dependency is not installed.
 
 ## Documentation
 
-- [`docs/architecture.md`](docs/architecture.md) — module ownership, input
-  flow, optional-dependency boundaries.
-- [`docs/reproducibility.md`](docs/reproducibility.md) — environment
-  requirements, exact build commands, verification commands.
-- [`docs/data-contract.md`](docs/data-contract.md) — input paths,
-  dedup key, deterministic IDs, output schema expectations.
+- [Architecture overview](docs/architecture/overview.md)
+- [Getting started](docs/guides/getting-started.md)
+- [Development](docs/guides/development.md)
+- [Reproducibility](docs/guides/reproducibility.md)
+- [API reference](docs/reference/api.md)
+- [CLI reference](docs/reference/cli.md)
+- [Data contract](docs/reference/data-contract.md)
+
+## Governance
+
+- [Contributing](CONTRIBUTING.md)
+- [Security](SECURITY.md)
+- [Changelog](CHANGELOG.md)
+- [License (MIT)](LICENSE)

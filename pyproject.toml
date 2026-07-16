@@ -1,12 +1,42 @@
 [project]
 name = "osm-polygon-sentence-relevance"
 version = "0.1.0"
-description = "Sentence-level relevance dataset derived from OSM polygons, Wikipedia, and Wikivoyage."
+description = "Deterministic sentence-level relevance dataset derived from OSM polygons, Wikipedia, and Wikivoyage sections."
 readme = "README.md"
 requires-python = ">=3.12"
+license = "MIT"
+authors = [
+    { name = "NoeFlandre" },
+]
+keywords = [
+    "openstreetmap",
+    "wikidata",
+    "wikipedia",
+    "wikivoyage",
+    "sentence-segmentation",
+    "dataset",
+    "deterministic",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Text Processing :: Linguistic",
+    "Typing :: Typed",
+]
 dependencies = [
     "pyarrow",
 ]
+
+[project.urls]
+Homepage = "https://github.com/NoeFlandre/osm-polygon-wikidata-sentence-relevance"
+Repository = "https://github.com/NoeFlandre/osm-polygon-wikidata-sentence-relevance"
+Issues = "https://github.com/NoeFlandre/osm-polygon-wikidata-sentence-relevance/issues"
+Documentation = "https://github.com/NoeFlandre/osm-polygon-wikidata-sentence-relevance/tree/main/docs"
+Changelog = "https://github.com/NoeFlandre/osm-polygon-wikidata-sentence-relevance/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 segmentation = [
@@ -19,23 +49,42 @@ hub = [
 [dependency-groups]
 dev = [
     "pytest",
+    "pytest-cov",
     "ruff>=0.14,<0.15",
     "mypy>=1.18,<3",
 ]
 
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+osm_polygon_sentence_relevance = ["py.typed"]
+
 [project.scripts]
-osm-polygon-sentence-relevance = "osm_polygon_sentence_relevance.cli:main"
+osm-polygon-sentence-relevance = "osm_polygon_sentence_relevance.application.cli:main"
 
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "--cov=osm_polygon_sentence_relevance --cov-branch"
+
+
+[tool.coverage.run]
+branch = true
+source = ["osm_polygon_sentence_relevance"]
+omit = [
+    "*/tests/*",
+    "src/osm_polygon_sentence_relevance/*/__init__.py",
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+fail_under = 95
 
 [tool.ruff]
 target-version = "py312"

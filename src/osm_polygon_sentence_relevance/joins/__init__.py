@@ -12,7 +12,8 @@ focused submodules; this module re-exports the stable public API.
 
 from __future__ import annotations
 
-from osm_polygon_sentence_relevance.discovery import RegionShardSet
+from osm_polygon_sentence_relevance.ingestion.discovery import RegionShardSet
+from osm_polygon_sentence_relevance.ingestion.loading import load_validated_table
 from osm_polygon_sentence_relevance.joins._composition import (
     JoinedRegionSections,
     JoinReport,
@@ -28,7 +29,6 @@ from osm_polygon_sentence_relevance.joins._projection import (
 )
 from osm_polygon_sentence_relevance.joins._wikipedia import join_wikipedia_sections
 from osm_polygon_sentence_relevance.joins._wikivoyage import join_wikivoyage_sections
-from osm_polygon_sentence_relevance.loading import load_validated_table
 
 __all__ = [
     "build_region_section_occurrences",

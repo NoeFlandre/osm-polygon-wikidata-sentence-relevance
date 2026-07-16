@@ -20,3 +20,19 @@ data/
 *.sqlite
 *.db
 
+# Tool caches
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# Coverage output
+.coverage
+coverage.xml
+htmlcov/
+
+# Model weights / build output (never committed)
+*.onnx
+*.safetensors
+*.bin
+*.pt
+
