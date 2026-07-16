@@ -1,19 +1,32 @@
+"""Deterministic, atomically installed dataset export.
+
+This module is the stable public facade. Implementation is split into focused
+internal helpers: manifest construction, streaming checksums, and rollback-safe
+directory installation.  The atomic-swap algorithm (build tmpdir, back up the
+existing output, rename into place, only then remove the backup) is unchanged.
+"""
+
 from __future__ import annotations
 
-from dataclasses import dataclass
-import hashlib
-import json
-import os
-from pathlib import Path
-import shutil
 import tempfile
-from collections import Counter
-import pyarrow as pa
+from dataclasses import dataclass
+from pathlib import Path
+
 import pyarrow.parquet as pq
 
+from osm_polygon_sentence_relevance._export.atomic import (
+    cleanup_on_failure,
+    install_atomic,
+    remove_backup,
+)
+from osm_polygon_sentence_relevance._export.checksum import sha256_file
+from osm_polygon_sentence_relevance._export.manifest import (
+    build_manifest_data,
+    write_manifest,
+)
+from osm_polygon_sentence_relevance.errors import ExportError
 from osm_polygon_sentence_relevance.finalization import FinalizedDataset
 from osm_polygon_sentence_relevance.schemas import OUTPUT_SENTENCE_SCHEMA
-from osm_polygon_sentence_relevance.errors import ExportError
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,9 +75,7 @@ def export_finalized_dataset(
 
     # 2. Reject table schema mismatch
     if not dataset.table.schema.equals(OUTPUT_SENTENCE_SCHEMA):
-        raise ExportError(
-            "Table schema does not match expected OUTPUT_SENTENCE_SCHEMA"
-        )
+        raise ExportError("Table schema does not match expected OUTPUT_SENTENCE_SCHEMA")
 
     # 3. Reject inconsistent revision/version values within rows
     metadata = dataset.table.schema.metadata
@@ -83,27 +94,21 @@ def export_finalized_dataset(
     pipeline_version = meta_ver.decode("utf-8") if meta_ver else None
 
     if dataset.table.num_rows > 0:
-        revisions = (
-            dataset.table.column("input_dataset_revision").unique().to_pylist()
-        )
+        revisions = dataset.table.column("input_dataset_revision").unique().to_pylist()
         versions = dataset.table.column("pipeline_version").unique().to_pylist()
 
         if len(revisions) != 1:
-            raise ExportError(
-                "Inconsistent input_dataset_revision values within rows"
-            )
+            raise ExportError("Inconsistent input_dataset_revision values within rows")
         if len(versions) != 1:
             raise ExportError("Inconsistent pipeline_version values within rows")
 
         col_rev = revisions[0]
         col_ver = versions[0]
 
-        if (
-            input_dataset_revision is not None
-            and col_rev != input_dataset_revision
-        ):
+        if input_dataset_revision is not None and col_rev != input_dataset_revision:
             raise ExportError(
-                f"Row revision '{col_rev}' does not match metadata '{input_dataset_revision}'"
+                f"Row revision '{col_rev}' does not match metadata "
+                f"'{input_dataset_revision}'"
             )
         if pipeline_version is not None and col_ver != pipeline_version:
             raise ExportError(
@@ -119,7 +124,7 @@ def export_finalized_dataset(
             )
 
     # 4. Reject existing non-empty output directory unless overwrite=True
-    # Reject non-directory target regardless of overwrite
+    #    Reject non-directory target regardless of overwrite
     output_path = Path(output_dir).resolve()
     if output_path.exists():
         if not output_path.is_dir():
@@ -135,122 +140,34 @@ def export_finalized_dataset(
     parent_dir = output_path.parent
     parent_dir.mkdir(parents=True, exist_ok=True)
 
-    tmp_dir = None
-    backup_dir = None
+    tmp_dir: Path | None = None
+    backup_dir: Path | None = None
     try:
         tmp_dir = Path(tempfile.mkdtemp(dir=parent_dir))
         pq_path = tmp_dir / "sentences.parquet"
         pq.write_table(dataset.table, pq_path)
 
         # Calculate SHA-256 checksum of Parquet
-        sha256_hash = hashlib.sha256()
-        with open(pq_path, "rb") as f:
-            for chunk in iter(lambda: f.read(65536), b""):
-                sha256_hash.update(chunk)
-        sha256_hex = sha256_hash.hexdigest().lower()
+        sha256_hex = sha256_file(pq_path)
 
-        # Compute row counts by source, language, and region
-        if dataset.table.num_rows > 0:
-            counts_by_source = dict(
-                Counter(dataset.table.column("source").to_pylist())
-            )
-            counts_by_language = dict(
-                Counter(dataset.table.column("language").to_pylist())
-            )
-            counts_by_region = dict(
-                Counter(dataset.table.column("region").to_pylist())
-            )
-        else:
-            counts_by_source = {}
-            counts_by_language = {}
-            counts_by_region = {}
-
-        manifest_data = {
-            "row_count": dataset.table.num_rows,
-            "input_occurrence_count": (
-                dataset.report.input_sentence_occurrence_count
-                if dataset.report
-                else 0
-            ),
-            "duplicates_removed": (
-                dataset.report.duplicate_occurrence_count_removed
-                if dataset.report
-                else 0
-            ),
-            "cross_source_duplicate_groups": (
-                dataset.report.cross_source_duplicate_group_count
-                if dataset.report
-                else 0
-            ),
-            "counts_by_source": counts_by_source,
-            "counts_by_language": counts_by_language,
-            "counts_by_region": counts_by_region,
-            "input_dataset_revision": input_dataset_revision,
-            "pipeline_version": pipeline_version,
-            "sha256": sha256_hex,
-        }
+        manifest_data = build_manifest_data(
+            dataset,
+            input_dataset_revision,
+            pipeline_version,
+            sha256_hex,
+        )
 
         manifest_path = tmp_dir / "manifest.json"
-        with open(manifest_path, "w", encoding="utf-8") as f:
-            f.write(
-                json.dumps(
-                    manifest_data,
-                    sort_keys=True,
-                    separators=(",", ":"),
-                    ensure_ascii=False,
-                )
-                + "\n"
-            )
+        write_manifest(manifest_path, manifest_data)
 
-        # Rollback-safe directory swap:
-        # 1. Fully build and verify the temporary export (done above).
-        # 2. Rename existing output to a temporary backup (if it exists).
-        if output_path.exists():
-            import uuid
-            backup_dir = parent_dir / f".backup_{uuid.uuid4().hex}"
-            os.rename(output_path, backup_dir)
-
-        try:
-            # 3. Rename the new directory into place.
-            os.rename(tmp_dir, output_path)
-        except Exception as rename_err:
-            # 4. If step 3 fails, restore the backup.
-            if backup_dir and backup_dir.exists():
-                if output_path.exists():
-                    if output_path.is_dir():
-                        shutil.rmtree(output_path)
-                    else:
-                        os.remove(output_path)
-                try:
-                    os.rename(backup_dir, output_path)
-                except Exception as restore_err:
-                    saved_backup = backup_dir
-                    backup_dir = None
-                    raise ExportError(
-                        f"Atomic replacement failed, and backup restoration also failed. "
-                        f"Previous dataset is preserved at {saved_backup}"
-                    ) from restore_err
-            raise rename_err
+        # Rollback-safe directory swap
+        backup_dir = install_atomic(tmp_dir, output_path)
 
         # 5. Remove the backup only after successful replacement.
-        if backup_dir and backup_dir.exists():
-            try:
-                shutil.rmtree(backup_dir)
-            except Exception as rmtree_err:
-                raise ExportError(
-                    f"New dataset successfully exported, but failed to delete backup directory: {backup_dir}"
-                ) from rmtree_err
-    except Exception:
-        if tmp_dir is not None and tmp_dir.exists():
-            try:
-                shutil.rmtree(tmp_dir)
-            except Exception:
-                pass
         if backup_dir is not None and backup_dir.exists():
-            try:
-                shutil.rmtree(backup_dir)
-            except Exception:
-                pass
+            remove_backup(backup_dir)
+    except Exception:
+        cleanup_on_failure(tmp_dir, backup_dir)
         raise
 
     return ExportResult(

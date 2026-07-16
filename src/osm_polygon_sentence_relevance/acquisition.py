@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
 
-from osm_polygon_sentence_relevance.errors import AcquisitionError
 from osm_polygon_sentence_relevance.discovery import discover_shards
+from osm_polygon_sentence_relevance.errors import AcquisitionError
 
 # Keep allow/ignore patterns as module-level immutable constants
 ALLOW_PATTERNS: tuple[str, ...] = (
@@ -80,7 +80,11 @@ def acquire_dataset_snapshot(
         ) from exc
 
     # 4. Validate and normalize the resolved SHA-1 (must be exactly 40 hex characters)
-    if not resolved_sha or not isinstance(resolved_sha, str) or not re.match(r"^[a-fA-F0-9]{40}$", resolved_sha):
+    if (
+        not resolved_sha
+        or not isinstance(resolved_sha, str)
+        or not re.match(r"^[a-fA-F0-9]{40}$", resolved_sha)
+    ):
         raise AcquisitionError(
             f"Resolved SHA {resolved_sha!r} is invalid: it must be exactly 40 hexadecimal characters"
         )

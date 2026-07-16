@@ -17,9 +17,8 @@ from osm_polygon_sentence_relevance.constants import (
 )
 from osm_polygon_sentence_relevance.errors import ConfigurationError
 from osm_polygon_sentence_relevance.settings import (
-    PipelineSettings,
     _REPO_LOCAL_DATA_DIR,
-    _SEAGATE_DATA_DIR,
+    PipelineSettings,
 )
 
 
@@ -43,13 +42,17 @@ class TestDefaults:
 class TestDataDirPrecedence:
     """Data directory resolves via env → Seagate → local fallback."""
 
-    def test_env_var_takes_precedence(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    def test_env_var_takes_precedence(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ):
         custom = tmp_path / "custom"
         monkeypatch.setenv("OSM_DATA_DIR", str(custom))
         s = PipelineSettings.create()
         assert s.data_dir == custom
 
-    def test_seagate_used_when_exists(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    def test_seagate_used_when_exists(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ):
         monkeypatch.delenv("OSM_DATA_DIR", raising=False)
         fake_seagate = tmp_path / "seagate"
         fake_seagate.mkdir()
@@ -60,7 +63,9 @@ class TestDataDirPrecedence:
         s = PipelineSettings.create()
         assert s.data_dir == fake_seagate
 
-    def test_fallback_to_repo_local(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    def test_fallback_to_repo_local(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ):
         monkeypatch.delenv("OSM_DATA_DIR", raising=False)
         monkeypatch.setattr(
             "osm_polygon_sentence_relevance.settings._SEAGATE_DATA_DIR",
@@ -69,7 +74,9 @@ class TestDataDirPrecedence:
         s = PipelineSettings.create()
         assert s.data_dir == _REPO_LOCAL_DATA_DIR
 
-    def test_explicit_data_dir_overrides_all(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    def test_explicit_data_dir_overrides_all(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ):
         monkeypatch.setenv("OSM_DATA_DIR", "/should/be/ignored")
         explicit = tmp_path / "explicit"
         s = PipelineSettings.create(data_dir=explicit)
@@ -124,7 +131,9 @@ class TestImmutability:
 class TestNoSideEffects:
     """Construction must not create directories or access the network."""
 
-    def test_no_directory_creation(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    def test_no_directory_creation(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ):
         target = tmp_path / "should_not_exist"
         monkeypatch.setenv("OSM_DATA_DIR", str(target))
         s = PipelineSettings.create()

@@ -9,7 +9,9 @@ from osm_polygon_sentence_relevance.constants import PIPELINE_VERSION
 
 
 def main() -> None:
-    print(f"osm-polygon-sentence-relevance  package={__version__}  pipeline={PIPELINE_VERSION}")
+    print(
+        f"osm-polygon-sentence-relevance  package={__version__}  pipeline={PIPELINE_VERSION}"
+    )
     print("Phase 1: schema contracts and project foundation only.")
 
 

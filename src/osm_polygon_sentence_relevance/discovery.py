@@ -24,18 +24,22 @@ _PATH_TO_TABLE: dict[str, str] = {
 }
 
 # Core tables that must be present for a processable shard.
-_CORE_TABLES = frozenset({
-    "polygons",
-    "polygon_articles",
-    "wikipedia_documents",
-    "wikipedia_sections",
-})
+_CORE_TABLES = frozenset(
+    {
+        "polygons",
+        "polygon_articles",
+        "wikipedia_documents",
+        "wikipedia_sections",
+    }
+)
 
 # Wikivoyage pair — must be both present or both absent.
-_WIKIVOYAGE_TABLES = frozenset({
-    "wikivoyage_documents",
-    "wikivoyage_sections",
-})
+_WIKIVOYAGE_TABLES = frozenset(
+    {
+        "wikivoyage_documents",
+        "wikivoyage_sections",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -97,8 +101,7 @@ def discover_shards(root: Path) -> tuple[RegionShardSet, ...]:
             missing_wv = next(iter(_WIKIVOYAGE_TABLES - wv_present))
             raise ShardDiscoveryError(
                 shard_key,
-                f"incomplete wikivoyage pair: have {have!r} "
-                f"but missing {missing_wv!r}",
+                f"incomplete wikivoyage pair: have {have!r} but missing {missing_wv!r}",
             )
 
         result.append(

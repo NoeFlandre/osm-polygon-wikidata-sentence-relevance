@@ -73,10 +73,7 @@ class PipelineSettings:
         if not output_dataset or not output_dataset.strip():
             raise ConfigurationError("output_dataset must be non-empty")
 
-        if data_dir is not None:
-            resolved_dir = Path(data_dir)
-        else:
-            resolved_dir = _resolve_data_dir()
+        resolved_dir = Path(data_dir) if data_dir is not None else _resolve_data_dir()
 
         return cls(
             input_dataset=input_dataset,

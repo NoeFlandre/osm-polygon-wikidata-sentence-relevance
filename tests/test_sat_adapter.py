@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
-
 import pytest
 
 from osm_polygon_sentence_relevance.errors import SegmentationError
@@ -41,7 +39,7 @@ def reset_fake():
     FakeSaTModel.constructed = []
     FakeSaTModel.split_calls = 0
     FakeSaTModel.last_split_kwargs = None
-    yield
+    return
 
 
 class TestSaTLazyConstruction:
@@ -103,9 +101,11 @@ class TestSaTInference:
         class GenModel(FakeSaTModel):
             def split(self, texts, **kwargs):
                 FakeSaTModel.split_calls += 1
+
                 def gen():
                     for t in texts:
                         yield t.split("|")
+
                 return gen()
 
         def gen_factory(model_name, **kwargs):
@@ -163,9 +163,9 @@ class TestSaTErrors:
     def test_missing_dependency_message(self):
         # Make ``wtpsplit`` appear absent by removing it from ``sys.modules``
         # and providing a meta-path finder hook that raises ImportError for it.
-        import sys
         import importlib.abc
         import importlib.machinery
+        import sys
 
         class _BlockWtpsplit(importlib.abc.MetaPathFinder):
             def find_spec(self, fullname, path, target=None):
@@ -198,8 +198,8 @@ class TestSaTProtocolAndIntegration:
 
     def test_end_to_end_through_segment_joined_sections(self):
         # Build one joined section row with a fake segmenter via factory.
+
         from tests.test_sentence_table import _one_row
-        import pyarrow as pa
 
         table = _one_row(
             section_text_raw="First sentence.|Second sentence.",

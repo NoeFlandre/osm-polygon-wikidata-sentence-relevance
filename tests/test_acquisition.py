@@ -1,19 +1,23 @@
 from __future__ import annotations
 
 import sys
-import pytest
 import tempfile
 from pathlib import Path
+
 import pyarrow as pa
 import pyarrow.parquet as pq
+import pytest
 
-from osm_polygon_sentence_relevance.acquisition import acquire_dataset_snapshot, AcquisitionResult
+from osm_polygon_sentence_relevance.acquisition import (
+    AcquisitionResult,
+    acquire_dataset_snapshot,
+)
 from osm_polygon_sentence_relevance.errors import AcquisitionError
-
 
 # ===================================================================
 # Helper to build conforming dataset snapshot layout
 # ===================================================================
+
 
 def make_table_from_rows(schema: pa.Schema, rows: list[dict]) -> pa.Table:
     data = {}
@@ -40,32 +44,54 @@ def make_table_from_rows(schema: pa.Schema, rows: list[dict]) -> pa.Table:
 def write_dummy_layout(root: Path, shard_key="reg-1") -> None:
     # 1. polygons
     from osm_polygon_sentence_relevance.schemas import POLYGONS_SCHEMA
+
     polygons_dir = root / "polygons"
     polygons_dir.mkdir(parents=True, exist_ok=True)
-    pq.write_table(make_table_from_rows(POLYGONS_SCHEMA, [{"polygon_id": "poly-1", "wikidata": "Q1", "region": shard_key}]), polygons_dir / f"{shard_key}.parquet")
+    pq.write_table(
+        make_table_from_rows(
+            POLYGONS_SCHEMA,
+            [{"polygon_id": "poly-1", "wikidata": "Q1", "region": shard_key}],
+        ),
+        polygons_dir / f"{shard_key}.parquet",
+    )
 
     # 2. polygon_articles
     from osm_polygon_sentence_relevance.schemas import POLYGON_ARTICLES_SCHEMA
+
     pa_dir = root / "polygon_articles"
     pa_dir.mkdir(parents=True, exist_ok=True)
-    pq.write_table(make_table_from_rows(POLYGON_ARTICLES_SCHEMA, [{"polygon_id": "poly-1", "article_id": "art-1", "wikidata": "Q1"}]), pa_dir / f"{shard_key}.parquet")
+    pq.write_table(
+        make_table_from_rows(
+            POLYGON_ARTICLES_SCHEMA,
+            [{"polygon_id": "poly-1", "article_id": "art-1", "wikidata": "Q1"}],
+        ),
+        pa_dir / f"{shard_key}.parquet",
+    )
 
     # 3. wikipedia/documents
     from osm_polygon_sentence_relevance.schemas import WIKIPEDIA_DOCUMENTS_SCHEMA
+
     wp_doc_dir = root / "wikipedia/documents"
     wp_doc_dir.mkdir(parents=True, exist_ok=True)
-    pq.write_table(make_table_from_rows(WIKIPEDIA_DOCUMENTS_SCHEMA, []), wp_doc_dir / f"{shard_key}.parquet")
+    pq.write_table(
+        make_table_from_rows(WIKIPEDIA_DOCUMENTS_SCHEMA, []),
+        wp_doc_dir / f"{shard_key}.parquet",
+    )
 
     # 4. wikipedia/sections
     from osm_polygon_sentence_relevance.schemas import SECTIONS_SCHEMA
+
     wp_sec_dir = root / "wikipedia/sections"
     wp_sec_dir.mkdir(parents=True, exist_ok=True)
-    pq.write_table(make_table_from_rows(SECTIONS_SCHEMA, []), wp_sec_dir / f"{shard_key}.parquet")
+    pq.write_table(
+        make_table_from_rows(SECTIONS_SCHEMA, []), wp_sec_dir / f"{shard_key}.parquet"
+    )
 
 
 # ===================================================================
 # Mocks
 # ===================================================================
+
 
 class FakeRepoInfo:
     def __init__(self, sha: str):
@@ -87,6 +113,7 @@ class MockHfApi:
 # ===================================================================
 # Test Suite for Dataset Snapshot Acquisition (Phase 6B)
 # ===================================================================
+
 
 class TestAcquisition:
     def test_missing_dependency(self, monkeypatch):
@@ -123,23 +150,26 @@ class TestAcquisition:
                 return str(download_dir)
 
             res = acquire_dataset_snapshot(
-                "my/dataset",
-                "main",
-                hub_api=api,
-                download_fn=mock_download
+                "my/dataset", "main", hub_api=api, download_fn=mock_download
             )
             assert res.resolved_sha == "a" * 40
 
     def test_invalid_commit_sha_format(self):
         api = MockHfApi(sha="invalid-sha")
-        dummy_download = lambda *a, **kw: "fake_dir"
+
+        def dummy_download(*_args, **_kwargs):
+            return "fake_dir"
 
         with pytest.raises(AcquisitionError, match="exactly 40 hexadecimal characters"):
-            acquire_dataset_snapshot("my/dataset", "main", hub_api=api, download_fn=dummy_download)
+            acquire_dataset_snapshot(
+                "my/dataset", "main", hub_api=api, download_fn=dummy_download
+            )
 
         api_39 = MockHfApi(sha="a" * 39)
         with pytest.raises(AcquisitionError, match="exactly 40 hexadecimal characters"):
-            acquire_dataset_snapshot("my/dataset", "main", hub_api=api_39, download_fn=dummy_download)
+            acquire_dataset_snapshot(
+                "my/dataset", "main", hub_api=api_39, download_fn=dummy_download
+            )
 
     def test_explicit_sha_mismatch_fails_before_download(self):
         sha_req = "a" * 40
@@ -147,23 +177,33 @@ class TestAcquisition:
         api = MockHfApi(sha=sha_res)
 
         download_called = False
+
         def mock_download(*args, **kwargs):
             nonlocal download_called
             download_called = True
             return "fake_dir"
 
-        with pytest.raises(AcquisitionError, match="Resolved commit SHA does not match"):
-            acquire_dataset_snapshot("my/dataset", sha_req, hub_api=api, download_fn=mock_download)
+        with pytest.raises(
+            AcquisitionError, match="Resolved commit SHA does not match"
+        ):
+            acquire_dataset_snapshot(
+                "my/dataset", sha_req, hub_api=api, download_fn=mock_download
+            )
 
         assert not download_called
 
     def test_allow_ignore_patterns_immutable_constants(self):
-        from osm_polygon_sentence_relevance.acquisition import ALLOW_PATTERNS, IGNORE_PATTERNS
+        from osm_polygon_sentence_relevance.acquisition import (
+            ALLOW_PATTERNS,
+            IGNORE_PATTERNS,
+        )
+
         assert isinstance(ALLOW_PATTERNS, tuple)
         assert isinstance(IGNORE_PATTERNS, tuple)
         assert len(ALLOW_PATTERNS) == 6
         for pat in ALLOW_PATTERNS:
-            assert not (pat.startswith("articles/") or "/articles/" in pat)
+            assert not pat.startswith("articles/")
+            assert "/articles/" not in pat
 
     def test_uppercase_sha_normalization_succeeds(self):
         sha_upper = "A" * 40
@@ -174,15 +214,15 @@ class TestAcquisition:
             write_dummy_layout(download_dir, "region-x")
 
             download_calls = []
-            def mock_download(repo_id, revision, repo_type, allow_patterns, ignore_patterns):
+
+            def mock_download(
+                repo_id, revision, repo_type, allow_patterns, ignore_patterns
+            ):
                 download_calls.append(revision)
                 return str(download_dir)
 
             res = acquire_dataset_snapshot(
-                "my/dataset",
-                sha_upper,
-                hub_api=api,
-                download_fn=mock_download
+                "my/dataset", sha_upper, hub_api=api, download_fn=mock_download
             )
 
             # Succeeded and normalized resolved SHA to lowercase
@@ -197,21 +237,22 @@ class TestAcquisition:
             download_dir = Path(tmp_download)
             write_dummy_layout(download_dir, "region-x")
 
-            def mock_download(repo_id, revision, repo_type, allow_patterns, ignore_patterns):
-                download_calls.append({
-                    "repo_id": repo_id,
-                    "revision": revision,
-                    "repo_type": repo_type,
-                    "allow_patterns": allow_patterns,
-                    "ignore_patterns": ignore_patterns,
-                })
+            def mock_download(
+                repo_id, revision, repo_type, allow_patterns, ignore_patterns
+            ):
+                download_calls.append(
+                    {
+                        "repo_id": repo_id,
+                        "revision": revision,
+                        "repo_type": repo_type,
+                        "allow_patterns": allow_patterns,
+                        "ignore_patterns": ignore_patterns,
+                    }
+                )
                 return str(download_dir)
 
             res = acquire_dataset_snapshot(
-                "my/dataset",
-                "main",
-                hub_api=api,
-                download_fn=mock_download
+                "my/dataset", "main", hub_api=api, download_fn=mock_download
             )
 
             assert isinstance(res, AcquisitionResult)
@@ -227,9 +268,14 @@ class TestAcquisition:
 
     def test_unresolved_revision_fails(self):
         api = MockHfApi(sha=None)
-        dummy_download = lambda *a, **kw: "fake_dir"
+
+        def dummy_download(*_args, **_kwargs):
+            return "fake_dir"
+
         with pytest.raises(AcquisitionError, match="Failed to resolve revision"):
-            acquire_dataset_snapshot("my/dataset", "invalid-rev", hub_api=api, download_fn=dummy_download)
+            acquire_dataset_snapshot(
+                "my/dataset", "invalid-rev", hub_api=api, download_fn=dummy_download
+            )
 
     def test_layout_validation_fails(self):
         api = MockHfApi(sha="a" * 40)
@@ -240,5 +286,9 @@ class TestAcquisition:
             def mock_download(*args, **kwargs):
                 return str(download_dir)
 
-            with pytest.raises(AcquisitionError, match="Discovered shards validation failed"):
-                acquire_dataset_snapshot("my/dataset", "main", hub_api=api, download_fn=mock_download)
+            with pytest.raises(
+                AcquisitionError, match="Discovered shards validation failed"
+            ):
+                acquire_dataset_snapshot(
+                    "my/dataset", "main", hub_api=api, download_fn=mock_download
+                )

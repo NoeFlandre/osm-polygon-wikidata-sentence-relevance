@@ -11,12 +11,11 @@ from pathlib import Path
 import pytest
 
 from osm_polygon_sentence_relevance.errors import ShardDiscoveryError
-
 from tests.helpers import (
-    make_polygon_row,
     make_polygon_article_row,
-    make_wikipedia_document_row,
+    make_polygon_row,
     make_section_row,
+    make_wikipedia_document_row,
     make_wikivoyage_document_row,
     write_shard_parquet,
 )
@@ -44,7 +43,9 @@ def _write_complete_shard(root: Path, shard_key: str = "afghanistan-latest") -> 
     )
 
 
-def _write_wikipedia_only_shard(root: Path, shard_key: str = "afghanistan-latest") -> None:
+def _write_wikipedia_only_shard(
+    root: Path, shard_key: str = "afghanistan-latest"
+) -> None:
     """Write a shard with core files only (no Wikivoyage)."""
     write_shard_parquet(
         root,
@@ -68,11 +69,26 @@ class TestCompleteShardDiscovery:
         s = shards[0]
         assert s.shard_key == "afghanistan-latest"
         assert s.polygons == tmp_path / "polygons" / "afghanistan-latest.parquet"
-        assert s.polygon_articles == tmp_path / "polygon_articles" / "afghanistan-latest.parquet"
-        assert s.wikipedia_documents == tmp_path / "wikipedia" / "documents" / "afghanistan-latest.parquet"
-        assert s.wikipedia_sections == tmp_path / "wikipedia" / "sections" / "afghanistan-latest.parquet"
-        assert s.wikivoyage_documents == tmp_path / "wikivoyage" / "documents" / "afghanistan-latest.parquet"
-        assert s.wikivoyage_sections == tmp_path / "wikivoyage" / "sections" / "afghanistan-latest.parquet"
+        assert (
+            s.polygon_articles
+            == tmp_path / "polygon_articles" / "afghanistan-latest.parquet"
+        )
+        assert (
+            s.wikipedia_documents
+            == tmp_path / "wikipedia" / "documents" / "afghanistan-latest.parquet"
+        )
+        assert (
+            s.wikipedia_sections
+            == tmp_path / "wikipedia" / "sections" / "afghanistan-latest.parquet"
+        )
+        assert (
+            s.wikivoyage_documents
+            == tmp_path / "wikivoyage" / "documents" / "afghanistan-latest.parquet"
+        )
+        assert (
+            s.wikivoyage_sections
+            == tmp_path / "wikivoyage" / "sections" / "afghanistan-latest.parquet"
+        )
 
 
 class TestWikipediaOnlyShard:

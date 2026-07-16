@@ -2,15 +2,25 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+
 import pyarrow as pa
 
 from osm_polygon_sentence_relevance.discovery import discover_shards
+from osm_polygon_sentence_relevance.exporter import (
+    ExportResult,
+    export_finalized_dataset,
+)
+from osm_polygon_sentence_relevance.finalization import (
+    FinalizationReport,
+    finalize_sentence_dataset,
+)
 from osm_polygon_sentence_relevance.joins import build_region_section_occurrences
-from osm_polygon_sentence_relevance.sentence_table import segment_joined_sections
-from osm_polygon_sentence_relevance.finalization import finalize_sentence_dataset, FinalizationReport
-from osm_polygon_sentence_relevance.exporter import export_finalized_dataset, ExportResult
-from osm_polygon_sentence_relevance.segmentation import SentenceSegmenter, SegmentationReport
 from osm_polygon_sentence_relevance.schemas import SEGMENTED_SENTENCES_SCHEMA
+from osm_polygon_sentence_relevance.segmentation import (
+    SegmentationReport,
+    SentenceSegmenter,
+)
+from osm_polygon_sentence_relevance.sentence_table import segment_joined_sections
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,14 +54,25 @@ def run_pipeline(
     if in_path == out_path:
         raise ValueError("Input root and output directory cannot be the same path")
     if in_path in out_path.parents:
-        raise ValueError("Input root cannot be an ancestor of output directory (paths overlap)")
+        raise ValueError(
+            "Input root cannot be an ancestor of output directory (paths overlap)"
+        )
     if out_path in in_path.parents:
-        raise ValueError("Output directory cannot be an ancestor of input root (paths overlap)")
+        raise ValueError(
+            "Output directory cannot be an ancestor of input root (paths overlap)"
+        )
 
-    if isinstance(batch_size, bool) or not isinstance(batch_size, int) or batch_size <= 0:
+    if (
+        isinstance(batch_size, bool)
+        or not isinstance(batch_size, int)
+        or batch_size <= 0
+    ):
         raise ValueError("batch_size must be a positive integer")
 
-    if not isinstance(input_dataset_revision, str) or not input_dataset_revision.strip():
+    if (
+        not isinstance(input_dataset_revision, str)
+        or not input_dataset_revision.strip()
+    ):
         raise ValueError("input_dataset_revision must be a non-blank string")
 
     if not isinstance(pipeline_version, str) or not pipeline_version.strip():
@@ -71,7 +92,9 @@ def run_pipeline(
         joined = build_region_section_occurrences(shard)
         total_joined_section_occurrences += joined.report.total_occurrence_count
 
-        segmented_res = segment_joined_sections(joined.table, segmenter, batch_size=batch_size)
+        segmented_res = segment_joined_sections(
+            joined.table, segmenter, batch_size=batch_size
+        )
         segmented_tables.append(segmented_res.table)
         segmentation_reports.append(segmented_res.report)
 
@@ -90,7 +113,9 @@ def run_pipeline(
     # 5. Aggregate segmentation reports before export so contract failures preserve output
     input_sec_occ = sum(r.input_section_occurrence_count for r in segmentation_reports)
     emitted_seg = sum(r.emitted_segment_count for r in segmentation_reports)
-    retained_sent = sum(r.retained_sentence_occurrence_count for r in segmentation_reports)
+    retained_sent = sum(
+        r.retained_sentence_occurrence_count for r in segmentation_reports
+    )
     dropped_raw = sum(r.dropped_empty_raw_count for r in segmentation_reports)
     dropped_norm = sum(r.dropped_empty_normalized_count for r in segmentation_reports)
     wp_sent = sum(r.wikipedia_sentence_occurrence_count for r in segmentation_reports)

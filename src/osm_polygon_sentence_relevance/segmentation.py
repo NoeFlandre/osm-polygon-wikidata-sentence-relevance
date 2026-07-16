@@ -157,7 +157,7 @@ def build_segmentation_report(
     wikipedia_sentence_occurrence_count = 0
     wikivoyage_sentence_occurrence_count = 0
 
-    for section, source in zip(sections, sources):
+    for section, source in zip(sections, sources, strict=True):
         if source not in ("wikipedia", "wikivoyage"):
             raise SegmentationError(
                 "build_segmentation_report: source must be 'wikipedia' or "
@@ -222,7 +222,7 @@ def split_validated_batch(
 
     try:
         result = segmenter.split_batch(texts, languages)
-    except Exception as exc:  # noqa: BLE001 - wrap any adapter failure
+    except Exception as exc:  # intentionally broad: wrap any adapter failure
         raise SegmentationError(
             "split_validated_batch: segmenter raised an error"
         ) from exc

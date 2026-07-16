@@ -17,7 +17,6 @@ import pyarrow as pa
 import pyarrow.compute as pc
 
 from osm_polygon_sentence_relevance.errors import (
-    PreprocessingError,
     SegmentationError,
 )
 from osm_polygon_sentence_relevance.preprocessing import (
@@ -117,8 +116,7 @@ def _check_batch_size(batch_size: int) -> None:
         )
     if batch_size <= 0:
         raise SegmentationError(
-            "segment_joined_sections: batch_size must be positive, "
-            f"got {batch_size}"
+            f"segment_joined_sections: batch_size must be positive, got {batch_size}"
         )
 
 
@@ -172,9 +170,7 @@ def segment_joined_sections(
     # that would fall in a later batch. ---
     rows = _to_sorted_provenance_rows(sorted_table)
 
-    columns: dict[str, list] = {
-        name: [] for name in SEGMENTED_SENTENCES_SCHEMA.names
-    }
+    columns: dict[str, list] = {name: [] for name in SEGMENTED_SENTENCES_SCHEMA.names}
     prepared_sections: list = []
     sources: list[str] = []
 
@@ -186,7 +182,7 @@ def segment_joined_sections(
         languages = [row["language"] for row in batch_rows]
         section_results = segment_sections_batch(texts, languages, segmenter)
 
-        for row, prepared in zip(batch_rows, section_results):
+        for row, prepared in zip(batch_rows, section_results, strict=True):
             source = row["source"]
             section_path = row["section_path"]
             osm_tags = row["osm_tags"]
@@ -203,12 +199,8 @@ def segment_joined_sections(
                 columns["url"].append(row["url"])
                 columns["page_id"].append(row["page_id"])
                 columns["revision_id"].append(row["revision_id"])
-                columns["revision_timestamp"].append(
-                    row["revision_timestamp"]
-                )
-                columns["document_content_hash"].append(
-                    row["document_content_hash"]
-                )
+                columns["revision_timestamp"].append(row["revision_timestamp"])
+                columns["document_content_hash"].append(row["document_content_hash"])
                 columns["section_id"].append(row["section_id"])
                 columns["section_index"].append(row["section_index"])
                 columns["section_path"].append(section_path)
@@ -217,9 +209,7 @@ def segment_joined_sections(
                 columns["sentence_text_normalized"].append(
                     sentence.sentence_text_normalized
                 )
-                columns["section_content_hash"].append(
-                    row["section_content_hash"]
-                )
+                columns["section_content_hash"].append(row["section_content_hash"])
                 columns["polygon_name"].append(row["polygon_name"])
                 columns["osm_primary_tag"].append(row["osm_primary_tag"])
                 columns["osm_tags"].append(osm_tags)
@@ -294,4 +284,3 @@ def _to_sorted_provenance_rows(table: pa.Table) -> list[dict]:
         row["osm_tags"] = parse_osm_tags(raw["osm_tags_raw"])
         rows.append(row)
     return rows
-

@@ -12,7 +12,9 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from osm_polygon_sentence_relevance.schemas import SCHEMA_REGISTRY, validate_table_schema
+from osm_polygon_sentence_relevance.schemas import (
+    validate_table_schema,
+)
 
 
 def load_validated_table(

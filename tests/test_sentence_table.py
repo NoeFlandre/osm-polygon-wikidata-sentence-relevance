@@ -2,25 +2,18 @@
 
 from __future__ import annotations
 
-import pytest
-
 import pyarrow as pa
+import pytest
 
 from osm_polygon_sentence_relevance.errors import (
     PreprocessingError,
     SegmentationError,
 )
-from osm_polygon_sentence_relevance.preprocessing import (
-    parse_osm_tags,
-    parse_section_path,
-)
 from osm_polygon_sentence_relevance.schemas import (
     JOINED_SECTIONS_SCHEMA,
     SEGMENTED_SENTENCES_SCHEMA,
 )
-from osm_polygon_sentence_relevance.segmentation import SentenceSegmenter
 from osm_polygon_sentence_relevance.sentence_table import (
-    SegmentedTableResult,
     segment_joined_sections,
     validate_joined_sections_table,
 )
@@ -262,9 +255,7 @@ class TestSegmentJoinedSections:
         assert seg.calls == 3
 
     def test_sentence_indices_reset_per_section(self):
-        seg = FakeSegmenter(
-            {"A text.": ["S1.", "S2."], "B text.": ["S3."]}
-        )
+        seg = FakeSegmenter({"A text.": ["S1.", "S2."], "B text.": ["S3."]})
         rows = [
             _row(polygon_id=["pa"], section_text_raw=["A text."], section_index=[0]),
             _row(polygon_id=["pb"], section_text_raw=["B text."], section_index=[1]),
@@ -326,18 +317,14 @@ class TestSegmentJoinedSections:
     def test_malformed_section_path(self):
         seg = FakeSegmenter({"Some text.": ["One."]})
         with pytest.raises(PreprocessingError) as exc:
-            segment_joined_sections(
-                _one_row(section_path_raw=["not json"]), seg
-            )
+            segment_joined_sections(_one_row(section_path_raw=["not json"]), seg)
         assert seg.calls == 0
         assert "section_path" in str(exc.value)
 
     def test_malformed_osm_tags(self):
         seg = FakeSegmenter({"Some text.": ["One."]})
         with pytest.raises(PreprocessingError) as exc:
-            segment_joined_sections(
-                _one_row(osm_tags_raw=["{not json"]), seg
-            )
+            segment_joined_sections(_one_row(osm_tags_raw=["{not json"]), seg)
         assert seg.calls == 0
         assert "osm_tags" in str(exc.value)
 

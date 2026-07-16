@@ -21,10 +21,10 @@ from osm_polygon_sentence_relevance.schemas import (
     validate_table_schema,
 )
 
-
 # ===================================================================
 # Helpers – minimal Afghanistan-shaped rows
 # ===================================================================
+
 
 def _minimal_row(schema: pa.Schema) -> dict[str, list]:
     """Return a single-row column dict with plausible dummy values."""
@@ -47,6 +47,7 @@ def _minimal_row(schema: pa.Schema) -> dict[str, list]:
 # Registry completeness
 # ===================================================================
 
+
 class TestRegistryCompleteness:
     """All six logical input tables must be registered."""
 
@@ -63,13 +64,17 @@ class TestRegistryCompleteness:
         assert set(SCHEMA_REGISTRY.keys()) == self.EXPECTED_TABLES
 
     def test_section_schemas_identical(self):
-        assert SCHEMA_REGISTRY["wikipedia_sections"] is SCHEMA_REGISTRY["wikivoyage_sections"]
+        assert (
+            SCHEMA_REGISTRY["wikipedia_sections"]
+            is SCHEMA_REGISTRY["wikivoyage_sections"]
+        )
         assert SCHEMA_REGISTRY["wikipedia_sections"] == SECTIONS_SCHEMA
 
 
 # ===================================================================
 # Conforming rows
 # ===================================================================
+
 
 class TestConformingRows:
     """Afghanistan-shaped rows must pass validation."""
@@ -86,6 +91,7 @@ class TestConformingRows:
 # ===================================================================
 # Missing columns
 # ===================================================================
+
 
 class TestMissingColumns:
     """validate_table_schema must detect missing required columns."""
@@ -111,6 +117,7 @@ class TestMissingColumns:
 # Incompatible types
 # ===================================================================
 
+
 class TestIncompatibleTypes:
     """validate_table_schema must detect type mismatches."""
 
@@ -134,6 +141,7 @@ class TestIncompatibleTypes:
 # Unknown table
 # ===================================================================
 
+
 class TestUnknownTable:
     def test_unknown_table_raises(self):
         with pytest.raises(UnknownTableError):
@@ -143,6 +151,7 @@ class TestUnknownTable:
 # ===================================================================
 # Nullable Wikipedia thumbnail dimensions
 # ===================================================================
+
 
 class TestNullableThumbnails:
     """Null int64 values in thumbnail_width/height must be accepted."""
@@ -161,6 +170,7 @@ class TestNullableThumbnails:
 # ===================================================================
 # Empty Wikivoyage article_id
 # ===================================================================
+
 
 class TestEmptyWikivoyageArticleId:
     """Empty-string article_id is legitimate for Wikivoyage."""
@@ -184,6 +194,7 @@ class TestEmptyWikivoyageArticleId:
 # ===================================================================
 # Output schema structure
 # ===================================================================
+
 
 class TestOutputSchema:
     """The output sentence schema must match the spec exactly."""
@@ -263,6 +274,7 @@ class TestOutputSchema:
 # ===================================================================
 # Extra columns (forward-compatibility)
 # ===================================================================
+
 
 class TestExtraColumns:
     """Extra upstream columns should be silently allowed."""

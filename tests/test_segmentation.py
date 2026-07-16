@@ -141,7 +141,7 @@ def test_protocol_is_runtime_checkable():
 
 class TestInvalidSegmenterOutput:
     @pytest.mark.parametrize(
-        "result,scope",
+        ("result", "scope"),
         [
             (None, "outer"),  # type: ignore[arg-type]
             (123, "outer"),  # type: ignore[arg-type]
@@ -266,9 +266,7 @@ class TestSegmentSectionsBatch:
             "second": ["Beta."],
         }
         seg = make_segmenter(mapping)
-        results = segment_sections_batch(
-            ["first", "second"], ["en", "en"], seg
-        )
+        results = segment_sections_batch(["first", "second"], ["en", "en"], seg)
         assert results[0].sentences[0].sentence_text_raw == "Alpha."
         assert results[1].sentences[0].sentence_text_raw == "Beta."
 
@@ -394,6 +392,3 @@ class TestBuildSegmentationReport:
         report = build_segmentation_report(sections, ["wikipedia"])
         with pytest.raises(AttributeError):
             report.emitted_segment_count = 9  # type: ignore[misc]
-
-
-

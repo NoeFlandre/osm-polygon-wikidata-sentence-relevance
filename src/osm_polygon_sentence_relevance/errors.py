@@ -36,9 +36,7 @@ class MissingColumnsError(SchemaContractError):
     def __init__(self, table_name: str, missing: list[str]) -> None:
         self.table_name = table_name
         self.missing = missing
-        super().__init__(
-            f"Table {table_name!r} is missing required columns: {missing}"
-        )
+        super().__init__(f"Table {table_name!r} is missing required columns: {missing}")
 
 
 class IncompatibleTypesError(SchemaContractError):
