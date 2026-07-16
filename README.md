@@ -107,3 +107,38 @@ from osm_polygon_sentence_relevance.segmentation import split_validated_batch
 segmenter = SaTSentenceSegmenter()  # defaults to "sat-3l-sm"
 groups = split_validated_batch(segmenter, ["First sentence. Second one."], ["en"])
 ```
+
+## Building the Dataset (CLI)
+
+The CLI builds from **either** an existing local snapshot **or** the upstream
+Hugging Face dataset. The two input modes are mutually exclusive. The input
+revision is required for both and, in Hub mode, is resolved to an immutable
+commit SHA that is forwarded into the pipeline.
+
+Local snapshot example (requires the segmentation extra for the SaT model):
+
+```bash
+uv sync --extra segmentation
+uv run osm-polygon-sentence-relevance \
+  --input-root /path/to/snapshot \
+  --output-dir ./out \
+  --input-dataset-revision abc123... \
+  --pipeline-version 0.1.0
+```
+
+Hugging Face example (acquires a read-only snapshot, then builds; requires
+both the hub and segmentation extras):
+
+```bash
+uv sync --extra hub --extra segmentation
+uv run osm-polygon-sentence-relevance \
+  --input-dataset-id NoeFlandre/osm-polygon-wikidata-only \
+  --output-dir ./out \
+  --input-dataset-revision main \
+  --pipeline-version 0.1.0
+```
+
+The success JSON includes an `input` object reporting the mode, dataset id,
+requested and resolved revisions, and the snapshot path used. No HF token is
+accepted, printed, or persisted; standard `huggingface_hub` authentication is
+used.
