@@ -13,7 +13,8 @@ from __future__ import annotations
 
 import pyarrow as pa
 
-from osm_polygon_sentence_relevance.errors import JoinIntegrityError
+from osm_polygon_sentence_relevance.contracts.errors import JoinIntegrityError
+from osm_polygon_sentence_relevance.contracts.schemas import JOINED_SECTIONS_SCHEMA
 from osm_polygon_sentence_relevance.joins._integrity import (
     _check_no_orphans,
     _check_non_empty,
@@ -21,7 +22,6 @@ from osm_polygon_sentence_relevance.joins._integrity import (
     _check_unique,
     _check_unique_pairs,
 )
-from osm_polygon_sentence_relevance.schemas import JOINED_SECTIONS_SCHEMA
 
 
 def join_wikipedia_sections(

@@ -16,10 +16,10 @@ from dataclasses import dataclass
 import pyarrow as pa
 import pyarrow.compute as pc
 
-from osm_polygon_sentence_relevance.errors import (
+from osm_polygon_sentence_relevance.contracts.errors import (
     SegmentationError,
 )
-from osm_polygon_sentence_relevance.schemas import (
+from osm_polygon_sentence_relevance.contracts.schemas import (
     JOINED_SECTIONS_SCHEMA,
     SEGMENTED_SENTENCES_SCHEMA,
 )

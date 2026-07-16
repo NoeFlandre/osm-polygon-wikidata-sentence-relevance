@@ -7,9 +7,9 @@ from typing import Any
 
 import pyarrow as pa
 
-from osm_polygon_sentence_relevance.constants import ALLOWED_SOURCES
-from osm_polygon_sentence_relevance.errors import FinalizationError
-from osm_polygon_sentence_relevance.schemas import (
+from osm_polygon_sentence_relevance.contracts.constants import ALLOWED_SOURCES
+from osm_polygon_sentence_relevance.contracts.errors import FinalizationError
+from osm_polygon_sentence_relevance.contracts.schemas import (
     OUTPUT_SENTENCE_SCHEMA,
     SEGMENTED_SENTENCES_SCHEMA,
 )

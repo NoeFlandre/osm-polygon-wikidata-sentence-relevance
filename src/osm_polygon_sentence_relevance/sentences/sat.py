@@ -19,7 +19,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Protocol, cast
 
-from osm_polygon_sentence_relevance.errors import SegmentationError
+from osm_polygon_sentence_relevance.contracts.errors import SegmentationError
 
 
 class _SaTModel(Protocol):

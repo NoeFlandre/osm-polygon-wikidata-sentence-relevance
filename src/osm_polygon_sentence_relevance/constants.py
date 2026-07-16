@@ -1,49 +1,27 @@
-"""Pipeline constants.
+"""Compatibility facade: ``osm_polygon_sentence_relevance.constants``.
 
-Centralises dataset identifiers, version strings, allowed source names,
-schema names, and the allowlist of input subdirectory paths.
+The canonical definitions now live in
+:mod:`osm_polygon_sentence_relevance.contracts.constants`. Import from there
+in new code; this module re-exports the stable public symbols so existing
+imports keep working.
 """
 
-from __future__ import annotations
-
-# ---------------------------------------------------------------------------
-# Dataset identifiers
-# ---------------------------------------------------------------------------
-INPUT_DATASET_ID: str = "NoeFlandre/osm-polygon-wikidata-only"
-OUTPUT_DATASET_ID: str = "NoeFlandre/osm-polygon-wikidata-sentence-relevance"
-DEFAULT_INPUT_REVISION: str = "main"
-
-# ---------------------------------------------------------------------------
-# Pipeline version (matches package __version__ for now)
-# ---------------------------------------------------------------------------
-PIPELINE_VERSION: str = "0.1.0"
-
-# ---------------------------------------------------------------------------
-# Allowed source labels for the sentence output table
-# ---------------------------------------------------------------------------
-ALLOWED_SOURCES: frozenset[str] = frozenset({"wikipedia", "wikivoyage"})
-
-# ---------------------------------------------------------------------------
-# Logical table names recognised by the schema registry
-# ---------------------------------------------------------------------------
-SCHEMA_NAMES: tuple[str, ...] = (
-    "polygons",
-    "polygon_articles",
-    "wikipedia_documents",
-    "wikivoyage_documents",
-    "wikipedia_sections",
-    "wikivoyage_sections",
+from osm_polygon_sentence_relevance.contracts.constants import (
+    ALLOWED_INPUT_PATHS,
+    ALLOWED_SOURCES,
+    DEFAULT_INPUT_REVISION,
+    INPUT_DATASET_ID,
+    OUTPUT_DATASET_ID,
+    PIPELINE_VERSION,
+    SCHEMA_NAMES,
 )
 
-# ---------------------------------------------------------------------------
-# Allowed input subdirectory paths (relative to the dataset root).
-# The obsolete ``articles/`` directory is intentionally excluded.
-# ---------------------------------------------------------------------------
-ALLOWED_INPUT_PATHS: tuple[str, ...] = (
-    "polygons",
-    "polygon_articles",
-    "wikipedia/documents",
-    "wikipedia/sections",
-    "wikivoyage/documents",
-    "wikivoyage/sections",
-)
+__all__ = [
+    "INPUT_DATASET_ID",
+    "OUTPUT_DATASET_ID",
+    "DEFAULT_INPUT_REVISION",
+    "PIPELINE_VERSION",
+    "ALLOWED_SOURCES",
+    "SCHEMA_NAMES",
+    "ALLOWED_INPUT_PATHS",
+]

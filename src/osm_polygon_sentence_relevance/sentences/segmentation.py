@@ -15,7 +15,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
-from osm_polygon_sentence_relevance.errors import SegmentationError
+from osm_polygon_sentence_relevance.contracts.errors import SegmentationError
 from osm_polygon_sentence_relevance.sentences.preprocessing import normalize_sentence
 
 

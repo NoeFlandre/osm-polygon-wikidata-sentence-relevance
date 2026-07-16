@@ -15,9 +15,15 @@ locally without extra steps.
 ## Repository layout
 
 - `src/osm_polygon_sentence_relevance/` — the package.
-  - Root: `constants.py`, `errors.py`, `schemas.py`, `settings.py`,
-    `py.typed`, compatibility facades.
-  - `application/` — `cli.py`, `pipeline.py`.
+  - Root: `py.typed`, and thin compatibility facades
+    (`constants.py`, `errors.py`, `schemas.py`, `settings.py`, `cli.py`,
+    `pipeline.py`, `acquisition.py`, `discovery.py`, `loading.py`,
+    `preprocessing.py`, `segmentation.py`, `sat_adapter.py`,
+    `sentence_table.py`, `finalization.py`, `exporter.py`).
+  - `contracts/` — canonical cross-cutting contracts: `constants.py`,
+    `errors.py`, `schemas/` (`__init__.py`, `input.py`, `pipeline.py`,
+    `registry.py`).
+  - `application/` — `cli.py`, `pipeline.py`, `settings.py`.
   - `ingestion/` — `acquisition.py`, `discovery.py`, `loading.py`.
   - `sentences/` — `preprocessing.py`, `segmentation.py`, `sat.py`,
     `table.py`, `finalization.py`.

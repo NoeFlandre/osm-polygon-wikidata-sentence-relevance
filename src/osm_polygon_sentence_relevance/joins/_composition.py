@@ -11,7 +11,7 @@ from dataclasses import dataclass
 
 import pyarrow as pa
 
-from osm_polygon_sentence_relevance.errors import JoinIntegrityError
+from osm_polygon_sentence_relevance.contracts.errors import JoinIntegrityError
 from osm_polygon_sentence_relevance.ingestion.discovery import RegionShardSet
 from osm_polygon_sentence_relevance.joins._wikipedia import join_wikipedia_sections
 from osm_polygon_sentence_relevance.joins._wikivoyage import join_wikivoyage_sections

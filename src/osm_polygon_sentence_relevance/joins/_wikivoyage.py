@@ -13,14 +13,14 @@ from __future__ import annotations
 
 import pyarrow as pa
 
-from osm_polygon_sentence_relevance.errors import JoinIntegrityError
+from osm_polygon_sentence_relevance.contracts.errors import JoinIntegrityError
+from osm_polygon_sentence_relevance.contracts.schemas import JOINED_SECTIONS_SCHEMA
 from osm_polygon_sentence_relevance.joins._integrity import (
     _check_no_orphans,
     _check_non_empty,
     _check_section_index,
     _check_unique,
 )
-from osm_polygon_sentence_relevance.schemas import JOINED_SECTIONS_SCHEMA
 
 
 def join_wikivoyage_sections(

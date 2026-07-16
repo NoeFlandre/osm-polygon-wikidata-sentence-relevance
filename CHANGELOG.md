@@ -16,31 +16,47 @@ package remains pre-1.0 (currently `0.1.0`).
 - Thin compatibility facades at the previous top-level module paths
   (`cli`, `pipeline`, `acquisition`, `discovery`, `loading`,
   `preprocessing`, `segmentation`, `sat_adapter`, `sentence_table`,
-  `finalization`, `exporter`) re-export the stable public symbols so
+  `finalization`, `exporter`, and the contract facades `constants`,
+  `errors`, `schemas`, `settings`) re-export the stable public symbols so
   existing import paths keep working.
-- `py.typed` marker for downstream type-checking support; included in
-  the wheel.
+- `contracts/` package as the canonical home for cross-cutting contracts:
+  `constants.py`, `errors.py`, and `schemas/` (`__init__.py`, `input.py`,
+  `pipeline.py`, `registry.py`). Each schema object is instantiated once
+  and re-exported with preserved object identity.
+- `application/settings.py` as canonical `PipelineSettings` ownership.
 - `scripts/verify_distribution.py`: stdlib-only distribution-content
   verifier used by CI and documented in `docs/guides/development.md`.
 - MIT license (`LICENSE`), `CONTRIBUTING.md`, and `SECURITY.md`.
 - `docs/` restructured into `index`, `architecture/`, `guides/`, and
-  `reference/` sections.
+  `reference/` sections; ADR 0001 (domain layout) and ADR 0002
+  (contracts package).
 - `.github/workflows/ci.yml`: lint, type, test (with branch coverage),
   build, distribution-content, and installed-wheel smoke gates.
 - Documentation consistency tests (README/dataset IDs, CLI flags,
-  version parity, link validity, local-path absence).
+  version parity, link validity, local-path absence) and structural
+  tests (no production imports of facades; facade purity via AST).
 
 ### Changed
 - Production modules now import each other via canonical domain paths
-  rather than the legacy flat module names.
+  (`contracts.constants`, `contracts.errors`, `contracts.schemas`,
+  `application.settings`, domain packages); never via a root facade.
+- Settings data-directory resolution is now portable and machine-agnostic:
+  explicit `data_dir` argument, then nonblank `OSM_DATA_DIR`, then
+  `Path.cwd() / "data"`. Whitespace-only `OSM_DATA_DIR` is ignored; a
+  leading `~` is expanded. No directory creation, no network access, and
+  no probing of personal or platform-specific mount points.
 - `MANIFEST.in` extended to ship public docs and project governance
   files in the source distribution while excluding caches, data, model
   weights, and the local-only `.local-docs/` guide.
 
 ### Removed
-- Obsolete root `config.py` (legacy `get_data_dir`/Seagate path logic)
-  and `main.py` (Phase 1 stub). The supported entry point is now the
-  installed console command `osm-polygon-sentence-relevance`.
+- The hard-coded external-drive data-directory path and all
+  machine-specific filesystem probing from settings resolution. (Earlier
+  changelog text incorrectly claimed this removal happened in the prior
+  reorganization; it is finalized in this pass.)
+- Obsolete root `config.py` (legacy `get_data_dir` logic) and `main.py`
+  (Phase 1 stub). The supported entry point is the installed console
+  command `osm-polygon-sentence-relevance`.
 
 ### Not implemented (scope boundaries)
 - Hugging Face dataset publishing / upload.

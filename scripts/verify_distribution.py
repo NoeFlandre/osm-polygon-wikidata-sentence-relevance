@@ -22,19 +22,34 @@ import zipfile
 from pathlib import Path
 
 WHEEL_PKG = "osm_polygon_sentence_relevance"
-DOMAIN_PACKAGES = ["application", "ingestion", "joins", "output", "sentences"]
+DOMAIN_PACKAGES = [
+    "application",
+    "contracts",
+    "ingestion",
+    "joins",
+    "output",
+    "sentences",
+]
+# Subpackages that must ship inside the wheel.
+WHEEL_REQUIRED_SUBDIRS = [
+    "contracts/schemas",
+]
 COMPAT_FACADES = [
     "acquisition",
     "cli",
+    "constants",
     "discovery",
+    "errors",
     "exporter",
     "finalization",
     "loading",
     "pipeline",
     "preprocessing",
     "sat_adapter",
+    "schemas",
     "segmentation",
     "sentence_table",
+    "settings",
 ]
 SDIST_PUBLIC_DOCS = [
     "docs/architecture/overview.md",
@@ -93,6 +108,10 @@ def verify_wheel(wheel: Path) -> None:
     for pkg in DOMAIN_PACKAGES:
         if not any(n.startswith(f"{prefix}{pkg}/") for n in names):
             _fail(f"wheel is missing domain package: {pkg}")
+
+    for sub in WHEEL_REQUIRED_SUBDIRS:
+        if not any(n.startswith(f"{prefix}{sub}/") for n in names):
+            _fail(f"wheel is missing required subpackage: {sub}")
 
     for facade in COMPAT_FACADES:
         if not any(n == f"{prefix}{facade}.py" for n in names):

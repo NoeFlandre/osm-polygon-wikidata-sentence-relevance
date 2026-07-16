@@ -14,7 +14,8 @@ from pathlib import Path
 
 import pyarrow.parquet as pq
 
-from osm_polygon_sentence_relevance.errors import ExportError
+from osm_polygon_sentence_relevance.contracts.errors import ExportError
+from osm_polygon_sentence_relevance.contracts.schemas import OUTPUT_SENTENCE_SCHEMA
 from osm_polygon_sentence_relevance.output.atomic import (
     cleanup_on_failure,
     install_atomic,
@@ -25,7 +26,6 @@ from osm_polygon_sentence_relevance.output.manifest import (
     build_manifest_data,
     write_manifest,
 )
-from osm_polygon_sentence_relevance.schemas import OUTPUT_SENTENCE_SCHEMA
 from osm_polygon_sentence_relevance.sentences.finalization import FinalizedDataset
 
 
