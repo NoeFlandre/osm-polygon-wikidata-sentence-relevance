@@ -1,11 +1,35 @@
 # Files included in the source distribution.
-# The wheel does not install any documentation; the docs/ tree lives in
-# the project tree and is shipped in the sdist for offline reference.
+# The wheel installs package code, py.typed, and metadata only; the
+# docs/ tree lives in the project tree and ships in the sdist for
+# offline reference but is not installed.
+
 include README.md
+include LICENSE
+include CHANGELOG.md
+include CONTRIBUTING.md
+include SECURITY.md
 include pyproject.toml
+include .python-version
 
 recursive-include docs *.md
+recursive-include scripts *.py
+recursive-include tests *.py
 
-# Explicitly exclude the local-only coding-agent handoff guide from
-# every source distribution and wheel.
+# Exclude caches, build output, data, credentials, model weights, and
+# the local-only coding-agent handoff guide.
 prune .local-docs
+prune .mypy_cache
+prune .pytest_cache
+prune .ruff_cache
+prune build
+prune dist
+exclude .coverage
+exclude coverage.xml
+recursive-exclude * __pycache__
+recursive-exclude * *.pyc
+recursive-exclude data *
+recursive-exclude * *.parquet
+recursive-exclude * *.onnx
+recursive-exclude * *.safetensors
+recursive-exclude * *.bin
+global-exclude .DS_Store
