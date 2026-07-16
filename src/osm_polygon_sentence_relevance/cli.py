@@ -3,18 +3,31 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
+from osm_polygon_sentence_relevance import acquisition
+from osm_polygon_sentence_relevance.acquisition import AcquisitionResult
 from osm_polygon_sentence_relevance.sat_adapter import SaTSentenceSegmenter
 from osm_polygon_sentence_relevance.pipeline import run_pipeline
 
 
-def main(args: list[str] | None = None, *, model_factory=None) -> int:
+def main(
+    args: list[str] | None = None,
+    *,
+    model_factory=None,
+    acquisition_fn: Callable[..., AcquisitionResult] | None = None,
+) -> int:
     """CLI entry point to run the sentence relevance pipeline."""
     parser = argparse.ArgumentParser(
         description="Deterministic OSM Polygon Sentence Relevance Dataset Orchestrator"
     )
-    parser.add_argument("--input-root", required=True, help="Input root directory")
+    input_group = parser.add_mutually_exclusive_group(required=True)
+    input_group.add_argument("--input-root", help="Existing local input snapshot root directory")
+    input_group.add_argument(
+        "--input-dataset-id",
+        help="Upstream Hugging Face dataset ID to acquire read-only snapshot from",
+    )
     parser.add_argument("--output-dir", required=True, help="Output directory")
     parser.add_argument(
         "--input-dataset-revision", required=True, help="Input dataset revision"
@@ -40,13 +53,10 @@ def main(args: list[str] | None = None, *, model_factory=None) -> int:
         return e.code
 
     try:
-        # Validate batch size here before model construction
+        # Validate all arguments before any acquisition or model construction.
         batch_size = parsed_args.batch_size
         if isinstance(batch_size, bool) or not isinstance(batch_size, int) or batch_size <= 0:
             raise ValueError("batch_size must be a positive integer")
-
-        if not parsed_args.input_root.strip():
-            raise ValueError("input_root cannot be blank")
 
         if not parsed_args.output_dir.strip():
             raise ValueError("output_dir cannot be blank")
@@ -54,13 +64,47 @@ def main(args: list[str] | None = None, *, model_factory=None) -> int:
         if not parsed_args.sat_model.strip():
             raise ValueError("sat_model cannot be blank")
 
-        if not parsed_args.input_dataset_revision.strip():
+        requested_revision = parsed_args.input_dataset_revision
+        if not requested_revision.strip():
             raise ValueError("input_dataset_revision cannot be blank")
 
         if not parsed_args.pipeline_version.strip():
             raise ValueError("pipeline_version cannot be blank")
 
-        # Construct segmenter
+        if parsed_args.input_root is not None:
+            if not parsed_args.input_root.strip():
+                raise ValueError("input_root cannot be blank")
+            input_root = Path(parsed_args.input_root)
+            input_report = {
+                "mode": "local",
+                "dataset_id": None,
+                "requested_revision": requested_revision,
+                "resolved_revision": requested_revision,
+                "snapshot_path": str(input_root),
+            }
+            resolved_revision = requested_revision
+        else:
+            dataset_id = parsed_args.input_dataset_id
+            if not dataset_id.strip():
+                raise ValueError("input_dataset_id cannot be blank")
+
+            # Acquire before constructing the segmenter so acquisition
+            # failures do not download model weights.
+            snapshot = (acquisition_fn or acquisition.acquire_dataset_snapshot)(
+                dataset_id,
+                requested_revision,
+            )
+            input_root = snapshot.snapshot_path
+            resolved_revision = snapshot.resolved_sha
+            input_report = {
+                "mode": "huggingface",
+                "dataset_id": dataset_id,
+                "requested_revision": requested_revision,
+                "resolved_revision": resolved_revision,
+                "snapshot_path": str(input_root),
+            }
+
+        # Construct segmenter only after acquisition has succeeded.
         segmenter = SaTSentenceSegmenter(
             model_name=parsed_args.sat_model,
             model_factory=model_factory,
@@ -68,10 +112,10 @@ def main(args: list[str] | None = None, *, model_factory=None) -> int:
 
         # Run pipeline
         res = run_pipeline(
-            input_root=Path(parsed_args.input_root),
+            input_root=input_root,
             output_dir=Path(parsed_args.output_dir),
             segmenter=segmenter,
-            input_dataset_revision=parsed_args.input_dataset_revision,
+            input_dataset_revision=resolved_revision,
             pipeline_version=parsed_args.pipeline_version,
             batch_size=parsed_args.batch_size,
             overwrite=parsed_args.overwrite,
@@ -83,6 +127,7 @@ def main(args: list[str] | None = None, *, model_factory=None) -> int:
             "manifest_path": str(res.export_result.manifest_path),
             "processed_regions_count": res.processed_regions_count,
             "total_joined_section_occurrences": res.total_joined_section_occurrences,
+            "input": input_report,
             "segmentation_report": {
                 "input_section_occurrence_count": res.segmentation_report.input_section_occurrence_count,
                 "emitted_segment_count": res.segmentation_report.emitted_segment_count,
