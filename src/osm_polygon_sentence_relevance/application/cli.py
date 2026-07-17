@@ -13,6 +13,10 @@ from osm_polygon_sentence_relevance.application.pipeline import (
     run_pipeline,
 )
 from osm_polygon_sentence_relevance.ingestion.acquisition import AcquisitionResult
+from osm_polygon_sentence_relevance.publishing import (
+    PublicationResult,
+    publish_export_directory,
+)
 from osm_polygon_sentence_relevance.sentences.sat import SaTSentenceSegmenter
 
 
@@ -56,6 +60,23 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Overwrite existing output directory",
     )
+    parser.add_argument(
+        "--publish-dataset-id",
+        help="Optional Hugging Face dataset ID to publish the export to "
+        "(after a successful build). The target repository must already "
+        "exist. No repository is created.",
+    )
+    parser.add_argument(
+        "--publish-revision",
+        default=None,
+        help="Target Hugging Face dataset revision for publishing "
+        "(default: main). Only used with --publish-dataset-id.",
+    )
+    parser.add_argument(
+        "--publish-commit-message",
+        help="Optional commit message for the publishing commit. Only "
+        "used with --publish-dataset-id.",
+    )
     return parser
 
 
@@ -88,6 +109,31 @@ def _validate_args(parsed: argparse.Namespace) -> None:
     else:
         if not parsed.input_dataset_id.strip():
             raise ValueError("input_dataset_id cannot be blank")
+
+    # Publishing is optional and strictly post-build. Validate all
+    # publishing relationships before acquisition or model construction.
+    publish_dataset_id = parsed.publish_dataset_id
+    publish_revision = parsed.publish_revision
+    publish_commit_message = parsed.publish_commit_message
+
+    if publish_dataset_id is None:
+        # A revision or commit message without a dataset id is invalid.
+        if publish_revision is not None:
+            raise ValueError("publish_revision requires --publish-dataset-id")
+        if publish_commit_message is not None:
+            raise ValueError("publish_commit_message requires --publish-dataset-id")
+    else:
+        if not publish_dataset_id.strip():
+            raise ValueError("publish_dataset_id cannot be blank")
+        # Resolve the effective revision (default "main") after confirming
+        # a dataset id is present, then reject a blank explicit value.
+        effective_revision = (
+            publish_revision if publish_revision is not None else "main"
+        )
+        if not effective_revision.strip():
+            raise ValueError("publish_revision cannot be blank")
+        if publish_commit_message is not None and not publish_commit_message.strip():
+            raise ValueError("publish_commit_message cannot be blank")
 
 
 def _resolve_input(
@@ -167,8 +213,16 @@ def main(
     *,
     model_factory: Callable[..., object] | None = None,
     acquisition_fn: Callable[..., AcquisitionResult] | None = None,
+    publishing_fn: Callable[..., PublicationResult] | None = None,
 ) -> int:
-    """CLI entry point to run the sentence relevance pipeline."""
+    """CLI entry point to run the sentence relevance pipeline.
+
+    Publishing is strictly optional and strictly post-build: it runs only
+    when ``--publish-dataset-id`` is supplied, and only after the pipeline
+    has succeeded. ``publishing_fn`` is injectable; it defaults lazily to
+    ``publish_export_directory``. ``PublicationError`` is intentionally
+    not caught here so the existing failure boundary yields exit code 1.
+    """
     parser = _build_parser()
     try:
         parsed_args = parser.parse_args(args)
@@ -200,7 +254,39 @@ def main(
             overwrite=parsed_args.overwrite,
         )
 
-        print(_serialize_summary(res, resolved))
+        summary = json.loads(_serialize_summary(res, resolved))
+
+        # Optional, post-build, single-commit publishing to an existing
+        # Hugging Face dataset repository. Never runs without a dataset id,
+        # and never before the export is successfully produced.
+        publish_dataset_id = parsed_args.publish_dataset_id
+        if publish_dataset_id is not None:
+            publisher = publishing_fn or publish_export_directory
+            target_revision = (
+                parsed_args.publish_revision
+                if parsed_args.publish_revision is not None
+                else "main"
+            )
+            publication = publisher(
+                res.export_result.parquet_path.parent,
+                publish_dataset_id,
+                target_revision=target_revision,
+                commit_message=parsed_args.publish_commit_message,
+            )
+            summary["publication"] = {
+                "dataset_id": publication.dataset_id,
+                "target_revision": publication.target_revision,
+                "commit_id": publication.commit_id,
+                "commit_url": publication.commit_url,
+                "row_count": publication.row_count,
+                "sha256": publication.sha256,
+            }
+
+        print(
+            json.dumps(
+                summary, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+            )
+        )
         return 0
 
     except Exception as e:

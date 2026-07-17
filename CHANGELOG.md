@@ -37,9 +37,15 @@ package remains pre-1.0 (currently `0.1.0`).
   Face dataset repository. Returns a frozen `PublicationResult` with
   the verified `commit_id`, `commit_url`, `row_count`, and `sha256`.
   Adds `PublicationError` to `contracts.errors` for
-  publishing-failure handling. No CLI surface, no token parameter, no
-  repository creation, no retries; both `hub_api` and
+  publishing-failure handling. Both `hub_api` and
   `commit_operation_factory` are injectable for fully-offline tests.
+- Optional CLI publishing of the completed export via
+  `application/cli.main`: `--publish-dataset-id` (plus optional
+  `--publish-revision` and `--publish-commit-message`) publishes the
+  successfully built export to an existing Hugging Face dataset
+  repository, strictly post-build and in a single commit. Validation of
+  all publishing relationships happens before acquisition or model
+  construction; no token or repository-creation flag exists.
 - `scripts/verify_distribution.py`: stdlib-only distribution-content
   verifier used by CI and documented in `docs/guides/development.md`.
 - MIT license (`LICENSE`), `CONTRIBUTING.md`, and `SECURITY.md`.
@@ -75,9 +81,6 @@ package remains pre-1.0 (currently `0.1.0`).
   command `osm-polygon-sentence-relevance`.
 
 ### Not implemented (scope boundaries)
-- CLI publishing: arguments for `publish_export_directory` are not yet
-  wired into `application/cli.py`. Publishing remains a programmatic,
-  single-commit call from Python.
 - Hugging Face dataset repository creation: the publisher targets an
   existing repository and never calls `create_repo` or initializes a
   new dataset.

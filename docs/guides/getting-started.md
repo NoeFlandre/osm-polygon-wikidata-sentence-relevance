@@ -3,8 +3,9 @@
 This guide covers installation and a minimal first run. The pipeline is
 local-first and deterministic. Programmatic publishing of a validated
 local export to an existing Hugging Face dataset repository is
-implemented (see `osm_polygon_sentence_relevance.publishing`); CLI
-publishing flags and Hugging Face repository creation are not.
+implemented (see `osm_polygon_sentence_relevance.publishing`), and the
+build CLI can optionally publish the completed export with
+`--publish-dataset-id`; Hugging Face repository creation is not.
 
 ## Installation
 
@@ -55,6 +56,26 @@ uv run osm-polygon-sentence-relevance \
   --pipeline-version 0.1.0
 ```
 
+## Build and publish
+
+Add `--publish-dataset-id` to publish the completed export to an existing
+Hugging Face dataset repository after the build succeeds. The target
+repository must already exist; no token flag is accepted.
+
+```bash
+uv sync --extra hub --extra segmentation
+uv run osm-polygon-sentence-relevance \
+  --input-dataset-id NoeFlandre/osm-polygon-wikidata-only \
+  --output-dir ./out \
+  --input-dataset-revision main \
+  --pipeline-version 0.1.0 \
+  --publish-dataset-id NoeFlandre/osm-polygon-wikidata-sentence-relevance \
+  --publish-revision main
+```
+
+The summary JSON then gains a `publication` object with the resolved
+`commit_id`, `commit_url`, `row_count`, and `sha256`.
+
 ## Expected output files
 
 For a successful run, `output-dir/` contains:
@@ -75,10 +96,12 @@ are not implemented.
 ## Programmatic publishing
 
 Publishing a validated export is a programmatic, single-commit operation
-via `osm_polygon_sentence_relevance.publishing`. It is **not** exposed by
-the CLI. The target Hugging Face dataset repository must already exist;
-standard Hugging Face authentication is used and **no token is passed to
-this function**. The export is validated locally before any Hub call.
+via `osm_polygon_sentence_relevance.publishing`. The target Hugging Face
+dataset repository must already exist; standard Hugging Face
+authentication is used and **no token is passed to this function**. The
+export is validated locally before any Hub call. (For an end-to-end build
+that publishes, use the build CLI's `--publish-dataset-id` flag instead;
+see [Build and publish](#build-and-publish).)
 
 ```bash
 uv sync --extra hub   # enables Hugging Face acquisition and programmatic publishing

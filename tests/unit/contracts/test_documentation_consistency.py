@@ -391,29 +391,71 @@ def test_changelog_states_precise_remaining_publishing_boundaries() -> None:
 
 
 def test_contributing_scope_is_accurate_about_publishing() -> None:
-    """CONTRIBUTING.md must state that programmatic publishing is
-    implemented while CLI publishing and repository creation remain
-    out of scope; it must not blanket-claim all publishing is out.
+    """CONTRIBUTING.md must state that publishing (programmatic and CLI)
+    is implemented while repository creation, classification, and
+    concurrency/resumability remain out of scope; it must not
+    blanket-claim all publishing is out.
     """
     text = _read(_resolve("CONTRIBUTING.md"))
     stale = "Hugging Face dataset publishing / upload."
     assert stale not in text, (
         "CONTRIBUTING.md must not blanket-claim that all Hugging Face "
-        "publishing is out of scope; programmatic publishing is now "
-        "implemented under publishing/."
+        "publishing is out of scope; publishing is now implemented "
+        "under publishing/."
     )
-    # Programmatic publishing is in scope.
+    # Programmatic publishing is implemented.
     assert re.search(r"programmatic[^\n]*publishing", text, re.IGNORECASE), (
         "CONTRIBUTING.md must state that programmatic publishing is implemented."
     )
-    # CLI publishing remains out of scope (precise boundary).
-    assert re.search(r"CLI\s+publishing", text), (
-        "CONTRIBUTING.md must keep CLI publishing flagged as out of scope."
+    # CLI publishing is implemented (or referenced as an actual surface).
+    assert re.search(r"CLI[^\n]*publish|--publish-dataset-id", text, re.IGNORECASE), (
+        "CONTRIBUTING.md must acknowledge that CLI publishing is now implemented."
     )
     # Repository creation remains out of scope (precise boundary).
     assert re.search(r"repository\s+creation", text, re.IGNORECASE), (
         "CONTRIBUTING.md must keep repository creation flagged as out of scope."
     )
+
+
+# Current maintained docs that must not deny the existing CLI publishing
+# surface. Historical ADRs (docs/architecture/decisions/) are intentionally
+# excluded because they describe a superseded prior layout.
+_CURRENT_PUBLISHING_DOCS = [
+    "README.md",
+    "CONTRIBUTING.md",
+    "CHANGELOG.md",
+    "docs/index.md",
+    "docs/architecture/overview.md",
+    "docs/guides/getting-started.md",
+    "docs/guides/development.md",
+    "docs/guides/reproducibility.md",
+    "docs/reference/api.md",
+    "docs/reference/cli.md",
+    "docs/reference/data-contract.md",
+]
+
+_STALE_NO_CLI_PUBLISHING_PHRASES = (
+    "no CLI flag",
+    "no CLI publish",
+    "CLI publishing is not implemented",
+    "CLI publishing is unimplemented",
+    "CLI publishing is unavailable",
+)
+
+
+def test_current_docs_do_not_deny_cli_publishing() -> None:
+    """Maintained current documentation must not claim that no CLI
+    publishing flag exists. Phrases like "no CLI flag" or "CLI publishing
+    is not implemented" are stale now that ``--publish-dataset-id`` exists.
+    Historical ADRs are excluded as superseded.
+    """
+    for doc_rel in _CURRENT_PUBLISHING_DOCS:
+        text = _read(_resolve(doc_rel)).lower()
+        for phrase in _STALE_NO_CLI_PUBLISHING_PHRASES:
+            assert phrase.lower() not in text, (
+                f"{doc_rel}: stale current-scope phrase {phrase!r} must "
+                f"be removed; CLI publishing exists via --publish-dataset-id."
+            )
 
 
 def test_contributing_documents_canonical_contracts_layout() -> None:

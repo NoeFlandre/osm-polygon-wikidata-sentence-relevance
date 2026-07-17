@@ -2,9 +2,10 @@
 
 This document describes the module ownership and data flow of the OSM Polygon
 – Wikidata Sentence Relevance pipeline. It is authoritative for *current*
-behavior. Programmatic publishing to the Hugging Face Hub exists
-(see `osm_polygon_sentence_relevance.publishing`), but CLI publishing flags
-and Hugging Face repository creation are intentionally not implemented.
+behavior. Publishing to the Hugging Face Hub exists both programmatically
+(see `osm_polygon_sentence_relevance.publishing`) and via the build CLI's
+optional `--publish-dataset-id` flag (post-build, to an existing
+repository). Hugging Face repository creation remains unimplemented.
 
 The package is organized into domain packages under
 `src/osm_polygon_sentence_relevance/`. Cross-cutting contracts
@@ -32,7 +33,7 @@ The package is organized into domain packages under
 | Validation | `output/validation.py` | Read-only integrity check of an exported directory. |
 | Publishing | `publishing/huggingface.py` | Programmatic one-commit publish of a validated export to an existing Hub dataset. |
 | Orchestration | `application/pipeline.py` | Tie the above stages together (injected segmenter). |
-| CLI | `application/cli.py` | Console entry point, argument resolution, JSON summary. Publishing is not yet exposed via the CLI. |
+| CLI | `application/cli.py` | Console entry point, argument resolution, JSON summary. Optional post-build publishing via `--publish-dataset-id`. |
 
 ## Compatibility-facade policy
 
@@ -156,13 +157,16 @@ The atomic-swap algorithm is unchanged by the reorganization.
 Model construction (the segmenter) happens **after** acquisition succeeds,
 so an acquisition failure never triggers a model-weight download.
 
-## Programmatic publishing (no CLI, no repo creation)
+## Publishing (programmatic and CLI)
 
 `publishing/huggingface.publish_export_directory` validates a local
 export first via `output/validation.validate_export_directory`, then
 publishes exactly the two verified files (`sentences.parquet` and
 `manifest.json`) to an existing Hub dataset repository in a single
-`create_commit` call. The function models two separate dependencies:
+`create_commit` call. It is also reachable from the build CLI:
+`application/cli.main` runs it after a successful build when
+`--publish-dataset-id` is supplied. The function models two separate
+dependencies:
 
 - `hub_api` — owns the network; exposes `create_commit(...)`. Called
   exactly once per publication.
@@ -182,7 +186,5 @@ The function:
 - wraps library/remote failures in `PublicationError` with the
   original exception preserved as `__cause__`;
 - does not create repositories, does not accept a token, does not
-  retry, and does not expose a CLI flag.
-
-The CLI (`application/cli.py`) does **not** yet expose publishing;
-running publishing remains a programmatic, single-commit operation.
+  retry. When invoked from the CLI via `--publish-dataset-id`, it runs
+  strictly post-build and the target repository must already exist.
