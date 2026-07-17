@@ -15,6 +15,7 @@ from osm_polygon_sentence_relevance.contracts.errors import (
     JoinIntegrityError,
     MissingColumnsError,
     PreprocessingError,
+    PublicationError,
     SchemaContractError,
     SegmentationError,
     ShardDiscoveryError,
@@ -34,4 +35,5 @@ __all__ = [
     "FinalizationError",
     "ExportError",
     "AcquisitionError",
+    "PublicationError",
 ]

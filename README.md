@@ -30,9 +30,15 @@ deterministic, local-first pipeline that:
   validates the output (`OUTPUT_SENTENCE_SCHEMA`);
 - exports the dataset atomically with a checksummed manifest.
 
+Programmatic publishing of a validated local export to an existing
+Hugging Face dataset repository is implemented in
+`osm_polygon_sentence_relevance.publishing` (one `create_commit`
+call, two add operations, no deletes). No token parameter is accepted.
+
 **Not implemented (out of scope):**
 
-- Hugging Face dataset publishing / upload of the produced dataset.
+- CLI publishing flags for the Hugging Face dataset publisher.
+- Hugging Face dataset repository creation.
 - Sentence classification or labelling.
 - Concurrency, resumable, or incremental builds.
 
@@ -87,7 +93,9 @@ The base install pulls in only `pyarrow`. Two extras are available:
 
 - `segmentation` (`wtpsplit>=2.2.1,<3`) — required by the default
   `SaTSentenceSegmenter` adapter.
-- `hub` (`huggingface_hub>=0.20.0`) — required for `--input-dataset-id`.
+- `hub` (`huggingface_hub>=0.20.0`) — required for Hub input acquisition
+  through `--input-dataset-id` and for programmatic publishing through
+  `publish_export_directory`.
 
 Both extras are imported lazily; importing their respective modules is
 side-effect-free when the dependency is not installed.

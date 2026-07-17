@@ -24,6 +24,22 @@ package remains pre-1.0 (currently `0.1.0`).
   `pipeline.py`, `registry.py`). Each schema object is instantiated once
   and re-exported with preserved object identity.
 - `application/settings.py` as canonical `PipelineSettings` ownership.
+- Read-only export validator (`output.validation.validate_export_directory`):
+  proves a local export directory is internally consistent (Parquet
+  present, manifest valid, SHA-256 matches, row count matches, schema
+  equal to the canonical output schema, schema metadata for
+  `input_dataset_revision` and `pipeline_version` present and
+  decodable) before publication. Available via the `validation` module
+  and re-exported from `osm_polygon_sentence_relevance.output`.
+- Dedicated `publishing/` domain package with
+  `publishing.huggingface.publish_export_directory` for programmatic,
+  one-commit publishing of a validated export to an existing Hugging
+  Face dataset repository. Returns a frozen `PublicationResult` with
+  the verified `commit_id`, `commit_url`, `row_count`, and `sha256`.
+  Adds `PublicationError` to `contracts.errors` for
+  publishing-failure handling. No CLI surface, no token parameter, no
+  repository creation, no retries; both `hub_api` and
+  `commit_operation_factory` are injectable for fully-offline tests.
 - `scripts/verify_distribution.py`: stdlib-only distribution-content
   verifier used by CI and documented in `docs/guides/development.md`.
 - MIT license (`LICENSE`), `CONTRIBUTING.md`, and `SECURITY.md`.
@@ -59,7 +75,12 @@ package remains pre-1.0 (currently `0.1.0`).
   command `osm-polygon-sentence-relevance`.
 
 ### Not implemented (scope boundaries)
-- Hugging Face dataset publishing / upload.
+- CLI publishing: arguments for `publish_export_directory` are not yet
+  wired into `application/cli.py`. Publishing remains a programmatic,
+  single-commit call from Python.
+- Hugging Face dataset repository creation: the publisher targets an
+  existing repository and never calls `create_repo` or initializes a
+  new dataset.
 - Sentence classification or labelling.
 - Concurrency, resumable builds, or incremental builds.
 

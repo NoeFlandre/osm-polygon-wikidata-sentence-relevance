@@ -1,8 +1,10 @@
 # Getting started
 
 This guide covers installation and a minimal first run. The pipeline is
-local-first and deterministic; publishing to Hugging Face is **not**
-implemented.
+local-first and deterministic. Programmatic publishing of a validated
+local export to an existing Hugging Face dataset repository is
+implemented (see `osm_polygon_sentence_relevance.publishing`); CLI
+publishing flags and Hugging Face repository creation are not.
 
 ## Installation
 
@@ -16,7 +18,8 @@ uv sync
 # Add the wtpsplit SaT segmentation model (used by the default segmenter).
 uv sync --extra segmentation
 
-# Add the read-only Hugging Face Hub acquisition path.
+# Add the Hugging Face Hub extra: enables read-only acquisition and
+# programmatic publishing.
 uv sync --extra hub
 
 # Combine extras (local and Hub builds both require the segmentation extra).
@@ -68,3 +71,34 @@ Hugging Face token.
 
 Classification, labelling, concurrency, resumable, and incremental builds
 are not implemented.
+
+## Programmatic publishing
+
+Publishing a validated export is a programmatic, single-commit operation
+via `osm_polygon_sentence_relevance.publishing`. It is **not** exposed by
+the CLI. The target Hugging Face dataset repository must already exist;
+standard Hugging Face authentication is used and **no token is passed to
+this function**. The export is validated locally before any Hub call.
+
+```bash
+uv sync --extra hub   # enables Hugging Face acquisition and programmatic publishing
+```
+
+```python
+from osm_polygon_sentence_relevance.publishing import (
+    publish_export_directory,
+)
+
+result = publish_export_directory(
+    "./out",                                   # local output dir with sentences.parquet + manifest.json
+    "owner/dataset",                           # existing Hugging Face dataset repo id
+    target_revision="main",
+)
+
+print(result.commit_url)
+```
+
+`publish_export_directory` raises `PublicationError` if the export fails
+validation, the Hub extra is missing, or the commit response is malformed
+(see [the API reference](../reference/api.md) for the full contract). It
+does not create repositories and does not retry.

@@ -10,9 +10,16 @@ This is an alpha (pre-1.0) project. The current goal is a deterministic,
 local-first pipeline that builds a sentence-level relevance dataset from
 OSM polygons joined to Wikipedia and Wikivoyage sections.
 
+Programmatic publishing of a validated export to an existing Hugging
+Face dataset repository is implemented under
+`osm_polygon_sentence_relevance.publishing` (see
+`publishing/huggingface.publish_export_directory`).
+
 Out of scope (do not add in a normal pull request unless explicitly
 planned):
-- Hugging Face dataset publishing / upload.
+- CLI publishing flags for the Hugging Face dataset publisher.
+- Hugging Face dataset repository creation (the publisher targets an
+  existing repository only).
 - Sentence classification or labelling.
 - Concurrency, resumable, or incremental builds.
 - Performance rewrites that change output bytes.
@@ -25,7 +32,7 @@ environment management. No system Python packages are required.
 ```bash
 uv sync
 uv sync --extra segmentation   # enable wtpsplit SaT segmentation
-uv sync --extra hub            # enable read-only Hugging Face acquisition
+uv sync --extra hub            # enable read-only Hugging Face acquisition and programmatic publishing
 ```
 
 ## Test-driven development
@@ -57,10 +64,15 @@ uv run osm-polygon-sentence-relevance --help
 
 ## Architecture rules
 
-- Cross-cutting contracts (`constants.py`, `schemas.py`, `settings.py`,
-  `errors.py`) live at the package root.
-- Operational code lives in domain packages: `application/`, `ingestion/`,
-  `sentences/`, `joins/`, `output/`.
+- Canonical cross-cutting contracts (constants, schemas, errors) live
+  under `contracts/`. The legacy top-level modules (`constants.py`,
+  `errors.py`, `schemas.py`, `settings.py`) are thin compatibility
+  facades that re-export the canonical symbols — they are not
+  canonical ownership.
+- `PipelineSettings` is owned canonically by `application/settings.py`;
+  the top-level `settings.py` is a compatibility facade.
+- Operational code lives in domain packages: `application/`,
+  `ingestion/`, `sentences/`, `joins/`, `output/`, and `publishing/`.
 - Production imports use canonical domain paths, never compatibility
   facades.
 - Do not add generic frameworks or speculative abstractions (YAGNI).

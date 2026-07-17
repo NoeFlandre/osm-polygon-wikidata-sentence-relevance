@@ -304,3 +304,187 @@ def test_no_stale_seagate_or_external_drive_claims() -> None:
             assert marker not in text, (
                 f"{doc_rel}: stale machine-path marker '{marker}' must not appear"
             )
+
+
+# ---------------------------------------------------------------------------
+# Public scope & architecture claim hygiene
+# ---------------------------------------------------------------------------
+
+
+def _changelog_unreleased_block(text: str) -> str:
+    """Return the text under the first ``## [Unreleased]`` heading in
+    CHANGELOG.md, stopping at the next ``## [...]`` heading."""
+    match = re.search(
+        r"^## \[Unreleased\]\s*$\n(?P<body>.*?)(?=^## \[)", text, re.M | re.S
+    )
+    assert match, "CHANGELOG.md must define a '## [Unreleased]' section"
+    return match.group("body")
+
+
+def test_changelog_does_not_claim_all_publishing_unimplemented() -> None:
+    """The blanket claim that *all* Hugging Face dataset publishing /
+    upload is unimplemented is stale now that ``publishing/`` exists.
+    Legitimate statements about CLI publishing and repository creation
+    remaining unimplemented are still allowed.
+    """
+    text = _read(_resolve("CHANGELOG.md"))
+    stale = "Hugging Face dataset publishing / upload."
+    assert stale not in text, (
+        "CHANGELOG.md still blanket-claims that all Hugging Face "
+        "publishing is unimplemented; replace with precise remaining "
+        "boundaries (CLI publishing, repository creation)."
+    )
+
+
+def test_changelog_records_implemented_publishing_and_validator() -> None:
+    """[Unreleased] must record: read-only export validator; programmatic
+    publishing of validated exports; the ``publishing/`` domain package
+    and ``PublicationError``.
+    """
+    text = _read(_resolve("CHANGELOG.md"))
+    unreleased = _changelog_unreleased_block(text)
+    # Read-only export validator must be recorded in [Unreleased]/Added.
+    assert "validate_export_directory" in unreleased, (
+        "CHANGELOG.md [Unreleased] must record the read-only export "
+        "validator (validate_export_directory)."
+    )
+    # Programmatic publishing must be recorded.
+    assert re.search(
+        r"programmatic[^\n]*publishing|publishing[^\n]*validated",
+        unreleased,
+        re.IGNORECASE,
+    ), (
+        "CHANGELOG.md [Unreleased] must describe the implemented "
+        "programmatic publishing of validated exports."
+    )
+    # Domain package + PublicationError must both be mentioned.
+    assert "publishing/" in unreleased, (
+        "CHANGELOG.md [Unreleased] must mention the dedicated `publishing/` domain package."
+    )
+    assert "PublicationError" in unreleased, (
+        "CHANGELOG.md [Unreleased] must mention PublicationError."
+    )
+
+
+def test_changelog_states_precise_remaining_publishing_boundaries() -> None:
+    """[Unreleased] must distinguish remaining boundaries precisely:
+    CLI publishing and repository creation are still unimplemented;
+    classification and concurrency/resumability boundaries still stand.
+    """
+    text = _read(_resolve("CHANGELOG.md"))
+    unreleased = _changelog_unreleased_block(text)
+    # CLI publishing is still unimplemented.
+    assert re.search(r"CLI\s+publishing", unreleased), (
+        "CHANGELOG.md [Unreleased] must state that CLI publishing is "
+        "still not implemented."
+    )
+    # Repository creation is still unimplemented.
+    assert re.search(r"repository\s+creation", unreleased, re.IGNORECASE), (
+        "CHANGELOG.md [Unreleased] must state that repository creation "
+        "is still not implemented."
+    )
+    # Concurrency/resumability boundary still stands.
+    assert re.search(r"concurrency|resumable", unreleased, re.IGNORECASE), (
+        "CHANGELOG.md [Unreleased] must still list the concurrency/"
+        "resumability boundary."
+    )
+
+
+def test_contributing_scope_is_accurate_about_publishing() -> None:
+    """CONTRIBUTING.md must state that programmatic publishing is
+    implemented while CLI publishing and repository creation remain
+    out of scope; it must not blanket-claim all publishing is out.
+    """
+    text = _read(_resolve("CONTRIBUTING.md"))
+    stale = "Hugging Face dataset publishing / upload."
+    assert stale not in text, (
+        "CONTRIBUTING.md must not blanket-claim that all Hugging Face "
+        "publishing is out of scope; programmatic publishing is now "
+        "implemented under publishing/."
+    )
+    # Programmatic publishing is in scope.
+    assert re.search(r"programmatic[^\n]*publishing", text, re.IGNORECASE), (
+        "CONTRIBUTING.md must state that programmatic publishing is implemented."
+    )
+    # CLI publishing remains out of scope (precise boundary).
+    assert re.search(r"CLI\s+publishing", text), (
+        "CONTRIBUTING.md must keep CLI publishing flagged as out of scope."
+    )
+    # Repository creation remains out of scope (precise boundary).
+    assert re.search(r"repository\s+creation", text, re.IGNORECASE), (
+        "CONTRIBUTING.md must keep repository creation flagged as out of scope."
+    )
+
+
+def test_contributing_documents_canonical_contracts_layout() -> None:
+    """CONTRIBUTING.md must reflect the canonical layout: cross-cutting
+    contracts live under ``contracts/``, settings under
+    ``application/settings.py``, ``publishing/`` is an operational
+    domain package, and the top-level contract modules are
+    compatibility facades.
+    """
+    text = _read(_resolve("CONTRIBUTING.md"))
+    # Stale claim: contracts live at the package root.
+    forbidden = "live at the package root"
+    assert forbidden not in text, (
+        "CONTRIBUTING.md still claims cross-cutting contracts live at "
+        "the package root; canonical ownership is under contracts/."
+    )
+    # Positive: canonical contracts/ location.
+    assert "contracts/" in text, (
+        "CONTRIBUTING.md must reference the contracts/ package as the "
+        "canonical home for cross-cutting contracts."
+    )
+    # Positive: settings ownership is under application/.
+    assert re.search(r"application/settings\.py|application/settings\b", text), (
+        "CONTRIBUTING.md must point at application/settings.py as the "
+        "canonical settings ownership."
+    )
+    # Positive: publishing/ is listed as an operational domain package.
+    assert "publishing/" in text, (
+        "CONTRIBUTING.md must list publishing/ among the operational domain packages."
+    )
+    # Positive: top-level facades are not canonical ownership.
+    assert re.search(
+        r"(compatibilit(?:y|ies) facades?|facade).*ownership|"
+        r"ownership.*compatibilit(?:y|ies) facades?|"
+        r"facades?.*canonical",
+        text,
+        re.IGNORECASE,
+    ), (
+        "CONTRIBUTING.md must describe the top-level contract modules "
+        "as compatibility facades rather than canonical ownership."
+    )
+    # Positive: the four legacy root compatibility facades are named as
+    # modules (``.py``), not directories, so each maps to an actual file.
+    root_modules = [
+        "constants.py",
+        "errors.py",
+        "schemas.py",
+        "settings.py",
+    ]
+    missing = [m for m in root_modules if m not in text]
+    assert not missing, (
+        "CONTRIBUTING.md must name the legacy root compatibility facade "
+        f"modules with their .py extension; missing: {missing}"
+    )
+
+
+def test_contributing_hub_extra_supports_acquisition_and_publishing() -> None:
+    """CONTRIBUTING.md's ``uv sync --extra hub`` line must not be
+    confined to "read-only acquisition" only; it now also powers
+    programmatic publishing.
+    """
+    text = _read(_resolve("CONTRIBUTING.md"))
+    # Locate the 'uv sync --extra hub' line.
+    lines = [line for line in text.splitlines() if "uv sync --extra hub" in line]
+    assert lines, "CONTRIBUTING.md must mention the 'hub' extra install command"
+    line = lines[0]
+    assert re.search(r"acquisition", line), (
+        "CONTRIBUTING.md 'hub' extra comment must still mention acquisition."
+    )
+    # Must also mention publishing somehow.
+    assert re.search(r"publish|publishing", line, re.IGNORECASE), (
+        "CONTRIBUTING.md 'hub' extra comment must mention publishing as "
+        "well as read-only acquisition."
+    )

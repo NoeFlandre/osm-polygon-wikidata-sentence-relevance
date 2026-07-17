@@ -28,7 +28,8 @@ uv sync
 # Add the wtpsplit SaT segmentation model (used by the default segmenter).
 uv sync --extra segmentation
 
-# Add the read-only Hugging Face Hub acquisition path.
+# Add the Hugging Face Hub extra: enables read-only acquisition and
+# programmatic publishing.
 uv sync --extra hub
 
 # Combine extras (local and Hub builds both require the segmentation extra).
@@ -131,7 +132,7 @@ To check that a build reproduced expected outputs, diff:
 
 Equality of these artifacts, combined with the deterministic ordering and
 content-addressable `sentence_id` / `sentence_content_hash` values
-documented in `reference/data-contract.md`, gives strong evidence of a correct
+documented in [the data contract](../reference/data-contract.md), gives strong evidence of a correct
 reproduction. Equality of just `manifest.sha256` is **not** by itself a
 universal cross-platform guarantee.
 

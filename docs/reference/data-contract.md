@@ -6,9 +6,11 @@ produces. It is authoritative for *current* behavior.
 ## Authoritative input paths
 
 The pipeline reads from exactly six subdirectory trees under the input root.
-The allowlist is defined in `osm_polygon_sentence_relevance.constants`
-(`ALLOWED_INPUT_PATHS`). The downstream acquisition uses these patterns
-when filtering the Hugging Face snapshot download.
+The allowlist is canonically defined in
+`osm_polygon_sentence_relevance.contracts.constants` (`ALLOWED_INPUT_PATHS`);
+`osm_polygon_sentence_relevance.constants` is only the legacy compatibility
+facade. The downstream acquisition uses these patterns when filtering the
+Hugging Face snapshot download.
 
 | Subdirectory | Logical table | Notes |
 |---|---|---|
@@ -28,10 +30,12 @@ when filtering the Hugging Face snapshot download.
 
 The input dataset is published as the
 [`NoeFlandre/osm-polygon-wikidata-only`](https://huggingface.co/datasets/NoeFlandre/osm-polygon-wikidata-only)
-parquet-per-table layout.  Project-local PyArrow schemas (in
-`osm_polygon_sentence_relevance/schemas.py`) are the retained upstream
-shape: they are treated as a contract that the input data is validated
-against in `loading.py` (`load_validated_table`) before any join runs.
+parquet-per-table layout.  Project-local PyArrow schemas (canonically
+owned by `osm_polygon_sentence_relevance/contracts/schemas/`, with the
+root `osm_polygon_sentence_relevance/schemas.py` retained only as a
+compatibility facade) are the retained upstream shape: they are treated
+as a contract that the input data is validated against in
+`ingestion/loading.py` (`load_validated_table`) before any join runs.
 
 ## Wikipedia and Wikivoyage source policy
 
@@ -133,11 +137,13 @@ and it is **not** the same as the dedup-group key.
 ## Output schema ownership and compatibility expectations
 
 The output table conforms to `OUTPUT_SENTENCE_SCHEMA` in
-`schemas.py`. There is currently **no separate schema-version field**;
-the schema is identified by:
+`osm_polygon_sentence_relevance/contracts/schemas/`. There is currently
+**no separate schema-version field**; the schema is identified by:
 
 - The committed `OUTPUT_SENTENCE_SCHEMA` PyArrow contract in
-  `osm_polygon_sentence_relevance/schemas.py`.
+  `osm_polygon_sentence_relevance/contracts/schemas/`
+  (the root `osm_polygon_sentence_relevance/schemas.py` is only a
+  compatibility facade).
 - The package/code revision (git commit).
 - `manifest.pipeline_version` and `manifest.input_dataset_revision`.
 - The Parquet `sha256` recorded in the manifest.
@@ -168,6 +174,14 @@ Owner discipline:
 
 The following are **not** part of the data contract today:
 
-- Hugging Face upload/publishing of the produced dataset.
+- Hugging Face upload/publishing of the produced dataset via CLI.
+- Hugging Face dataset repository creation.
 - Sentence classification or labeling.
 - Concurrency, resumability, or incremental builds.
+
+Programmatic publishing of a validated local export to an existing
+Hugging Face dataset repository is implemented in
+`osm_polygon_sentence_relevance.publishing` and does not affect the
+data contract — the published Parquet bytes are exactly what
+`output.export_finalized_dataset` produced and what
+`output.validate_export_directory` verified.
