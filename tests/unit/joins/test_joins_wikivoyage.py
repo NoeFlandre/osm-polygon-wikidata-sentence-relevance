@@ -191,3 +191,28 @@ class TestWikivoyageOrphans:
 
         with pytest.raises(JoinIntegrityError, match="document_id"):
             join_wikivoyage_sections(polygons, wv_docs, wv_secs)
+
+    def test_section_site_mismatch_with_document(self):
+        from osm_polygon_sentence_relevance.joins import join_wikivoyage_sections
+
+        polygons = _polygons([make_polygon_row(polygon_id="poly-1", wikidata="Q889")])
+        wv_docs = _wv_docs(
+            [
+                make_wikivoyage_document_row(document_id="doc-wv-1", wikidata="Q889"),
+            ]
+        )
+        # Section's site differs from its linked document's site.
+        wv_secs = _wv_sections(
+            [
+                make_section_row(
+                    section_id="sec-wv-1",
+                    document_id="doc-wv-1",
+                    article_id="",
+                    project="wikivoyage",
+                    site="de.wikivoyage.org",
+                ),
+            ]
+        )
+
+        with pytest.raises(JoinIntegrityError, match="site"):
+            join_wikivoyage_sections(polygons, wv_docs, wv_secs)

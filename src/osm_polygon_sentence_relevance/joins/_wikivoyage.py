@@ -96,7 +96,7 @@ def join_wikivoyage_sections(
         wv_sections.column("revision_id").to_pylist(),
         strict=True,
     )
-    for _sid, did, aid, wd, lang, _site, pid, rid in sec_cols:
+    for _sid, did, aid, wd, lang, sec_site, pid, rid in sec_cols:
         doc_data = doc_info.get(did)
         if doc_data:
             doc_aid, doc_wd, doc_lang, doc_site, doc_pid, doc_rid = doc_data
@@ -116,13 +116,13 @@ def join_wikivoyage_sections(
                     f"mismatch with linked document language: {lang!r} vs {doc_lang!r}",
                     [lang],
                 )
-            if doc_site != site:
+            if doc_site != sec_site:
                 raise JoinIntegrityError(
                     "wikivoyage",
                     "wikivoyage_sections",
                     "site",
-                    f"mismatch with linked document site: {site!r} vs {doc_site!r}",
-                    [site],
+                    f"mismatch with linked document site: {sec_site!r} vs {doc_site!r}",
+                    [sec_site],
                 )
             if doc_pid != pid:
                 raise JoinIntegrityError(
