@@ -77,6 +77,14 @@ All canonical modules live under
 - `ExportResult`
 - `export_finalized_dataset(dataset, output_dir, *, overwrite=False)
   -> ExportResult`
+- `ValidatedExport` (frozen, slotted dataclass)
+- `validate_export_directory(path) -> ValidatedExport`
+  (read-only: verifies Parquet + manifest presence, JSON validity,
+  SHA-256 checksum, row count, exact `OUTPUT_SENTENCE_SCHEMA`
+  compatibility, and that the Parquet schema metadata for
+  `input_dataset_revision` and `pipeline_version` is present, UTF-8
+  decodable, non-empty, and equal to the corresponding manifest values;
+  performs no writes and no network access)
 
 ### Root compatibility facades
 
