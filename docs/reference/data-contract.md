@@ -174,8 +174,7 @@ Owner discipline:
 
 The following are **not** part of the data contract today:
 
-- Hugging Face upload/publishing of the produced dataset via CLI.
-- Hugging Face dataset repository creation.
+- Hugging Face dataset repository creation (the CLI and programmatic publisher publish only to an existing repository).
 - Sentence classification or labeling.
 - Concurrency, resumability, or incremental builds.
 

@@ -13,11 +13,12 @@ OSM polygons joined to Wikipedia and Wikivoyage sections.
 Programmatic publishing of a validated export to an existing Hugging
 Face dataset repository is implemented under
 `osm_polygon_sentence_relevance.publishing` (see
-`publishing/huggingface.publish_export_directory`).
+`publishing/huggingface.publish_export_directory`). The build CLI also
+publishes the completed export via the `--publish-dataset-id` flag
+(strictly post-build, to an existing repository only).
 
 Out of scope (do not add in a normal pull request unless explicitly
 planned):
-- CLI publishing flags for the Hugging Face dataset publisher.
 - Hugging Face dataset repository creation (the publisher targets an
   existing repository only).
 - Sentence classification or labelling.

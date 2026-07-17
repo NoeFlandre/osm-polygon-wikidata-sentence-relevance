@@ -16,6 +16,8 @@ usage: osm-polygon-sentence-relevance [-h]
     --pipeline-version PIPELINE_VERSION
     [--batch-size BATCH_SIZE]
     [--sat-model SAT_MODEL] [--overwrite]
+    [--publish-dataset-id OWNER/DATASET]
+    [--publish-revision REVISION] [--publish-commit-message MESSAGE]
 ```
 
 ## Arguments
@@ -30,9 +32,18 @@ usage: osm-polygon-sentence-relevance [-h]
 | `--batch-size` | no | `128` | Batch size for the segmenter (must be a positive integer). |
 | `--sat-model` | no | `sat-3l-sm` | wtpsplit SaT model name. |
 | `--overwrite` | no | off | Overwrite an existing non-empty output directory. |
+| `--publish-dataset-id` | no | — | Optional Hugging Face dataset ID to publish the completed export to, after the build succeeds. The target repository must already exist; no repository is created. |
+| `--publish-revision` | no | `main` | Target Hugging Face dataset revision for publishing. Only used with `--publish-dataset-id`. |
+| `--publish-commit-message` | no | — | Optional commit message for the publishing commit. Only used with `--publish-dataset-id`. |
 
 `--input-root` and `--input-dataset-id` are mutually exclusive and at least
 one is required. Supplying both, or neither, exits with status `2`.
+
+The three publishing flags are optional and related: `--publish-revision`
+and `--publish-commit-message` are only valid together with
+`--publish-dataset-id`. Supplying either without a publishing dataset ID
+exits with status `1` before any acquisition, model construction, or
+pipeline execution. No token or repository-creation flag exists.
 
 ## Exit statuses
 
@@ -66,3 +77,27 @@ contains `parquet_path`, `manifest_path`, `processed_regions_count`,
 (`mode`, `dataset_id`, `requested_revision`, `resolved_revision`,
 `snapshot_path`), and `segmentation_report` / `finalization_report`
 summaries.
+
+When `--publish-dataset-id` is supplied, a `publication` object is added
+with `dataset_id`, `target_revision`, `commit_id`, `commit_url`,
+`row_count`, and `sha256`. When publishing is not requested, the success
+JSON is unchanged and has no `publication` key.
+
+## Publishing (optional, post-build)
+
+When `--publish-dataset-id OWNER/DATASET` is supplied, the CLI publishes
+the successfully exported `sentences.parquet` + `manifest.json` to an
+**existing** Hugging Face dataset repository, in a single commit, only
+after the build succeeds. The publisher revalidates the local export
+before any network call and uses standard Hugging Face authentication
+(no token is accepted by this command). `--publish-revision` selects the
+target branch (default `main`); `--publish-commit-message` overrides the
+default deterministic message.
+
+Publishing is strictly post-build: a pipeline failure yields zero
+publishing attempts and exit code `1`, and a publishing failure preserves
+the already-created local export and exits `1` with a concise stderr
+message. The CLI never creates repositories, retries, or adds token
+handling. For programmatic control, use
+`osm_polygon_sentence_relevance.publishing.publish_export_directory`
+directly.

@@ -33,11 +33,13 @@ deterministic, local-first pipeline that:
 Programmatic publishing of a validated local export to an existing
 Hugging Face dataset repository is implemented in
 `osm_polygon_sentence_relevance.publishing` (one `create_commit`
-call, two add operations, no deletes). No token parameter is accepted.
+call, two add operations, no deletes). The build CLI can optionally
+publish the completed export with `--publish-dataset-id` (plus optional
+`--publish-revision` and `--publish-commit-message`) after a successful
+build. The target repository must already exist and no token is accepted.
 
 **Not implemented (out of scope):**
 
-- CLI publishing flags for the Hugging Face dataset publisher.
 - Hugging Face dataset repository creation.
 - Sentence classification or labelling.
 - Concurrency, resumable, or incremental builds.

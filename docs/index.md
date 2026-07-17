@@ -34,10 +34,10 @@ pre-1.0 (alpha).
 
 ## Scope
 
-Programmatic one-commit publishing of a validated local export to an
-existing Hugging Face dataset exists in
-`osm_polygon_sentence_relevance.publishing` — no token parameter is
-accepted. CLI publishing flags, Hugging Face repository creation,
-sentence classification or labelling, concurrency, resumable or
-incremental builds are not implemented. See the
+One-commit publishing of a validated local export to an existing Hugging
+Face dataset exists, both programmatically in
+`osm_polygon_sentence_relevance.publishing` and via the build CLI's
+optional `--publish-dataset-id` flag — no token parameter is accepted.
+Hugging Face repository creation, sentence classification or labelling,
+concurrency, resumable or incremental builds are not implemented. See the
 [architecture overview](architecture/overview.md) for invariants.
