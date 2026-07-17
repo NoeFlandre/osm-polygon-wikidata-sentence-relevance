@@ -49,6 +49,7 @@ def _make_fake_wheel(
         "ingestion",
         "joins",
         "output",
+        "publishing",
         "sentences",
     ]:
         if omit_domain == pkg:
@@ -147,6 +148,7 @@ class TestVerifierRejectsMissingFacade:
                 "ingestion",
                 "joins",
                 "output",
+                "publishing",
                 "sentences",
             ]:
                 zf.writestr(f"{prefix}{pkg}/__init__.py", b"")

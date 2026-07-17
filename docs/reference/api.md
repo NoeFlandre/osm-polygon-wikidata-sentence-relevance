@@ -18,7 +18,7 @@ All canonical modules live under
   `UnknownTableError`, `MissingColumnsError`, `IncompatibleTypesError`,
   `PreprocessingError`, `SegmentationError`, `ShardDiscoveryError`,
   `JoinIntegrityError`, `FinalizationError`, `ExportError`,
-  `AcquisitionError`.
+  `AcquisitionError`, `PublicationError`.
 - `contracts.schemas` — all PyArrow schemas (`POLYGONS_SCHEMA`,
   `POLYGON_ARTICLES_SCHEMA`, `WIKIPEDIA_DOCUMENTS_SCHEMA`,
   `WIKIVOYAGE_DOCUMENTS_SCHEMA`, `SECTIONS_SCHEMA`, `OUTPUT_SENTENCE_SCHEMA`,
@@ -85,6 +85,26 @@ All canonical modules live under
   `input_dataset_revision` and `pipeline_version` is present, UTF-8
   decodable, non-empty, and equal to the corresponding manifest values;
   performs no writes and no network access)
+
+### `osm_polygon_sentence_relevance.publishing`
+
+- `PublicationError` — dedicated publishing-failure error type
+  (`ValueError`).
+- `PublicationResult` (frozen, slotted dataclass) — verified facts
+  about a published Hub commit (`dataset_id`, `target_revision`,
+  `commit_id`, `commit_url`, `row_count`, `sha256`).
+- `publish_export_directory(export_dir, dataset_id, *,
+  target_revision="main", commit_message=None, hub_api=None,
+  commit_operation_factory=None) -> PublicationResult` (validates the
+  export via `validate_export_directory` first, then publishes
+  exactly `sentences.parquet` and `manifest.json` to the existing Hub
+  dataset in one `create_commit` call; no deletes, no repository
+  creation, no token handling, no CLI flag). Two injectable
+  dependencies model the Hub boundary separately: `hub_api` owns
+  `create_commit`, and `commit_operation_factory(*, path_in_repo,
+  path_or_fileobj)` constructs one add operation per local file. If
+  either is absent, only the missing one is imported lazily from
+  `huggingface_hub`; fully-injected calls never import the library.
 
 ### Root compatibility facades
 

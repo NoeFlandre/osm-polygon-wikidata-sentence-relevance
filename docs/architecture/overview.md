@@ -2,8 +2,9 @@
 
 This document describes the module ownership and data flow of the OSM Polygon
 – Wikidata Sentence Relevance pipeline. It is authoritative for *current*
-behavior. Later phases (classification, publishing) are explicitly out of
-scope and not yet implemented.
+behavior. Programmatic publishing to the Hugging Face Hub exists
+(see `osm_polygon_sentence_relevance.publishing`), but CLI publishing flags
+and Hugging Face repository creation are intentionally not implemented.
 
 The package is organized into domain packages under
 `src/osm_polygon_sentence_relevance/`. Cross-cutting contracts
@@ -28,8 +29,10 @@ The package is organized into domain packages under
 | Joins | `joins/` package | Build Wikipedia + Wikivoyage section→polygon occurrences (see below). |
 | Finalization | `sentences/finalization.py` | Exact deduplication, deterministic IDs, metadata, validation. |
 | Export | `output/exporter.py` facade + `output/` | Atomic, checksummed Parquet + manifest install. |
+| Validation | `output/validation.py` | Read-only integrity check of an exported directory. |
+| Publishing | `publishing/huggingface.py` | Programmatic one-commit publish of a validated export to an existing Hub dataset. |
 | Orchestration | `application/pipeline.py` | Tie the above stages together (injected segmenter). |
-| CLI | `application/cli.py` | Console entry point, argument resolution, JSON summary. |
+| CLI | `application/cli.py` | Console entry point, argument resolution, JSON summary. Publishing is not yet exposed via the CLI. |
 
 ## Compatibility-facade policy
 
@@ -143,8 +146,43 @@ The atomic-swap algorithm is unchanged by the reorganization.
   `sentences/sat.SaTSentenceSegmenter._get_model`. Base install never
   constructs the model or downloads weights.
 - `huggingface_hub` (extra `hub`) — only imported lazily inside
-  `ingestion/acquisition.acquire_dataset_snapshot`. The CLI never accepts,
-  prints, or persists an HF token; standard library authentication is used.
+  `ingestion/acquisition.acquire_dataset_snapshot` (input acquisition)
+  and inside the publishing default-construction helpers in
+  `publishing/huggingface.py` (output publishing). Both modules honor
+  fully-injected Hub API / factory objects, so tests need not install
+  the extra. The CLI never accepts, prints, or persists an HF token;
+  standard library authentication is used.
 
 Model construction (the segmenter) happens **after** acquisition succeeds,
 so an acquisition failure never triggers a model-weight download.
+
+## Programmatic publishing (no CLI, no repo creation)
+
+`publishing/huggingface.publish_export_directory` validates a local
+export first via `output/validation.validate_export_directory`, then
+publishes exactly the two verified files (`sentences.parquet` and
+`manifest.json`) to an existing Hub dataset repository in a single
+`create_commit` call. The function models two separate dependencies:
+
+- `hub_api` — owns the network; exposes `create_commit(...)`. Called
+  exactly once per publication.
+- `commit_operation_factory(*, path_in_repo, path_or_fileobj)` —
+  constructs one add operation per local file. The two returned
+  objects are passed unchanged to `hub_api.create_commit`.
+
+If either dependency is absent, only the missing one is imported
+lazily from `huggingface_hub`. Fully-injected calls never import the
+library and perform zero network activity.
+
+The function:
+
+- rejects invalid public arguments (blank / non-string dataset ID,
+  revision, or commit message) before any import, validation, or Hub
+  activity;
+- wraps library/remote failures in `PublicationError` with the
+  original exception preserved as `__cause__`;
+- does not create repositories, does not accept a token, does not
+  retry, and does not expose a CLI flag.
+
+The CLI (`application/cli.py`) does **not** yet expose publishing;
+running publishing remains a programmatic, single-commit operation.

@@ -28,6 +28,7 @@ DOMAIN_PACKAGES = [
     "ingestion",
     "joins",
     "output",
+    "publishing",
     "sentences",
 ]
 # Subpackages that must ship inside the wheel.

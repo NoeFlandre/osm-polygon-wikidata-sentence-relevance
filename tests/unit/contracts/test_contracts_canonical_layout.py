@@ -65,6 +65,7 @@ ERROR_CLASSES = [
     "FinalizationError",
     "ExportError",
     "AcquisitionError",
+    "PublicationError",
 ]
 
 
@@ -165,6 +166,7 @@ class TestErrorInheritance:
         assert issubclass(errs.FinalizationError, ValueError)
         assert issubclass(errs.ExportError, ValueError)
         assert issubclass(errs.AcquisitionError, ValueError)
+        assert issubclass(errs.PublicationError, ValueError)
 
     def test_unknown_table_message(self):
         import osm_polygon_sentence_relevance.contracts.errors as errs

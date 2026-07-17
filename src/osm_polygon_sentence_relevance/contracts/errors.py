@@ -130,6 +130,13 @@ class AcquisitionError(ValueError):
     """Raised when Hugging Face dataset acquisition fails."""
 
 
+# ---------------------------------------------------------------------------
+# Publishing errors (Phase 7C)
+# ---------------------------------------------------------------------------
+class PublicationError(ValueError):
+    """Raised when Hugging Face dataset publishing fails."""
+
+
 __all__ = [
     "ConfigurationError",
     "SchemaContractError",
@@ -143,4 +150,5 @@ __all__ = [
     "FinalizationError",
     "ExportError",
     "AcquisitionError",
+    "PublicationError",
 ]

@@ -29,7 +29,11 @@ locally without extra steps.
     `table.py`, `finalization.py`.
   - `joins/` — `_projection.py`, `_integrity.py`, `_wikipedia.py`,
     `_wikivoyage.py`, `_composition.py`, facade `__init__.py`.
-  - `output/` — `exporter.py`, `atomic.py`, `checksum.py`, `manifest.py`.
+  - `output/` — `exporter.py`, `atomic.py`, `checksum.py`, `manifest.py`,
+    `validation.py`.
+  - `publishing/` — `huggingface.py` (programmatic, one-commit publishing
+    of a validated export to an existing Hub dataset; `PublicationResult`,
+    `PublicationError`).
 - `tests/` — mirrored `unit/`, `integration/`, `compatibility/`,
   `support/` layout. `tests/support/` holds the shared Arrow factories
   and fake-result builders.
