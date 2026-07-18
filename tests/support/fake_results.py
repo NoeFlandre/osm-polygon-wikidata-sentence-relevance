@@ -14,6 +14,7 @@ def make_fake_pipeline_result(
     *,
     parquet_path: Path = Path("/tmp/out/sentences.parquet"),
     manifest_path: Path = Path("/tmp/out/manifest.json"),
+    card_path: Path = Path("/tmp/out/README.md"),
     processed_regions_count: int = 2,
     total_joined_section_occurrences: int = 15,
     input_section_occurrence_count: int = 10,
@@ -32,6 +33,7 @@ def make_fake_pipeline_result(
     export = ExportResult(
         parquet_path=parquet_path,
         manifest_path=manifest_path,
+        card_path=card_path,
         manifest_data={},
     )
     seg_report = SegmentationReport(

@@ -72,22 +72,32 @@ model-weight download.
 ## Success JSON
 
 On success, a single JSON object is printed (keys sorted, compact). It
-contains `parquet_path`, `manifest_path`, `processed_regions_count`,
+contains `parquet_path`, `manifest_path`, `card_path`,
+`processed_regions_count`,
 `total_joined_section_occurrences`, an `input` object
 (`mode`, `dataset_id`, `requested_revision`, `resolved_revision`,
 `snapshot_path`), and `segmentation_report` / `finalization_report`
-summaries.
+summaries. `card_path` points at the auto-generated `README.md`
+dataset card produced from the validated export.
 
 When `--publish-dataset-id` is supplied, a `publication` object is added
 with `dataset_id`, `target_revision`, `commit_id`, `commit_url`,
 `row_count`, and `sha256`. When publishing is not requested, the success
 JSON is unchanged and has no `publication` key.
 
+In Hub mode (`--input-dataset-id` supplied), the `input.dataset_id` and
+`input.resolved_revision` values reflect the upstream dataset identity
+that the success JSON also passes through to the manifest, statistics,
+Parquet schema metadata, and the generated `README.md` dataset card via
+`run_pipeline(input_dataset_id=...)`. In local mode (`--input-root`),
+`input.dataset_id` is `null` and no Hub identity is propagated.
+
 ## Publishing (optional, post-build)
 
 When `--publish-dataset-id OWNER/DATASET` is supplied, the CLI publishes
-the successfully exported `sentences.parquet` + `manifest.json` to an
-**existing** Hugging Face dataset repository, in a single commit, only
+the successfully exported `sentences.parquet`, `manifest.json`, and
+auto-generated `README.md` dataset card to an **existing** Hugging Face
+dataset repository, in a single commit, only
 after the build succeeds. The publisher revalidates the local export
 before any network call and uses standard Hugging Face authentication
 (no token is accepted by this command). `--publish-revision` selects the

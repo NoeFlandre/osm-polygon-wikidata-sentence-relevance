@@ -444,6 +444,29 @@ class TestFinalization:
                 table, input_dataset_revision="r1", pipeline_version="v1"
             )
 
+    def test_surrounding_whitespace_input_dataset_id_rejected(self, monkeypatch):
+        """A non-blank ``input_dataset_id`` with leading/trailing
+        whitespace is rejected with ``FinalizationError`` BEFORE any
+        table processing. Surrounding whitespace is never silently
+        normalized away.
+        """
+        # Verify the rejection happens BEFORE table processing by
+        # passing an obviously-invalid table value (not a ``pa.Table``)
+        # and asserting the raised error is the surrounding-whitespace
+        # FinalizationError rather than the ``TypeError`` that would
+        # fire from the ``isinstance(table, pa.Table)`` check.
+        sentinel = object()
+        with pytest.raises(
+            FinalizationError,
+            match="input_dataset_id.*surrounding whitespace",
+        ):
+            finalize_sentence_dataset(
+                sentinel,  # type: ignore[arg-type]
+                input_dataset_revision="r1",
+                pipeline_version="v1",
+                input_dataset_id="  NoeFlandre/wikidata-only  ",
+            )
+
     def test_deterministic_tie_breaking_order_independence(self):
         # Two rows with identical tie-breaking canonical keys (document_id, section_index, etc.)
         # but different other fields (e.g., lat)

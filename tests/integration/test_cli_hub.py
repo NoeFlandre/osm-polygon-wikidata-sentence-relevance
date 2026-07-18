@@ -281,3 +281,63 @@ class TestCLIHubInput:
         assert len(segmenter_calls) == 0
         captured = capsys.readouterr()
         assert "revision cannot be blank" in captured.err
+
+    def test_cli_hub_rejects_surrounding_whitespace_dataset_id(
+        self, capsys, monkeypatch
+    ):
+        """Surrounding whitespace on ``--input-dataset-id`` is rejected
+        before any of the side-effecting hooks (acquisition_fn,
+        model_factory, run_pipeline, publishing_fn) is invoked.
+        """
+        monkeypatch.setattr(
+            "osm_polygon_sentence_relevance.application.cli.run_pipeline",
+            lambda *a, **k: self._fake_result(),
+        )
+
+        acquisition_calls = []
+
+        def mock_acquire(dataset_id, requested_revision, **kwargs):
+            acquisition_calls.append((dataset_id, requested_revision))
+            raise AssertionError(
+                "acquisition must not run on a surrounding-whitespace dataset id"
+            )
+
+        segmenter_calls = []
+
+        def mock_factory(model_name, **kwargs):
+            segmenter_calls.append(model_name)
+            return "fake-model"
+
+        publishing_calls = []
+
+        def mock_publishing(*args, **kwargs):
+            publishing_calls.append((args, kwargs))
+            raise AssertionError(
+                "publishing must not run on a surrounding-whitespace dataset id"
+            )
+
+        code = main(
+            [
+                "--input-dataset-id",
+                "  NoeFlandre/osm-polygon-wikidata-only  ",
+                "--output-dir",
+                "/tmp/out",
+                "--input-dataset-revision",
+                "main",
+                "--pipeline-version",
+                "ver",
+            ],
+            acquisition_fn=mock_acquire,
+            model_factory=mock_factory,
+            publishing_fn=mock_publishing,
+        )
+        assert code == 1
+        assert len(acquisition_calls) == 0
+        assert len(segmenter_calls) == 0
+        assert len(publishing_calls) == 0
+        captured = capsys.readouterr()
+        assert "input_dataset_id" in captured.err
+        assert (
+            "surrounding whitespace" in captured.err.lower()
+            or "must be" in captured.err.lower()
+        )

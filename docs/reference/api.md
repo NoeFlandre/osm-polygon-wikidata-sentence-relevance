@@ -30,7 +30,12 @@ All canonical modules live under
 - `main(args=None, *, model_factory=None, acquisition_fn=None) -> int`
 - `PipelineResult` (dataclass)
 - `run_pipeline(input_root, output_dir, segmenter, *, input_dataset_revision,
-  pipeline_version, batch_size=128, overwrite=False) -> PipelineResult`
+  pipeline_version, batch_size=128, overwrite=False,
+  input_dataset_id=None) -> PipelineResult`. `input_dataset_id` is
+  the optional upstream dataset identifier (e.g. `OWNER/REPO`); in Hub
+  mode it is threaded into the export chain (Parquet schema metadata,
+  manifest, statistics, generated `README.md` dataset card). When
+  omitted (local mode) no Hub identity is propagated.
 
 ### `osm_polygon_sentence_relevance.ingestion`
 
@@ -63,7 +68,11 @@ All canonical modules live under
 - `finalization.FinalizedDataset`
 - `finalization.sentence_content_hash(text) -> str`
 - `finalization.deterministic_sentence_id(...) -> str`
-- `finalization.finalize_sentence_dataset(...) -> FinalizedDataset`
+- `finalization.finalize_sentence_dataset(table, *, input_dataset_revision,
+  pipeline_version, input_dataset_id=None) -> FinalizedDataset`. When
+  `input_dataset_id` is a non-blank string the value is recorded as
+  Parquet schema metadata under the key `b"input_dataset_id"` and is
+  later cross-checked by the validator against the manifest.
 
 ### `osm_polygon_sentence_relevance.joins`
 
@@ -100,8 +109,9 @@ All canonical modules live under
   target_revision="main", commit_message=None, hub_api=None,
   commit_operation_factory=None) -> PublicationResult` (validates the
   export via `validate_export_directory` first, then publishes
-  exactly `sentences.parquet` and `manifest.json` to the existing Hub
-  dataset in one `create_commit` call; no deletes, no repository
+  exactly `sentences.parquet`, `manifest.json`, and the auto-generated
+  `README.md` dataset card to the existing Hub dataset in one
+  `create_commit` call; no deletes, no repository
   creation, no token handling). Two injectable dependencies model the
   Hub boundary separately: `hub_api` owns `create_commit`, and
   `commit_operation_factory(*, path_in_repo, path_or_fileobj)`

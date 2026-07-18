@@ -22,6 +22,10 @@ from osm_polygon_sentence_relevance.output.atomic import (
     remove_backup,
 )
 from osm_polygon_sentence_relevance.output.checksum import sha256_file
+from osm_polygon_sentence_relevance.output.dataset_card import (
+    render_dataset_card,
+    statistics_from_dict,
+)
 from osm_polygon_sentence_relevance.output.manifest import (
     build_manifest_data,
     write_manifest,
@@ -35,6 +39,7 @@ class ExportResult:
 
     parquet_path: Path
     manifest_path: Path
+    card_path: Path
     manifest_data: dict
 
 
@@ -89,9 +94,45 @@ def export_finalized_dataset(
         if metadata and b"pipeline_version" in metadata
         else None
     )
+    meta_ds = (
+        metadata.get(b"input_dataset_id")
+        if metadata and b"input_dataset_id" in metadata
+        else None
+    )
 
     input_dataset_revision = meta_rev.decode("utf-8") if meta_rev else None
     pipeline_version = meta_ver.decode("utf-8") if meta_ver else None
+    # The dataset ID must apply the same strict contract as the
+    # finalizer, the validator, and ``_resolve_input_dataset_id``:
+    #
+    # - missing key → local mode (``None``);
+    # - present value must decode as UTF-8 (the underlying
+    #   ``UnicodeDecodeError`` is preserved as ``__cause__``);
+    # - present value must be non-blank and must NOT carry
+    #   surrounding whitespace; the stored value is preserved
+    #   exactly (no normalization). Surrounding whitespace is
+    #   rejected, not silently trimmed.
+    input_dataset_id: str | None
+    if meta_ds is None:
+        input_dataset_id = None
+    else:
+        try:
+            decoded = meta_ds.decode("utf-8")
+        except UnicodeDecodeError as err:
+            raise ExportError(
+                "Parquet schema metadata 'input_dataset_id' is not valid UTF-8"
+            ) from err
+        if not decoded.strip():
+            raise ExportError(
+                "Parquet schema metadata 'input_dataset_id' cannot be blank"
+            )
+        if decoded != decoded.strip():
+            raise ExportError(
+                "Parquet schema metadata 'input_dataset_id' has "
+                "surrounding whitespace; surrounding whitespace is "
+                "rejected, not silently normalized"
+            )
+        input_dataset_id = decoded
 
     if dataset.table.num_rows > 0:
         revisions = dataset.table.column("input_dataset_revision").unique().to_pylist()
@@ -155,10 +196,19 @@ def export_finalized_dataset(
             input_dataset_revision,
             pipeline_version,
             sha256_hex,
+            input_dataset_id=input_dataset_id,
         )
 
         manifest_path = tmp_dir / "manifest.json"
         write_manifest(manifest_path, manifest_data)
+
+        # Render the auto-generated dataset card from the same statistics
+        # object recorded in the manifest. The card is fully derived from
+        # the data, never hand-written; the validator re-derives it.
+        card_path = tmp_dir / "README.md"
+        statistics = statistics_from_dict(manifest_data["statistics"])
+        card_text = render_dataset_card(statistics)
+        card_path.write_text(card_text, encoding="utf-8")
 
         # Rollback-safe directory swap
         backup_dir = install_atomic(tmp_dir, output_path)
@@ -173,5 +223,6 @@ def export_finalized_dataset(
     return ExportResult(
         parquet_path=output_path / "sentences.parquet",
         manifest_path=output_path / "manifest.json",
+        card_path=output_path / "README.md",
         manifest_data=manifest_data,
     )

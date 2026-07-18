@@ -1,8 +1,9 @@
 """Hugging Face dataset publishing of a validated local export.
 
-Publishes exactly the two verified files (``sentences.parquet`` and
-``manifest.json``) to an existing Hugging Face dataset repository in a
-single ``create_commit`` call.
+Publishes exactly the three verified artifacts
+(``sentences.parquet``, ``manifest.json``, and the auto-generated
+``README.md`` dataset card) to an existing Hugging Face dataset
+repository in a single ``create_commit`` call.
 
 Design contract
 ---------------
@@ -53,6 +54,7 @@ from osm_polygon_sentence_relevance.output.validation import (
 # File names established by the existing exporter contract.
 _PARQUET_NAME = "sentences.parquet"
 _MANIFEST_NAME = "manifest.json"
+_CARD_NAME = "README.md"
 
 # Optional Hub extra. Lazy import only when an uninjected dependency
 # must be filled in.
@@ -213,7 +215,7 @@ def publish_export_directory(
     # 3. Resolve the default commit message if none was provided.
     if default_message is None:
         default_message = (
-            f"Publish {_PARQUET_NAME} and {_MANIFEST_NAME} "
+            f"Publish {_PARQUET_NAME}, {_MANIFEST_NAME}, and {_CARD_NAME} "
             f"({validated.row_count} rows, sha256={validated.sha256})"
         )
 
@@ -233,6 +235,10 @@ def publish_export_directory(
             path_in_repo=_MANIFEST_NAME,
             path_or_fileobj=str(validated.manifest_path),
         )
+        card_op = commit_operation_factory(
+            path_in_repo=_CARD_NAME,
+            path_or_fileobj=str(validated.card_path),
+        )
     except PublicationError:
         raise
     except Exception as err:
@@ -240,7 +246,7 @@ def publish_export_directory(
             f"Failed to construct commit operations for {dataset_id_s!r}: {err}"
         ) from err
 
-    operations: list[Any] = [parquet_op, manifest_op]
+    operations: list[Any] = [parquet_op, manifest_op, card_op]
 
     # 5. Resolve the Hub API. An injected API takes precedence; the
     #    default path constructs ``HfApi`` lazily.
