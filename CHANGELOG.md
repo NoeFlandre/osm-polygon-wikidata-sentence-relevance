@@ -39,6 +39,11 @@ package remains pre-1.0 (currently `0.1.0`).
   Adds `PublicationError` to `contracts.errors` for
   publishing-failure handling. Both `hub_api` and
   `commit_operation_factory` are injectable for fully-offline tests.
+- Added `torch` to the `segmentation` optional extra
+  (`torch>=2.2,<3`) so `uv sync --extra segmentation` installs the
+  PyTorch runtime that `wtpsplit.SaT` requires to construct models.
+  SaT model weights remain downloaded separately on first model
+  construction; core and `hub`-only installs stay lightweight.
 - Optional CLI publishing of the completed export via
   `application/cli.main`: `--publish-dataset-id` (plus optional
   `--publish-revision` and `--publish-commit-message`) publishes the

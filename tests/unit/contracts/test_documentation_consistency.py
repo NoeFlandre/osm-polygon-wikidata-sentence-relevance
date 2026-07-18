@@ -273,6 +273,69 @@ def test_api_reference_uses_contracts_canonical_paths() -> None:
     assert "application/settings" in api or "application.settings" in api
 
 
+def test_api_reference_sat_segmenter_uses_segmentation_extra() -> None:
+    """SaTSentenceSegmenter documentation must name the canonical
+    ``segmentation`` extra (which installs ``wtpsplit`` plus its required
+    PyTorch runtime), and must not refer to a ``wtpsplit`` extra.
+
+    This guards the install contract:
+
+    - The canonical extra name is ``segmentation`` (the literal pyproject
+      extra in ``pyproject.toml``).
+    - The extra installs ``wtpsplit`` plus PyTorch (``torch``).
+    - The model weights are downloaded separately on first model
+      construction; the extra itself does not bundle them.
+
+    The test is intentionally structural: it scans the paragraph that
+    mentions ``SaTSentenceSegmenter`` in ``docs/reference/api.md`` and
+    asserts stable contracts (presence / absence of substrings) rather
+    than exact prose.
+    """
+    api = _read(_resolve("docs/reference/api.md"))
+    # Locate the SaTSentenceSegmenter paragraph (the bullet listing it
+    # plus any indented continuation lines belonging to the same bullet).
+    lines = api.splitlines()
+    sat_indices = [i for i, line in enumerate(lines) if "SaTSentenceSegmenter" in line]
+    assert sat_indices, (
+        "docs/reference/api.md must reference 'SaTSentenceSegmenter' "
+        "in its API listing."
+    )
+    # Collect the bullet line and subsequent indented continuation
+    # lines until the next top-level bullet (a line starting with '- ')
+    # or end-of-file.
+    collected: list[str] = []
+    for start in sat_indices:
+        collected.append(lines[start])
+        for j in range(start + 1, len(lines)):
+            line = lines[j]
+            if line.startswith("- "):
+                break
+            if line.strip() == "":
+                break
+            collected.append(line)
+    paragraph = "\n".join(collected)
+
+    # Must name the canonical `segmentation` extra.
+    assert "segmentation" in paragraph, (
+        "SaTSentenceSegmenter documentation must reference the "
+        "`segmentation` extra (the canonical install target)."
+    )
+    # Must mention both wtpsplit and torch / PyTorch (the runtime).
+    lower = paragraph.lower()
+    assert "wtpsplit" in lower, (
+        "SaTSentenceSegmenter documentation must mention 'wtpsplit'."
+    )
+    assert "torch" in lower or "pytorch" in lower, (
+        "SaTSentenceSegmenter documentation must mention the required "
+        "PyTorch runtime (torch or PyTorch)."
+    )
+    # Must NOT call it the 'wtpsplit extra'.
+    assert "wtpsplit extra" not in lower, (
+        "SaTSentenceSegmenter documentation must not refer to the "
+        "`wtpsplit` extra; the extra is named `segmentation`."
+    )
+
+
 def test_api_reference_does_not_put_allow_patterns_under_constants() -> None:
     """The API reference must not claim ALLOW_PATTERNS/IGNORE_PATTERNS live
     on ``constants``; they belong to ``ingestion.acquisition``."""

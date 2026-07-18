@@ -2,10 +2,10 @@
 
 This module provides :class:`SaTSentenceSegmenter`, a concrete
 :class:`~osm_polygon_sentence_relevance.segmentation.SentenceSegmenter` backed
-by the ``wtpsplit`` SaT model. The heavy dependency is optional and is only
-required when the ``segmentation`` extra is installed:
+by the ``wtpsplit`` SaT model. The ``segmentation`` extra installs both
+``wtpsplit`` and its required PyTorch runtime:
 
-    uv sync --extra segmentation
+    uv sync --extra segmentation   # installs wtpsplit + torch; SaT weights still download lazily
 
 The class performs a lazy import of ``wtpsplit`` and constructs the model on
 the first non-empty call, so importing this module or running with plain

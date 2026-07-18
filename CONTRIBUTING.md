@@ -32,7 +32,7 @@ environment management. No system Python packages are required.
 
 ```bash
 uv sync
-uv sync --extra segmentation   # enable wtpsplit SaT segmentation
+uv sync --extra segmentation   # install wtpsplit SaT adapter + its PyTorch runtime (SaT weights still download lazily on first model construction)
 uv sync --extra hub            # enable read-only Hugging Face acquisition and programmatic publishing
 ```
 

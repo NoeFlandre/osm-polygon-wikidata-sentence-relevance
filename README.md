@@ -93,8 +93,10 @@ standard `huggingface_hub` authentication is used.
 
 The base install pulls in only `pyarrow`. Two extras are available:
 
-- `segmentation` (`wtpsplit>=2.2.1,<3`) — required by the default
-  `SaTSentenceSegmenter` adapter.
+- `segmentation` (`wtpsplit>=2.2.1,<3` + `torch>=2.2,<3`) — installs the
+  `wtpsplit` SaT adapter and its PyTorch runtime, as required by the
+  default `SaTSentenceSegmenter`. The SaT model weights themselves are
+  still downloaded separately on first model construction.
 - `hub` (`huggingface_hub>=0.20.0`) — required for Hub input acquisition
   through `--input-dataset-id` and for programmatic publishing through
   `publish_export_directory`.

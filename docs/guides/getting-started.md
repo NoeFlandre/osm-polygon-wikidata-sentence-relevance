@@ -16,7 +16,9 @@ are required.
 # Core install: schemas, joins, finalization, export, CLI, lazy SaT stubs.
 uv sync
 
-# Add the wtpsplit SaT segmentation model (used by the default segmenter).
+# Add the wtpsplit SaT adapter/library and its required PyTorch
+# runtime (used by the default segmenter). SaT model weights are
+# fetched separately when SaT is first constructed.
 uv sync --extra segmentation
 
 # Add the Hugging Face Hub extra: enables read-only acquisition and

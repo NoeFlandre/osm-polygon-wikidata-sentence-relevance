@@ -146,6 +146,10 @@ The atomic-swap algorithm is unchanged by the reorganization.
 - `wtpsplit` (extra `segmentation`) — only imported lazily inside
   `sentences/sat.SaTSentenceSegmenter._get_model`. Base install never
   constructs the model or downloads weights.
+- `torch` (extra `segmentation`) — installed alongside `wtpsplit` to
+  supply the PyTorch runtime that `wtpsplit.SaT` requires to
+  construct models on the supported Python 3.12 interpreter. SaT
+  model weights remain downloaded lazily on first model construction.
 - `huggingface_hub` (extra `hub`) — only imported lazily inside
   `ingestion/acquisition.acquire_dataset_snapshot` (input acquisition)
   and inside the publishing default-construction helpers in

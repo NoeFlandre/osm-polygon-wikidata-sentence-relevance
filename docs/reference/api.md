@@ -53,7 +53,10 @@ All canonical modules live under
 - `segmentation.SentenceSegmenter` (protocol)
 - `segmentation.SegmentationReport`
 - `segmentation.split_validated_batch(...)`
-- `sat.SaTSentenceSegmenter` (optional `wtpsplit` extra; lazy import)
+- `sat.SaTSentenceSegmenter` (optional `segmentation` extra:
+  installs the `wtpsplit` adapter plus its required PyTorch runtime;
+  the SaT model itself is constructed lazily and its weights are
+  downloaded separately on first model construction)
 - `table.SegmentedTableResult`
 - `table.segment_joined_sections(...)`
 - `finalization.FinalizationReport`
