@@ -25,7 +25,9 @@ The base install includes only `pyarrow`. Optional extras are separate:
 # Core install: schemas, joins, finalization, export, CLI, lazy SaT stub.
 uv sync
 
-# Add the wtpsplit SaT segmentation model (used by the default segmenter).
+# Add the wtpsplit SaT adapter/library and its required PyTorch
+# runtime (used by the default segmenter). SaT model weights are
+# fetched separately when SaT is first constructed.
 uv sync --extra segmentation
 
 # Add the Hugging Face Hub extra: enables read-only acquisition and
@@ -50,7 +52,9 @@ flows with code: same commit + same `uv.lock` ⇒ same resolved environment.
 
 ## Local build command
 
-Once synced with the segmentation extra:
+Once synced with the segmentation extra (installs wtpsplit + the
+PyTorch runtime; model weights are downloaded lazily on first model
+construction):
 
 ```bash
 uv sync --extra segmentation
@@ -74,6 +78,11 @@ uv run osm-polygon-sentence-relevance \
   --input-dataset-revision main \
   --pipeline-version 0.1.0
 ```
+
+The `--extra hub` flag enables read-only Hub acquisition and the
+optional post-build publishing entry points; it stays separate from
+the segmentation extra so acquisition/publishing tooling can be
+installed independently of the SaT runtime.
 
 ## Why mutable Hub revisions resolve to commit SHAs
 
@@ -102,14 +111,20 @@ re-verify local snapshots.
 ## SaT model name and optional model-weight behavior
 
 The default segmenter is `wtpsplit`'s multilingual SaT, model name
-`sat-3l-sm`. The model is constructed lazily on the first non-empty
+`sat-3l-sm`. Installing the `segmentation` extra brings:
+
+- the `wtpsplit` SaT adapter, and
+- its required PyTorch runtime (`torch>=2.2,<3`).
+
+The model itself is constructed lazily on the first non-empty
 `split_batch` call by `SaTSentenceSegmenter._get_model`:
 
 - Model weights are downloaded and cached by the underlying `wtpsplit`
-  library on first use.
-- No model weights are stored in this repository.
+  library on first model construction; they are not bundled with this
+  package and not stored in this repository.
 - Importing `osm_polygon_sentence_relevance.sat_adapter` is side-effect-free:
-  base `uv sync` plus the full test suite runs without wtpsplit installed.
+  base `uv sync` plus the full test suite runs without wtpsplit or
+  torch installed.
 - Acquisition runs before model construction, so a Hub acquisition failure
   never triggers a model-weight download.
 
