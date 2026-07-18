@@ -142,6 +142,9 @@ To check that a build reproduced expected outputs, diff:
 
 - `out/manifest.json` against the expected manifest bytes.
 - `sha256sum out/sentences.parquet` against manifest `sha256`.
+- `out/README.md` against the expected (auto-generated) dataset card; its
+  statistics are derived from the data and therefore equal only when the
+  underlying export is identical.
 - `input_dataset_revision` and `pipeline_version` against the expected
   values for the build.
 

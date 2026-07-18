@@ -109,6 +109,11 @@ def _validate_args(parsed: argparse.Namespace) -> None:
     else:
         if not parsed.input_dataset_id.strip():
             raise ValueError("input_dataset_id cannot be blank")
+        if parsed.input_dataset_id != parsed.input_dataset_id.strip():
+            raise ValueError(
+                "input_dataset_id has surrounding whitespace; surrounding "
+                "whitespace is rejected, not silently normalized"
+            )
 
     # Publishing is optional and strictly post-build. Validate all
     # publishing relationships before acquisition or model construction.
@@ -175,6 +180,7 @@ def _serialize_summary(res: PipelineResult, resolved: _ResolvedInput) -> str:
     summary = {
         "parquet_path": str(res.export_result.parquet_path),
         "manifest_path": str(res.export_result.manifest_path),
+        "card_path": str(res.export_result.card_path),
         "processed_regions_count": res.processed_regions_count,
         "total_joined_section_occurrences": res.total_joined_section_occurrences,
         "input": {
@@ -252,6 +258,10 @@ def main(
             pipeline_version=parsed_args.pipeline_version,
             batch_size=parsed_args.batch_size,
             overwrite=parsed_args.overwrite,
+            # Hub mode threads the exact CLI dataset ID into the export
+            # chain (Parquet metadata -> manifest -> statistics -> card);
+            # local mode omits it (``None``).
+            input_dataset_id=resolved.dataset_id,
         )
 
         summary = json.loads(_serialize_summary(res, resolved))

@@ -648,3 +648,71 @@ class TestPipeline:
 
             assert out_dir.exists()
             assert get_checksum(prev_pq) == prev_checksum
+
+    def test_blank_input_dataset_id_is_rejected_before_output(self):
+        """Blank/non-string ``input_dataset_id`` is rejected before any
+        output mutation, alongside the existing revision/version checks.
+        """
+        segmenter = MockSegmenter()
+        with (
+            tempfile.TemporaryDirectory() as tmp_root,
+            tempfile.TemporaryDirectory() as tmp_out,
+        ):
+            root = Path(tmp_root) / "in"
+            out_dir = Path(tmp_out) / "out"
+            with pytest.raises(
+                ValueError,
+                match="input_dataset_id must be a non-blank string",
+            ):
+                run_pipeline(
+                    root,
+                    out_dir,
+                    segmenter,
+                    input_dataset_revision="r1",
+                    pipeline_version="v1",
+                    input_dataset_id="   ",
+                )
+            # Output directory must not exist (no partial state).
+            assert not out_dir.exists()
+        assert segmenter.calls_count == 0
+
+    def test_run_pipeline_rejects_surrounding_whitespace_dataset_id_before_discovery(
+        self, monkeypatch
+    ):
+        """A non-blank ``input_dataset_id`` with leading/trailing
+        whitespace is rejected before discovery or filesystem reads.
+        """
+
+        # ``discover_shards`` must never be called for an invalid id.
+        def mock_discover_shards(*args, **kwargs):
+            raise AssertionError(
+                "discover_shards must not be called for an invalid dataset_id"
+            )
+
+        monkeypatch.setattr(
+            "osm_polygon_sentence_relevance.application.pipeline.discover_shards",
+            mock_discover_shards,
+        )
+        segmenter = MockSegmenter()
+        with (
+            tempfile.TemporaryDirectory() as tmp_root,
+            tempfile.TemporaryDirectory() as tmp_out,
+        ):
+            root = Path(tmp_root) / "in"
+            out_dir = Path(tmp_out) / "out"
+            with pytest.raises(
+                ValueError,
+                match="input_dataset_id.*surrounding whitespace",
+            ):
+                run_pipeline(
+                    root,
+                    out_dir,
+                    segmenter,
+                    input_dataset_revision="r1",
+                    pipeline_version="v1",
+                    input_dataset_id="  NoeFlandre/wikidata-only  ",
+                )
+            # No partial output directory may exist.
+            assert not out_dir.exists()
+        # Segmentation must never be invoked.
+        assert segmenter.calls_count == 0

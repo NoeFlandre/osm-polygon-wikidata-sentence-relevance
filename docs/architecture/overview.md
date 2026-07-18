@@ -165,9 +165,10 @@ so an acquisition failure never triggers a model-weight download.
 
 `publishing/huggingface.publish_export_directory` validates a local
 export first via `output/validation.validate_export_directory`, then
-publishes exactly the two verified files (`sentences.parquet` and
-`manifest.json`) to an existing Hub dataset repository in a single
-`create_commit` call. It is also reachable from the build CLI:
+publishes exactly the three verified artifacts (`sentences.parquet`,
+`manifest.json`, and the auto-generated `README.md` dataset card) to an
+existing Hub dataset repository in a single `create_commit` call. It is
+also reachable from the build CLI:
 `application/cli.main` runs it after a successful build when
 `--publish-dataset-id` is supplied. The function models two separate
 dependencies:

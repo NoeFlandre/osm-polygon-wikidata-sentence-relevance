@@ -3,32 +3,24 @@
 The manifest records row counts, deduplication/duplicate statistics, the
 resolved input revision, pipeline version, and the Parquet SHA-256 so that
 exports are reproducible and verifiable.
+
+All quantitative top-level fields (``row_count``, ``sha256``,
+``input_dataset_revision``, ``pipeline_version``, and the three
+``counts_by_*`` mappings) are derived from the single ``DatasetStatistics``
+instance stored in the manifest's versioned ``statistics`` object. The
+validator reconciles them on load and rejects drift between them.
 """
 
 from __future__ import annotations
 
 import json
-from collections import Counter
 from pathlib import Path
 
+from osm_polygon_sentence_relevance.output.dataset_card import (
+    compute_statistics,
+    statistics_to_dict,
+)
 from osm_polygon_sentence_relevance.sentences.finalization import FinalizedDataset
-
-
-def compute_counts(dataset: FinalizedDataset) -> dict:
-    """Compute per-source / per-language / per-region row counts."""
-    if dataset.table.num_rows > 0:
-        by_source = dict(Counter(dataset.table.column("source").to_pylist()))
-        by_language = dict(Counter(dataset.table.column("language").to_pylist()))
-        by_region = dict(Counter(dataset.table.column("region").to_pylist()))
-    else:
-        by_source = {}
-        by_language = {}
-        by_region = {}
-    return {
-        "counts_by_source": by_source,
-        "counts_by_language": by_language,
-        "counts_by_region": by_region,
-    }
 
 
 def build_manifest_data(
@@ -36,12 +28,29 @@ def build_manifest_data(
     input_dataset_revision: str | None,
     pipeline_version: str | None,
     sha256_hex: str,
+    input_dataset_id: str | None = None,
 ) -> dict:
-    """Assemble the full manifest dictionary for *dataset*."""
-    counts = compute_counts(dataset)
+    """Assemble the full manifest dictionary for *dataset*.
+
+    All quantitative top-level fields are derived from a single
+    ``DatasetStatistics`` instance so the manifest cannot disagree with
+    itself. ``input_dataset_id`` is threaded explicitly so callers do
+    not have to re-derive it from Parquet schema metadata; when absent,
+    the metadata-derived value (or ``None`` if no metadata key was
+    written) is used.
+    """
     report = dataset.report
+    statistics = statistics_to_dict(
+        compute_statistics(
+            dataset.table,
+            input_dataset_revision=input_dataset_revision or "",
+            pipeline_version=pipeline_version or "",
+            parquet_sha256=sha256_hex,
+            input_dataset_id=input_dataset_id,
+        )
+    )
     return {
-        "row_count": dataset.table.num_rows,
+        "row_count": statistics["row_count"],
         "input_occurrence_count": (
             report.input_sentence_occurrence_count if report else 0
         ),
@@ -51,12 +60,14 @@ def build_manifest_data(
         "cross_source_duplicate_groups": (
             report.cross_source_duplicate_group_count if report else 0
         ),
-        "counts_by_source": counts["counts_by_source"],
-        "counts_by_language": counts["counts_by_language"],
-        "counts_by_region": counts["counts_by_region"],
-        "input_dataset_revision": input_dataset_revision,
-        "pipeline_version": pipeline_version,
-        "sha256": sha256_hex,
+        "counts_by_source": statistics["source_counts"],
+        "counts_by_language": statistics["language_counts"],
+        "counts_by_region": statistics["region_counts"],
+        "input_dataset_revision": statistics["input_dataset_revision"],
+        "pipeline_version": statistics["pipeline_version"],
+        "input_dataset_id": statistics["input_dataset_id"],
+        "sha256": statistics["parquet_sha256"],
+        "statistics": statistics,
     }
 
 

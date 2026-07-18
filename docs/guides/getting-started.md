@@ -84,8 +84,12 @@ For a successful run, `output-dir/` contains:
 
 - `sentences.parquet` — the finalized sentence table.
 - `manifest.json` — per-source/language/region counts, the
-  `input_dataset_revision`, the `pipeline_version`, and the lower-cased
-  hex SHA-256 of the Parquet file.
+  `input_dataset_revision`, the `pipeline_version`, the lower-cased
+  hex SHA-256 of the Parquet file, and a versioned `statistics` object
+  computed from the data.
+- `README.md` — a Hugging Face dataset card generated automatically from
+  the exported data. Its quantitative sections are derived during export
+  and must not be edited by hand; rebuild the dataset to regenerate them.
 
 No token flags exist. The CLI never accepts, prints, or persists a
 Hugging Face token.

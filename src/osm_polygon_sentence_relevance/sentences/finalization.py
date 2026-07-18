@@ -111,6 +111,7 @@ def finalize_sentence_dataset(
     *,
     input_dataset_revision: str,
     pipeline_version: str,
+    input_dataset_id: str | None = None,
 ) -> FinalizedDataset:
     """Validate, enrich, deduplicate, hash, and sort a segmented sentence dataset.
 
@@ -122,11 +123,23 @@ def finalize_sentence_dataset(
         The revision identifier of the input dataset.
     pipeline_version : str
         The pipeline version identifier.
+    input_dataset_id : str | None, default None
+        The optional upstream dataset identifier (e.g. a Hugging Face
+        ``owner/repo`` slug). When the build was fed from a local
+        snapshot, this is ``None``; when the build acquired a read-only
+        Hub snapshot, this is the exact value passed by the CLI. The
+        value must be a non-blank string if supplied; an explicit
+        blank or whitespace-only value is rejected with
+        :class:`FinalizationError`.
 
     Returns
     -------
     FinalizedDataset
-        The finalized table and the finalization report.
+        The finalized table and the finalization report. The Parquet
+        schema metadata always carries ``input_dataset_revision`` and
+        ``pipeline_version``; when ``input_dataset_id`` is supplied, an
+        additional ``input_dataset_id`` metadata key is recorded so the
+        validator and the dataset card can cross-check it.
     """
     # 1. Reject blank/whitespace-only configuration
     if not isinstance(input_dataset_revision, str):
@@ -139,6 +152,19 @@ def finalize_sentence_dataset(
         )
     if not pipeline_version.strip():
         raise FinalizationError("pipeline_version cannot be blank or whitespace-only")
+
+    if input_dataset_id is not None:
+        if not isinstance(input_dataset_id, str):
+            raise FinalizationError("input_dataset_id must be a string")
+        if not input_dataset_id.strip():
+            raise FinalizationError(
+                "input_dataset_id cannot be blank or whitespace-only"
+            )
+        if input_dataset_id != input_dataset_id.strip():
+            raise FinalizationError(
+                "input_dataset_id has surrounding whitespace; surrounding "
+                "whitespace is rejected, not silently normalized"
+            )
 
     # 2. Validate input table schema compatibility with SEGMENTED_SENTENCES_SCHEMA
     if not isinstance(table, pa.Table):
@@ -158,12 +184,15 @@ def finalize_sentence_dataset(
                 f"Field '{field.name}' is non-nullable but contains nulls"
             )
 
+    metadata: dict[bytes, bytes] = {
+        b"input_dataset_revision": input_dataset_revision.encode("utf-8"),
+        b"pipeline_version": pipeline_version.encode("utf-8"),
+    }
+    if input_dataset_id is not None:
+        metadata[b"input_dataset_id"] = input_dataset_id.encode("utf-8")
+
     # 3. Handle empty input
     if table.num_rows == 0:
-        metadata = {
-            b"input_dataset_revision": input_dataset_revision.encode("utf-8"),
-            b"pipeline_version": pipeline_version.encode("utf-8"),
-        }
         empty_schema = OUTPUT_SENTENCE_SCHEMA.with_metadata(metadata)
         return FinalizedDataset(
             table=empty_schema.empty_table(),
@@ -296,10 +325,8 @@ def finalize_sentence_dataset(
         col_data = [r[field.name] for r in output_rows]
         out_dict[field.name] = pa.array(col_data, type=field.type)
 
-    metadata = {
-        b"input_dataset_revision": input_dataset_revision.encode("utf-8"),
-        b"pipeline_version": pipeline_version.encode("utf-8"),
-    }
+    # The metadata dict was assembled at the top of the function with the
+    # ``input_dataset_id`` key already applied when appropriate.
     out_table = pa.table(
         out_dict, schema=OUTPUT_SENTENCE_SCHEMA.with_metadata(metadata)
     )

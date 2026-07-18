@@ -137,6 +137,46 @@ class TestAcquisition:
         with pytest.raises(ValueError, match="requested_revision"):
             acquire_dataset_snapshot("my/dataset", None)
 
+    def test_surrounding_whitespace_dataset_id_rejected_before_lazy_import(
+        self, monkeypatch
+    ):
+        """A dataset identifier with leading/trailing whitespace is
+        rejected with ``ValueError`` BEFORE the lazy import of
+        ``huggingface_hub`` or any Hub/API call. The acquisition fn
+        must never silently trim the identifier.
+        """
+        monkeypatch.setitem(sys.modules, "huggingface_hub", None)
+
+        download_calls = []
+
+        def download_fn(*args, **kwargs):
+            download_calls.append(args)
+            return "/nonexistent/path"
+
+        api_calls = []
+
+        class TrackingApi:
+            def repo_info(self, *args, **kwargs):
+                api_calls.append(args)
+                raise AssertionError(
+                    "HfApi.repo_info must not be called for an invalid dataset_id"
+                )
+
+        # ``hub_api`` and ``download_fn`` are both injected so the only
+        # available failure mode is the explicit validation step. Any
+        # trimming/normalization inside acquisition would still record
+        # the call.
+        with pytest.raises(ValueError, match="surrounding whitespace"):
+            acquire_dataset_snapshot(
+                "  my/dataset  ",
+                "main",
+                hub_api=TrackingApi(),
+                download_fn=download_fn,
+            )
+        # The download must never run, and the API must never be called.
+        assert len(download_calls) == 0
+        assert len(api_calls) == 0
+
     def test_acquisition_works_with_injected_even_if_blocked(self, monkeypatch):
         # Block import locally
         monkeypatch.setitem(sys.modules, "huggingface_hub", None)

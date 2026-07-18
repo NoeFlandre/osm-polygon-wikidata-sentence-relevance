@@ -62,6 +62,80 @@ package remains pre-1.0 (currently `0.1.0`).
 - Documentation consistency tests (README/dataset IDs, CLI flags,
   version parity, link validity, local-path absence) and structural
   tests (no production imports of facades; facade purity via AST).
+- Deterministic Hugging Face dataset card (`output/dataset_card.py`):
+  computes immutable statistics from the finalized output table
+  (totals, unique sentence IDs, polygons, Wikidata entities, documents,
+  Wikipedia/Wikivoyage source counts, language/region counts, and
+  coordinate presence), renders a valid YAML-front-matter `README.md`
+  at export time, and serializes the same figures into a versioned
+  `statistics` object in `manifest.json`. The card is regenerated on
+  every build and is never hand-edited.
+- Strengthened export validation (`output.validation`): the validator
+  now also requires the auto-generated `README.md` card, rejects a
+  manifest without the `statistics` object, recomputes statistics
+  directly from `sentences.parquet`, and rejects any card or manifest
+  whose figures do not equal the deterministic render/values.
+- Publishing (`publishing/huggingface.publish_export_directory`) now
+  uploads all three verified artifacts (`sentences.parquet`,
+  `manifest.json`, and the auto-generated `README.md`) in a single Hub
+  commit derived from the validated export contract.
+- Dataset-card accuracy and robustness amendment
+  (`output/dataset_card.py`, `statistics` `STATISTICS_VERSION = 2`):
+  unique documents are now counted by the
+  `(source, site, language, document_id)` tuple (the input contract does
+  not globally guarantee bare `document_id` uniqueness); the card's
+  prose no longer claims land-use relevance / weighting / scoring /
+  classification or unsupported Hugging Face task categories, no longer
+  claims that normalization changes case or that raw text is verbatim,
+  and explicitly states that land-use relevance and
+  polygon-description labels are future downstream work and are absent;
+  `statistics_from_dict` rejects coerced values, unknown keys, malformed
+  SHA-256, blank revision/version, breaking accounting identities, and
+  over-count uniques; the manifest's top-level count fields, row count,
+  checksum, and revision/version are now derived from the single
+  `DatasetStatistics` instance and the validator rejects drift between
+  them; the card renders YAML-safe quoted language values, an empty
+  language list when empty, and HTML-escaped Markdown table cells so
+  pipes/backslashes/newlines cannot break the card.
+- Source-provenance completion (`finalize_sentence_dataset`,
+  `compute_statistics`, `output.manifest.build_manifest_data`,
+  `output.exporter`, `output.validation`, `application.pipeline`,
+  `application.cli`): an optional `input_dataset_id` is threaded from
+  the CLI through the finalizer, Parquet schema metadata
+  (`b"input_dataset_id"`), manifest top-level field, manifest
+  `statistics.input_dataset_id`, the `DatasetStatistics` dataclass, and
+  the auto-generated `README.md` dataset card; the validator
+  cross-checks the three surfaces and rejects drift; blank or
+  non-string IDs are rejected before any output mutation; existing
+  callers omitting the parameter continue to work (local mode); the
+  card links to the Hub dataset page (always) and to
+  `/datasets/<id>/tree/<sha>` when the recorded revision is a 40-char
+  lowercase hex SHA-1; local mode renders an explicit "no recorded
+  Hugging Face dataset ID for the upstream source" sentence without
+  implying a Hub commit. `STATISTICS_VERSION` remains 1.
+- Source-provenance safety amendment
+  (`output/dataset_card.py`, validator strict `_decode_meta_value`,
+  finalizer): the custom `_quote_url_component` is replaced by
+  `urllib.parse.quote` with explicit `safe` sets: dataset IDs keep
+  the `owner/repo` separator (`safe="/"`) and every other character
+  is percent-encoded as UTF-8; revisions use `safe=""` so every path
+  separator, query, fragment, percent, backslash, bracket, paren, and
+  Unicode code point is encoded. A dedicated `_escape_md_link_label`
+  deterministically escapes `&`, `[`, `]`, backticks, backslashes,
+  CR, LF, and tab so an adversarial dataset identifier containing
+  ``](https://attacker.example)`` cannot break out of the link. The
+  card no longer infers which acquisition mechanism produced a
+  recorded value: 40-character lowercase hex revisions are described
+  as a "recorded immutable commit identifier" without naming the
+  acquisition step. `STATISTICS_VERSION` stays at 1 and
+  `_OPTIONAL_STATISTICS_KEYS` is removed: `input_dataset_id` is a
+  required v1 key whose value is either `None` or a non-blank
+  string. Local exports serialize `null`; missing keys are
+  rejected. Present-but-blank Parquet metadata values are now
+  rejected by the finalizer, the validator, and `compute_statistics`
+  with `FinalizationError` / `ExportError` / `ValueError`
+  respectively; no silent normalization to `None` anywhere in the
+  export chain.
 
 ### Changed
 - Production modules now import each other via canonical domain paths

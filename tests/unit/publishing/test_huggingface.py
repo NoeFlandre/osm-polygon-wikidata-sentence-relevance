@@ -176,7 +176,7 @@ class TestHubApiIsAlwaysTheCommitExecutor:
 
 
 class TestCommitOperationFactoryContract:
-    def test_factory_called_exactly_twice_with_correct_paths(self):
+    def test_factory_called_exactly_thrice_with_correct_paths(self):
         from osm_polygon_sentence_relevance.publishing import publish_export_directory
 
         api = RecordingHubApi()
@@ -190,10 +190,14 @@ class TestCommitOperationFactoryContract:
                 commit_operation_factory=factory,
             )
             calls = factory.calls
-            assert len(calls) == 2
+            assert len(calls) == 3
             paths = sorted(c["path_in_repo"] for c in calls)
-            assert paths == ["manifest.json", "sentences.parquet"]
-            # Both calls reference existing local files.
+            assert paths == [
+                "README.md",
+                "manifest.json",
+                "sentences.parquet",
+            ]
+            # All calls reference existing local files.
             for c in calls:
                 assert Path(c["path_or_fileobj"]).is_file()
                 assert Path(c["path_or_fileobj"]).name == c["path_in_repo"]
@@ -214,9 +218,9 @@ class TestCommitOperationFactoryContract:
         # The exact objects returned by the factory must appear in the
         # create_commit ``operations`` list, in order.
         passed_ops = api.create_commit_calls[0]["operations"]
-        assert len(passed_ops) == 2
+        assert len(passed_ops) == 3
         # Every passed op is one of the factory's returned objects.
-        assert len(factory.calls) == 2
+        assert len(factory.calls) == 3
         # We don't have the return values stored on the factory; instead,
         # assert each passed op equals a FakeOperation with the matching
         # path_in_repo/path_or_fileobj the factory was called with.
@@ -270,7 +274,7 @@ class TestFullyInjectedNoHubImport:
                 commit_operation_factory=factory,
             )
         assert len(api.create_commit_calls) == 1
-        assert len(factory.calls) == 2
+        assert len(factory.calls) == 3
 
     def test_hub_only_injected_fetches_real_commit_operation_add(self, monkeypatch):
         """With only ``hub_api`` injected, the library is imported to obtain
@@ -305,7 +309,7 @@ class TestFullyInjectedNoHubImport:
             publish_export_directory(export_dir, "my/dataset", hub_api=_RealHub())
 
         # The injected hub_api received the genuine/fake library op objects.
-        assert len(captured_ops) == 2
+        assert len(captured_ops) == 3
         assert all(isinstance(op, _RealOp) for op in captured_ops)
 
     def test_operation_factory_only_injected_fetches_real_hfapi(self, monkeypatch):
@@ -333,8 +337,8 @@ class TestFullyInjectedNoHubImport:
                 "my/dataset",
                 commit_operation_factory=factory,
             )
-        # The injected factory was used to build both operations.
-        assert len(factory.calls) == 2
+        # The injected factory was used to build all three operations.
+        assert len(factory.calls) == 3
 
     def test_neither_injected_uses_default_factory(self, monkeypatch):
         """With neither dependency injected, both ``HfApi`` and
@@ -375,7 +379,7 @@ class TestFullyInjectedNoHubImport:
             export_dir = _make_valid_export(tmpdir)
             publish_export_directory(export_dir, "my/dataset")
 
-        assert len(captured_ops) == 2
+        assert len(captured_ops) == 3
         assert all(isinstance(op, _RealOp) for op in captured_ops)
 
 
@@ -483,7 +487,7 @@ class TestConstructionAndCommitFailures:
                 )
         assert isinstance(exc.value.__cause__, ConnectionError)
         # The operations were constructed but the commit failed.
-        assert len(factory.calls) == 2
+        assert len(factory.calls) == 3
         assert len(api.create_commit_calls) == 1
 
 

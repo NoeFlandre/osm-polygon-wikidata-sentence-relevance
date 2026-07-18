@@ -43,6 +43,7 @@ def run_pipeline(
     pipeline_version: str,
     batch_size: int = 128,
     overwrite: bool = False,
+    input_dataset_id: str | None = None,
 ) -> PipelineResult:
     """Orchestrate regional shard discovery, occurrences join, segmentation, finalization, and export."""
     # 1. Validate configuration and segmenter
@@ -77,6 +78,20 @@ def run_pipeline(
 
     if not isinstance(pipeline_version, str) or not pipeline_version.strip():
         raise ValueError("pipeline_version must be a non-blank string")
+
+    if input_dataset_id is not None and (
+        not isinstance(input_dataset_id, str) or not input_dataset_id.strip()
+    ):
+        raise ValueError("input_dataset_id must be a non-blank string when provided")
+    if (
+        input_dataset_id is not None
+        and isinstance(input_dataset_id, str)
+        and input_dataset_id != input_dataset_id.strip()
+    ):
+        raise ValueError(
+            "input_dataset_id has surrounding whitespace; surrounding "
+            "whitespace is rejected, not silently normalized"
+        )
 
     # 2. Discover shards and explicitly sort them by shard_key ascending
     shards = sorted(discover_shards(Path(input_root)), key=lambda s: s.shard_key)
@@ -136,6 +151,7 @@ def run_pipeline(
         concat_table,
         input_dataset_revision=input_dataset_revision,
         pipeline_version=pipeline_version,
+        input_dataset_id=input_dataset_id,
     )
 
     # 7. Export atomically

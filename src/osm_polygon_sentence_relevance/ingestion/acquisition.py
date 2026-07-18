@@ -43,6 +43,11 @@ def acquire_dataset_snapshot(
     # 1. Validate dataset_id and requested_revision types and blank CLI strings first
     if not isinstance(dataset_id, str) or not dataset_id.strip():
         raise ValueError("dataset_id must be a non-blank string")
+    if dataset_id != dataset_id.strip():
+        raise ValueError(
+            "dataset_id has surrounding whitespace; surrounding whitespace "
+            "is rejected, not silently normalized"
+        )
     if not isinstance(requested_revision, str) or not requested_revision.strip():
         raise ValueError("requested_revision must be a non-blank string")
 

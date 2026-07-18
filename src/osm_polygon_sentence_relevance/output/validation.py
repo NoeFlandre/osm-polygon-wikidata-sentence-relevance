@@ -2,14 +2,17 @@
 
 Confirms that an already-exported directory is internally consistent
 (Parquet present, manifest present and well-formed, SHA-256 and row
-count matching, schema equal to ``OUTPUT_SENTENCE_SCHEMA``, and Parquet
+count matching, schema equal to ``OUTPUT_SENTENCE_SCHEMA``, Parquet
 schema metadata for ``input_dataset_revision`` / ``pipeline_version``
-present, decodable, and cross-checked against the manifest) before any
-later publication/upload step is allowed to touch it.
+present, decodable, and cross-checked against the manifest, and all
+quantitative top-level manifest fields equal those in the versioned
+``statistics`` object) before any later publication/upload step is
+allowed to touch it.
 
 This module never mutates, repairs, rewrites, or deletes anything, and
-performs no network access. It reads Parquet metadata/schema only; it
-does not load row groups into memory.
+performs no network access. To recompute the canonical statistics and
+verify the checked-in dataset card, it reads the entire Parquet file
+once via :func:`pyarrow.parquet.read_table`.
 """
 
 from __future__ import annotations
@@ -23,15 +26,22 @@ import pyarrow.parquet as pq
 from osm_polygon_sentence_relevance.contracts.errors import ExportError
 from osm_polygon_sentence_relevance.contracts.schemas import OUTPUT_SENTENCE_SCHEMA
 from osm_polygon_sentence_relevance.output.checksum import sha256_file
+from osm_polygon_sentence_relevance.output.dataset_card import (
+    compute_statistics,
+    render_dataset_card,
+    statistics_from_dict,
+)
 
 # File names established by the existing exporter contract.
 _PARQUET_NAME = "sentences.parquet"
 _MANIFEST_NAME = "manifest.json"
+_CARD_NAME = "README.md"
 
 # Required Parquet schema-metadata keys (UTF-8 values), also recorded in
 # the manifest and cross-checked against it.
 _REVISION_META = b"input_dataset_revision"
 _VERSION_META = b"pipeline_version"
+_DATASET_ID_META = b"input_dataset_id"
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,6 +57,7 @@ class ValidatedExport:
     export_dir: Path
     parquet_path: Path
     manifest_path: Path
+    card_path: Path
     row_count: int
     sha256: str
 
@@ -117,12 +128,15 @@ def validate_export_directory(path: str | Path) -> ValidatedExport:
 
     parquet_path = export_dir / _PARQUET_NAME
     manifest_path = export_dir / _MANIFEST_NAME
+    card_path = export_dir / _CARD_NAME
 
     # 3. Required-file presence.
     if not parquet_path.is_file():
         raise ExportError(f"Missing Parquet file {_PARQUET_NAME!r} in {export_dir}")
     if not manifest_path.is_file():
         raise ExportError(f"Missing manifest file {_MANIFEST_NAME!r} in {export_dir}")
+    if not card_path.is_file():
+        raise ExportError(f"Missing dataset card {_CARD_NAME!r} in {export_dir}")
 
     # 4. Defensive manifest parsing.
     try:
@@ -138,9 +152,10 @@ def validate_export_directory(path: str | Path) -> ValidatedExport:
             f"Manifest must be a JSON object, got {type(manifest).__name__}"
         )
 
-    # 5. Read Parquet metadata/schema only (no row-group data loaded).
-    #    Wrap the external-library boundary so corrupt/non-Parquet files
-    #    surface as actionable ExportError with the original cause preserved.
+    # 5. Read Parquet schema/metadata for the schema-shape + cross-checks
+    #    (no row groups yet); the full table is loaded later (step 11) to
+    #    recompute statistics. Wrap the external-library boundary so corrupt
+    #    files surface as actionable ExportError with cause preserved.
     try:
         parquet_file = pq.ParquetFile(parquet_path)
         parquet_schema = parquet_file.schema_arrow
@@ -168,6 +183,33 @@ def validate_export_directory(path: str | Path) -> ValidatedExport:
     parquet_version = _decode_meta_value(
         schema_metadata.get(_VERSION_META), "pipeline_version"
     )
+    # ``input_dataset_id``: local mode is represented by an absent
+    # metadata key. When the key IS present, the value must decode as
+    # UTF-8 and be a non-blank string. Present-but-blank metadata is
+    # rejected with ``ExportError``; the validator never silently
+    # normalizes a blank value to ``None``.
+    raw_dataset_id = schema_metadata.get(_DATASET_ID_META)
+    parquet_dataset_id: str | None
+    if raw_dataset_id is None:
+        parquet_dataset_id = None
+    else:
+        try:
+            decoded = raw_dataset_id.decode("utf-8")
+        except UnicodeDecodeError as err:
+            raise ExportError(
+                "Parquet schema metadata 'input_dataset_id' is not valid UTF-8"
+            ) from err
+        if not decoded.strip():
+            raise ExportError(
+                "Parquet schema metadata 'input_dataset_id' cannot be blank"
+            )
+        if decoded != decoded.strip():
+            raise ExportError(
+                "Parquet schema metadata 'input_dataset_id' has "
+                "surrounding whitespace; surrounding whitespace is "
+                "rejected, not silently normalized"
+            )
+        parquet_dataset_id = decoded
 
     # 8. Checksum contract: manifest value vs computed file digest.
     manifest_sha = manifest.get("sha256")
@@ -199,6 +241,13 @@ def validate_export_directory(path: str | Path) -> ValidatedExport:
     #     cross-check against the Parquet schema metadata values.
     manifest_revision = _require_manifest_string(manifest, "input_dataset_revision")
     manifest_version = _require_manifest_string(manifest, "pipeline_version")
+    manifest_dataset_id = manifest.get("input_dataset_id")
+    if manifest_dataset_id is not None and (
+        not isinstance(manifest_dataset_id, str) or not manifest_dataset_id.strip()
+    ):
+        raise ExportError(
+            "Manifest 'input_dataset_id' must be a non-blank string or null"
+        )
     if manifest_revision != parquet_revision:
         raise ExportError(
             f"Manifest input_dataset_revision {manifest_revision!r} does not match "
@@ -209,11 +258,92 @@ def validate_export_directory(path: str | Path) -> ValidatedExport:
             f"Manifest pipeline_version {manifest_version!r} does not match "
             f"Parquet metadata {parquet_version!r}"
         )
+    if manifest_dataset_id != parquet_dataset_id:
+        raise ExportError(
+            f"Manifest input_dataset_id {manifest_dataset_id!r} does not match "
+            f"Parquet metadata {parquet_dataset_id!r}"
+        )
+
+    # 11. Statistics contract: recompute from the Parquet table on disk,
+    #     never trusting the manifest, and require byte-identical equality
+    #     with the manifest's recorded statistics. This catches stale,
+    #     hand-edited, or numerically inconsistent cards/statistics.
+    raw_stats = manifest.get("statistics")
+    if not isinstance(raw_stats, dict):
+        raise ExportError("Manifest is missing a 'statistics' object")
+
+    try:
+        manifest_statistics = statistics_from_dict(raw_stats)
+    except (ValueError, TypeError) as err:
+        raise ExportError(f"Manifest statistics object is invalid: {err}") from err
+
+    # Load the full table to recompute the figures directly from bytes.
+    try:
+        table = pq.read_table(parquet_path)
+    except Exception as err:  # pragma: no cover - defensive
+        raise ExportError(f"Could not read Parquet rows: {err}") from err
+
+    recomputed = compute_statistics(
+        table,
+        input_dataset_revision=manifest_revision,
+        pipeline_version=manifest_version,
+        parquet_sha256=actual_sha,
+        input_dataset_id=parquet_dataset_id,
+    )
+
+    if recomputed != manifest_statistics:
+        raise ExportError(
+            "Recomputed statistics from Parquet do not match the manifest "
+            "statistics; the export is stale or manually altered"
+        )
+
+    # 11b. Top-level-vs-statistics drift. The manifest exposes
+    #      ``counts_by_*``, ``row_count``, ``sha256``, ``input_dataset_revision``,
+    #      and ``pipeline_version`` at the top level for compatibility
+    #      with existing consumers; the source of truth is the versioned
+    #      ``statistics`` object. Both must agree, so a manifest where
+    #      only the top-level field was altered is rejected here even if
+    #      the statistics object is internally correct.
+    drift_pairs = (
+        ("counts_by_source", manifest_statistics.source_counts),
+        ("counts_by_language", manifest_statistics.language_counts),
+        ("counts_by_region", manifest_statistics.region_counts),
+        ("row_count", manifest_statistics.row_count),
+        ("sha256", manifest_statistics.parquet_sha256),
+        (
+            "input_dataset_revision",
+            manifest_statistics.input_dataset_revision,
+        ),
+        ("pipeline_version", manifest_statistics.pipeline_version),
+        ("input_dataset_id", manifest_statistics.input_dataset_id),
+    )
+    for field_name, expected in drift_pairs:
+        if manifest.get(field_name) != expected:
+            raise ExportError(
+                f"Manifest top-level field {field_name!r} disagrees with "
+                f"the statistics object; the export is stale or the "
+                f"manifest was manually altered"
+            )
+
+    # 12. Dataset-card contract: the checked-in README must equal the
+    #     deterministic rendering of the validated statistics.
+    try:
+        card_text = card_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as err:
+        raise ExportError(f"Dataset card is not readable: {err}") from err
+
+    expected_card = render_dataset_card(manifest_statistics)
+    if card_text != expected_card:
+        raise ExportError(
+            "Dataset card does not match the deterministic rendering of the "
+            "validated statistics; it is stale or manually edited"
+        )
 
     return ValidatedExport(
         export_dir=export_dir,
         parquet_path=parquet_path,
         manifest_path=manifest_path,
+        card_path=card_path,
         row_count=num_rows,
         sha256=actual_sha,
     )

@@ -266,6 +266,105 @@ class TestCLI:
             summary["segmentation_report"]["wikipedia_sentence_occurrence_count"] == 5
         )
         assert summary["finalization_report"]["output_sentence_count"] == 6
+        # Card path is part of the deterministic summary (Phase 8C
+        # source-provenance completion).
+        assert summary["card_path"] == "/tmp/out/README.md"
+
+    def test_cli_local_pipeline_passes_no_dataset_id(self, capsys, monkeypatch):
+        """Local mode (``--input-root``) must not invent a Hub dataset id;
+        the value threaded to ``run_pipeline`` is ``None``.
+        """
+        pipeline_calls = []
+        fake_result = make_fake_pipeline_result()
+
+        def mock_run_pipeline(*args, **kwargs):
+            pipeline_calls.append((args, kwargs))
+            return fake_result
+
+        monkeypatch.setattr(
+            "osm_polygon_sentence_relevance.application.cli.run_pipeline",
+            mock_run_pipeline,
+        )
+
+        def mock_factory(model_name, **kwargs):
+            return "fake-model"
+
+        code = main(
+            [
+                "--input-root",
+                "/tmp/in-root",
+                "--output-dir",
+                "/tmp/out",
+                "--input-dataset-revision",
+                "rev",
+                "--pipeline-version",
+                "ver",
+            ],
+            model_factory=mock_factory,
+        )
+        assert code == 0
+        args, kwargs = pipeline_calls[0]
+        # ``input_dataset_id`` is not supplied at all in local mode.
+        assert kwargs.get("input_dataset_id") is None
+
+    def test_cli_hub_pipeline_threads_dataset_id_to_run_pipeline(
+        self, capsys, monkeypatch
+    ):
+        """Hub mode threads the exact CLI ``--input-dataset-id`` value
+        into ``run_pipeline(..., input_dataset_id=...)``. A stub
+        acquisition supplies the snapshot.
+        """
+        from osm_polygon_sentence_relevance.ingestion.acquisition import (
+            AcquisitionResult,
+        )
+
+        pipeline_calls = []
+        fake_result = make_fake_pipeline_result()
+
+        def mock_run_pipeline(*args, **kwargs):
+            pipeline_calls.append((args, kwargs))
+            return fake_result
+
+        def mock_acquisition(dataset_id, requested_revision, **kwargs):
+            return AcquisitionResult(
+                dataset_id=dataset_id,
+                requested_revision=requested_revision,
+                resolved_sha="a" * 40,
+                snapshot_path=Path("/tmp/snap"),
+                discovered_region_count=0,
+            )
+
+        monkeypatch.setattr(
+            "osm_polygon_sentence_relevance.application.cli.run_pipeline",
+            mock_run_pipeline,
+        )
+        monkeypatch.setattr(
+            "osm_polygon_sentence_relevance.application.cli.acquisition.acquire_dataset_snapshot",
+            mock_acquisition,
+        )
+
+        def mock_factory(model_name, **kwargs):
+            return "fake-model"
+
+        code = main(
+            [
+                "--input-dataset-id",
+                "NoeFlandre/osm-polygon-wikidata-only",
+                "--output-dir",
+                "/tmp/out",
+                "--input-dataset-revision",
+                "main",
+                "--pipeline-version",
+                "ver",
+            ],
+            model_factory=mock_factory,
+        )
+        assert code == 0
+        args, kwargs = pipeline_calls[0]
+        assert kwargs["input_dataset_id"] == ("NoeFlandre/osm-polygon-wikidata-only")
+        captured = capsys.readouterr()
+        summary = json.loads(captured.out.strip())
+        assert summary["card_path"] == "/tmp/out/README.md"
 
     def test_cli_pipeline_failure(self, capsys, monkeypatch):
         # When pipeline fails, main returns non-zero, logs to stderr, and does not print JSON summary
