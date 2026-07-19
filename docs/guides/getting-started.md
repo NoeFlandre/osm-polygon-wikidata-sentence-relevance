@@ -131,3 +131,13 @@ print(result.commit_url)
 validation, the Hub extra is missing, or the commit response is malformed
 (see [the API reference](../reference/api.md) for the full contract). It
 does not create repositories and does not retry.
+
+## Remote GPU smoke (Grid'5000)
+
+After a local deterministic build passes, the real `wtpsplit` SaT model
+is meant to run on a remote Grid'5000 NVIDIA GPU — never on the
+MacBook. The operational tooling (preflight + smoke payload) and the
+credential-free runbook live in
+[Grid'5000 CUDA smoke](grid5000.md). Acceptance requires the
+model to resolve to `cuda` and complete multilingual inference on the
+node; CPU fallback is forbidden.
