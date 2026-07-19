@@ -7,6 +7,53 @@ package remains pre-1.0 (currently `0.1.0`).
 
 ## [Unreleased]
 
+### Added (Phase 9L-B -- full resumable Grid'5000 build launcher)
+- Three non-interactive Grid'5000 launcher scripts that drive the
+  full resumable build of `NoeFlandre/osm-polygon-wikidata-only`
+  (`main` revision to be resolved metadata-only against the Hub
+  API before staging, **291
+  processable shards**):
+  - `scripts/grid5000/submit_gpu_build.sh` (frontend adapter,
+    `oarsub` once, `gpu=1,walltime=12:00:00` on the production
+    queue; walltime is a *proposed* upper bound pending
+    representative-shard benchmark).
+  - `scripts/grid5000/run_gpu_build_job.sh` (compute-node wrapper
+    with strict path canonicalisation, fresh-`OUTPUT_DIR`
+    contract, `WORK_DIR`-may-exist resume support, path-overlap
+    guard, immutable-only `INPUT_REVISION`, git HEAD + dirty-tree
+    check, per-OAR-job log directory mode 0700, real exit-code
+    propagation).
+  - `scripts/grid5000/run_gpu_build.sh` (compute-node payload
+    that runs `gpu_preflight.py` + `_run_metadata.py` and invokes
+    the locked CLI exactly once in local-input mode: `--input-root
+    --input-source-dataset-id NoeFlandre/osm-polygon-wikidata-only
+    --input-dataset-revision` + `--output-dir` + `--work-dir` +
+    `--source-commit` + explicit `--device cuda` + `--batch-size 128`
+    + `--sat-model sat-3l-sm`; offline HF mode; no publishing or
+    destructive re-rendering flags; `WORK_DIR` left untouched on
+    failure).
+- Eight positional arguments in a fixed order:
+  `REPO_ROOT HF_HOME LOG_ROOT INPUT_ROOT WORK_DIR OUTPUT_DIR
+  EXPECTED_SOURCE_COMMIT INPUT_REVISION`. `EXPECTED_SOURCE_COMMIT`
+  and `INPUT_REVISION` must each be exactly 40 lowercase hex
+  characters; `INPUT_REVISION="main"` is explicitly rejected.
+- `scripts/verify_distribution.py` extended to require the three
+  new shell scripts in the sdist at mode 0755 and to forbid them
+  from the wheel (the existing `*.sh` / `scripts/` wheel-forbidden
+  rule covers that).
+- Three new unit-test files (`tests/unit/scripts/`) covering:
+  8-arg serialization, hostile-char quoting, mandatory immutable
+  revision, exact CLI flags in the payload, missing-input +
+  reused-output + overlapping-path guards, existing-`WORK_DIR`
+  accepted for resume, non-zero / walltime preserves `WORK_DIR`,
+  distribution contents + executable modes, walltime
+  documented as proposed pending benchmark, and storage
+  agnosticism (no site-specific hard-coded paths).
+- Phase 9L-B section in `docs/guides/grid5000.md` documenting
+  the canonical submit command, the eight positional args, the
+  pinned-local-input behavior, the resume procedure, the
+  no-publishing boundary, and the proposed walltime.
+
 ### Added
 - Domain-package reorganization of the implementation under `src/`:
   `application/` (CLI + pipeline), `ingestion/` (acquisition, discovery,

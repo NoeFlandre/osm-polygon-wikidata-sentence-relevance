@@ -166,16 +166,20 @@ def verify_sdist(sdist: Path) -> None:
         _fail("sdist is missing tests/")
 
     # Public Grid'5000 operational scripts must ship in the sdist
-    # so a remote node can run the non-interactive smoke without a
-    # checkout of the full repo. The supporting Python helpers that
-    # the payload imports must also ship. The three shell scripts
-    # must additionally be regular files with mode 0755 so a
+    # so a remote node can run the non-interactive smoke and the
+    # non-interactive full build without a checkout of the full
+    # repo. The supporting Python helpers that the payloads
+    # import must also ship. The six shell scripts must
+    # additionally be regular files with mode 0755 so a
     # downstream operator can invoke them without restoring the
     # executable bit manually.
     shell_scripts = (
         "scripts/grid5000/run_gpu_smoke.sh",
         "scripts/grid5000/run_gpu_smoke_job.sh",
         "scripts/grid5000/submit_gpu_smoke.sh",
+        "scripts/grid5000/run_gpu_build.sh",
+        "scripts/grid5000/run_gpu_build_job.sh",
+        "scripts/grid5000/submit_gpu_build.sh",
     )
     for public_script in (
         *shell_scripts,
