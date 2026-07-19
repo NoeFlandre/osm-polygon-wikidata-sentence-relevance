@@ -1,20 +1,26 @@
 #!/usr/bin/env python3
-"""Grid'5000 CUDA pre-flight check (Phase 9B).
+"""Grid'5000 CUDA pre-flight check (Phase 9B + Phase 9H).
 
 This script runs *inside* an allocated Grid'5000 compute node. It is a
 narrow invariant gate that proves the runtime can actually use a CUDA
 GPU before any SaT model is constructed. It is intentionally tiny and
 has no dependency on the project package.
 
-Design constraints (Phase 9B):
+Design constraints (Phase 9B + Phase 9H):
 
 - Linux only (Grid'5000 compute nodes are Linux).
 - Requires a non-blank ``OAR_JOB_ID`` (we are inside an OAR
   allocation).
-- Requires a non-blank ``CUDA_VISIBLE_DEVICES`` (a GPU was
-  assigned by the scheduler).
+- ``CUDA_VISIBLE_DEVICES`` is **informational only**: Grid'5000
+  scopes reserved GPUs through its resource isolation and does
+  not guarantee ``CUDA_VISIBLE_DEVICES`` is set. The preflight
+  does NOT read it. The authoritative runtime proof of GPU
+  scoping is the combination of:
+    - ``torch.cuda.is_available() is True``, and
+    - ``torch.cuda.device_count() == 1``,
+    - ``torch.cuda.get_device_name(0)`` succeeds.
 - Imports Torch and requires ``torch.cuda.is_available() is True``.
-- Requires at least one visible CUDA device.
+- Requires exactly one visible CUDA device.
 - Emits a single stable JSON object on stdout with:
   - ``oar_job_id``
   - ``hostname``
@@ -22,6 +28,8 @@ Design constraints (Phase 9B):
   - ``torch_cuda_runtime_version``
   - ``visible_cuda_device_count``
   - ``device_0_name``
+- The result schema is unchanged from Phase 9B: no new fields.
+- Never mutates ``os.environ``.
 - Never prints environment variables wholesale, tokens, credentials,
   cache contents, or usernames.
 - Exits non-zero with a concise actionable message if any invariant
@@ -104,7 +112,11 @@ class _RealPreflightEnv:
 
 @dataclass
 class PreflightResult:
-    """Structured, JSON-serialisable preflight report."""
+    """Structured, JSON-serialisable preflight report.
+
+    The schema is unchanged from Phase 9B. The six documented keys
+    are the only fields ever emitted.
+    """
 
     oar_job_id: str
     hostname: str
@@ -162,8 +174,8 @@ def run_preflight(
     Raises
     ------
     PreflightError
-        If any invariant (Linux, OAR job, CUDA visibility,
-        CUDA availability, device presence) fails.
+        If any invariant (Linux, OAR job, CUDA availability,
+        exactly-one-device) fails.
     """
     if env is None:
         env = _RealPreflightEnv()
@@ -183,15 +195,7 @@ def run_preflight(
             "allocated OAR job (oarsub)"
         )
 
-    # 3. Non-blank CUDA_VISIBLE_DEVICES.
-    cuda_visible = env.getenv("CUDA_VISIBLE_DEVICES")
-    if not cuda_visible or not cuda_visible.strip():
-        raise _fail(
-            "CUDA_VISIBLE_DEVICES is unset; the scheduler did not "
-            "assign a GPU (request one GPU via OAR)"
-        )
-
-    # 4. Torch present and CUDA available.
+    # 3. Torch present and CUDA available.
     if torch_mod is None:
         try:
             torch_mod = env.torch_factory()
@@ -201,9 +205,13 @@ def run_preflight(
     if not torch_mod.cuda.is_available():
         raise _fail("torch.cuda.is_available() is False; no usable CUDA device")
 
-    # 5. Exactly one visible CUDA device (the project deliberately
+    # 4. Exactly one visible CUDA device (the project deliberately
     # requests a single GPU; multi-GPU is not implemented and
-    # would mask an incorrectly scoped OAR allocation).
+    # would mask an incorrectly scoped OAR allocation). This is
+    # the authoritative runtime proof that Grid'5000 scoped the
+    # ``gpu=1`` request correctly. CUDA_VISIBLE_DEVICES is not
+    # read here on purpose: it is not part of the guaranteed
+    # scheduler contract.
     device_count = torch_mod.cuda.device_count()
     if device_count != 1:
         raise _fail(
