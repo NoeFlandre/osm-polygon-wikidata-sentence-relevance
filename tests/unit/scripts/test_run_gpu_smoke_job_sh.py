@@ -985,22 +985,45 @@ def test_doc_section_for_batch_submission_exists(doc_text):
 
 
 def test_doc_canonical_command_uses_no_interactive_flag(doc_text):
-    """The canonical oarsub command in the docs must NOT use
-    ``-I`` for the automation path. A separate human-driven
-    section may discuss ``-I`` as a debugging fallback."""
-    # The canonical batch command must request exactly
-    # queue=production, gpu=1, walltime=00:30:00, no -I, no
-    # besteffort, no classic_ssh.
-    canonical = re.search(
-        r"oarsub[^\n]*production[^\n]*gpu=1[^\n]*00:30:00[^\n]*",
-        doc_text,
+    """The canonical command in the docs must NOT use ``-I`` for
+    the automation path. The canonical frontend command invokes
+    the submission helper directly (no ``oarsub`` prefix). The
+    ``-I`` form is permitted only in a separate human-driven
+    debugging section."""
+    # The canonical batch command (under the Phase 9D/9F heading)
+    # invokes submit_gpu_smoke.sh, which itself invokes oarsub
+    # with -q production -l gpu=1,walltime=00:30:00 and no -I.
+    # Find the Phase 9D/9F fenced bash block.
+    head = re.search(r"^### Phase 9D/?9?F?:.*$", doc_text, flags=re.MULTILINE)
+    assert head is not None, "canonical Phase 9D/9F heading missing in doc"
+    fenced = re.search(
+        r"^```bash\s*\n(.*?)\n```",
+        doc_text[head.end() :],
+        flags=re.MULTILINE | re.DOTALL,
     )
-    assert canonical is not None, "no canonical non-interactive oarsub line"
-    cmd = canonical.group(0)
-    assert " -I" not in cmd
-    assert not cmd.endswith(" -I")
-    assert "besteffort" not in cmd
-    assert "classic_ssh" not in cmd
+    assert fenced is not None, "canonical fenced bash block missing"
+    canonical_cmd = re.sub(r"\\\s*\n\s*", " ", fenced.group(1)).strip()
+    # The canonical frontend command does NOT start with oarsub.
+    assert not canonical_cmd.startswith("oarsub"), (
+        f"canonical frontend command must invoke submit_gpu_smoke.sh "
+        f"directly (no oarsub prefix): {canonical_cmd!r}"
+    )
+    assert "submit_gpu_smoke.sh" in canonical_cmd, (
+        f"canonical command must invoke submit_gpu_smoke.sh: {canonical_cmd!r}"
+    )
+    # No -I, no besteffort, no classic_ssh in the canonical command.
+    assert " -I" not in canonical_cmd
+    assert "besteffort" not in canonical_cmd
+    assert "classic_ssh" not in canonical_cmd
+    # A separate interactive-debugging section may contain -I.
+    interactive = re.search(
+        r"^### Interactive.*?$",
+        doc_text,
+        flags=re.MULTILINE,
+    )
+    if interactive is not None:
+        section = doc_text[interactive.start() :]
+        assert " -I" in section, "interactive-debugging section must still document -I"
 
 
 def test_doc_explains_oarstat_monitoring(doc_text):

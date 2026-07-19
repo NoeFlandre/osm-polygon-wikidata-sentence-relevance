@@ -275,6 +275,39 @@ package remains pre-1.0 (currently `0.1.0`).
 - `MANIFEST.in` now ships the public Grid'5000 shell scripts (`scripts/*.sh`)
   in the sdist; the wheel remains package-code only.
 
+### Added (Phase 9F — OAR submission adapter)
+- `scripts/grid5000/submit_gpu_smoke.sh`: frontend-only OAR submission
+  helper. Nancy's `oarsub` accepts exactly one positional command
+  string and rejects `oarsub <opts> script arg1 arg2 arg3 arg4`, so this
+  helper validates the four positional arguments (`REPO_ROOT HF_HOME
+  LOG_ROOT EXPECTED_SOURCE_COMMIT`) and serialises them into a single
+  quoted command that runs the compute-node wrapper inside the
+  allocation. Serialisation uses a portable POSIX single-quote escaper
+  (`'\''` idiom, no `eval`, no Bash `%q`) so spaces, semicolons, `$()`,
+  backticks, wildcards, and embedded single quotes stay literal and
+  cannot execute. The helper requires `command -v oarsub`, the
+  compute-node wrapper present and executable, canonical absolute
+  persistent directories (rejecting ephemeral storage, traversal, and
+  symlinks), and a 40-lowercase-hex commit; it never imports Python,
+  performs inference, polls, cancels, SSHes, mutates git, downloads,
+  retries, or cleans up, and forwards `oarsub` stdout/stderr and its real
+  exit code unchanged without parsing a job ID.
+- `docs/guides/grid5000.md` canonical command now invokes
+  `submit_gpu_smoke.sh` with the four quoted arguments; the invalid
+  direct `oarsub ... run_gpu_smoke_job.sh arg1...` line is removed and the
+  interactive `-I` form is retained only for human debugging.
+- `tests/unit/scripts/test_submit_gpu_smoke_sh.py`: RED→GREEN contract
+  tests with a fake `oarsub` proving single invocation, exact
+  queue/resource options, exactly one positional command string, faithful
+  four-argument decoding, `exec`-led payload, no `-I`, injection safety,
+  pre-submission validation failures, real non-zero exit forwarding, and
+  no retry.
+- All three public Grid'5000 shell scripts (`run_gpu_smoke.sh`,
+  `run_gpu_smoke_job.sh`, `submit_gpu_smoke.sh`) are committed with mode
+  `100755`; the distribution verifier now also requires
+  `scripts/grid5000/submit_gpu_smoke.sh` in the sdist and still forbids
+  `scripts/` paths in the wheel.
+
 ## [0.1.0]
 - Initial pre-release: deterministic OSM-polygon → Wikipedia/Wikivoyage
   sentence-relevance dataset construction with read-only Hugging Face
