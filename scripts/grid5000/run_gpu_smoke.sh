@@ -1,13 +1,23 @@
 #!/usr/bin/env bash
-# Grid'5000 GPU smoke payload (Phase 9B).
+# Grid'5000 GPU smoke payload (Phase 9B + Phase 9H).
 #
 # EXPLICITLY INVOKED job payload. It runs *inside* an allocated
-# OAR CUDA allocation (after the scheduler has set OAR_JOB_ID and
-# CUDA_VISIBLE_DEVICES). It is NOT a submission tool.
+# OAR CUDA allocation (after the scheduler has set OAR_JOB_ID).
+# It is NOT a submission tool.
 #
-# Hard safety contract (Phase 9B + safety amendment):
+# Phase 9H: ``CUDA_VISIBLE_DEVICES`` is informational only.
+# Grid'5000 does not guarantee ``CUDA_VISIBLE_DEVICES`` on a
+# given allocation; the smoke payload must not require it. If
+# the scheduler set it, the harness inherits it unchanged. The
+# authoritative runtime proof of GPU scoping is
+# ``torch.cuda.device_count() == 1`` inside ``gpu_preflight.py``,
+# which runs as the first phase below. The smoke itself never
+# reads CUDA_VISIBLE_DEVICES directly.
+#
+# Hard safety contract (Phase 9B + safety amendment + Phase 9H):
 #   * refuses to run without OAR_JOB_ID
-#   * refuses to run without CUDA_VISIBLE_DEVICES
+#   * never touches CUDA_VISIBLE_DEVICES (informational only;
+#     not required, not assigned, not defaulted, not exported)
 #   * requires caller-provided REPO_ROOT, HF_HOME, SMOKE_LOG_DIR
 #   * requires the LOCKED interpreter ${REPO_ROOT}/.venv/bin/python
 #     (installed editable from exact commit B)
@@ -33,7 +43,10 @@ umask 077
 # --- Required environment -------------------------------------------
 
 : "${OAR_JOB_ID:?OAR_JOB_ID is required (run inside an OAR allocation)}"
-: "${CUDA_VISIBLE_DEVICES:?CUDA_VISIBLE_DEVICES is required (request one GPU)}"
+
+# CUDA_VISIBLE_DEVICES is intentionally NOT required, NOT
+# assigned, NOT defaulted, NOT exported. See the docstring above
+# and docs/guides/grid5000.md ("One-GPU scope").
 
 REPO_ROOT="${REPO_ROOT:?REPO_ROOT is required (caller-provided persistent path)}"
 HF_HOME="${HF_HOME:?HF_HOME is required (caller-provided persistent path)}"

@@ -218,39 +218,111 @@ def test_job_script_requires_oar_job_id(script_text):
     )
 
 
-def test_job_script_requires_cuda_visible_devices(script_text):
-    assert "CUDA_VISIBLE_DEVICES" in script_text
-    assert (
-        "CUDA_VISIBLE_DEVICES is required" in script_text
-        or '":${CUDA_VISIBLE_DEVICES:?CUDA_VISIBLE_DEVICES is required' in script_text
+# --- Phase 9H: CUDA_VISIBLE_DEVICES is informational only -------------
+#
+# Grid'5000 scopes reserved GPUs through its resource isolation;
+# CUDA_VISIBLE_DEVICES is not part of the guaranteed scheduler
+# contract. The wrapper must therefore never require, assign,
+# default, normalize, or print it. The authoritative runtime proof
+# of GPU scoping is gpu_preflight.py reporting exactly one usable
+# CUDA device (torch.cuda.device_count() == 1).
+#
+# See docs/guides/grid5000.md ("One-GPU scope") and the official
+# Grid'5000 GPU reservation documentation linked there.
+
+
+def test_job_script_does_not_require_cuda_visible_devices(script_text):
+    # The wrapper must never require CUDA_VISIBLE_DEVICES as a
+    # hard guard. The scheduler does not guarantee it.
+    forbidden_hard_guards = (
+        ': "${CUDA_VISIBLE_DEVICES:?',
+        "${CUDA_VISIBLE_DEVICES:?CUDA_VISIBLE_DEVICES is required",
     )
+    for f in forbidden_hard_guards:
+        assert f not in script_text, (
+            f"wrapper must not require CUDA_VISIBLE_DEVICES: {f!r}"
+        )
 
 
 def test_job_script_does_not_export_cuda_visible_devices(script_text):
-    # The scheduler owns CUDA_VISIBLE_DEVICES; the wrapper must
-    # never overwrite it, even with a guard default.
-    assert "export CUDA_VISIBLE_DEVICES=" not in script_text
-    assert "CUDA_VISIBLE_DEVICES:=" not in script_text
+    # No assignment, no export, no normalization. The wrapper
+    # never touches the variable.
+    forbidden = (
+        "export CUDA_VISIBLE_DEVICES=",
+        "CUDA_VISIBLE_DEVICES=",
+        "CUDA_VISIBLE_DEVICES:=",
+    )
+    for f in forbidden:
+        assert f not in script_text, (
+            f"wrapper must not touch CUDA_VISIBLE_DEVICES: {f!r}"
+        )
+
+
+def test_job_script_does_not_print_cuda_visible_devices(script_text):
+    # Never print the variable value. The wrapper does not own it.
+    forbidden_prints = (
+        "echo ${CUDA_VISIBLE_DEVICES}",
+        "echo ${CUDA_VISIBLE_DEVICES:-",
+        "echo ${CUDA_VISIBLE_DEVICES:=",
+        "printf '%s' ${CUDA_VISIBLE_DEVICES}",
+        'echo "$CUDA_VISIBLE_DEVICES"',
+        'echo "$CUDA_VISIBLE_DEVICES"',
+    )
+    for f in forbidden_prints:
+        assert f not in script_text, (
+            f"wrapper must not print CUDA_VISIBLE_DEVICES: {f!r}"
+        )
+
+
+def test_job_script_does_not_normalize_cuda_visible_devices(script_text):
+    # No whitespace-stripping / case-toggling / unset-defaulting /
+    # readonly / declare -p forms.
+    forbidden_normalizations = (
+        "${CUDA_VISIBLE_DEVICES// /}",
+        "${CUDA_VISIBLE_DEVICES,,}",
+        "${CUDA_VISIBLE_DEVICES^^}",
+        "${CUDA_VISIBLE_DEVICES//}",
+        "declare -p CUDA_VISIBLE_DEVICES",
+        "readonly CUDA_VISIBLE_DEVICES",
+        "typeset CUDA_VISIBLE_DEVICES",
+    )
+    for f in forbidden_normalizations:
+        assert f not in script_text, (
+            f"CUDA_VISIBLE_DEVICES normalization is forbidden: {f!r}"
+        )
+
+
+def test_job_script_does_not_reference_cuda_visible_devices_at_all(script_text):
+    # The wrapper's source must not reference the variable at all
+    # in *executable* code. Comments referencing the variable name
+    # (as a historical / explanatory reference) are allowed. The
+    # compute-node smoke proves the GPU scoping via
+    # ``torch.cuda.device_count() == 1`` inside gpu_preflight.py,
+    # so the wrapper does not need to inspect CUDA_VISIBLE_DEVICES.
+
+    # Strip ``# ...`` comments and blank lines.
+    code_lines = []
+    for raw in script_text.splitlines():
+        stripped = raw.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        # Strip any trailing inline comment.
+        if "#" in stripped:
+            # Naive split: a `#` inside a quoted string is unusual in
+            # bash; for our contract this is sufficient.
+            stripped = stripped.split("#", 1)[0].rstrip()
+        if stripped:
+            code_lines.append(stripped)
+    code_only = "\n".join(code_lines)
+    assert "CUDA_VISIBLE_DEVICES" not in code_only, (
+        "wrapper executable code must not reference CUDA_VISIBLE_DEVICES"
+    )
 
 
 def test_job_script_does_not_export_oar_job_id(script_text):
     # OAR_JOB_ID is set by the scheduler and must not be overwritten.
     assert "export OAR_JOB_ID=" not in script_text
     assert "OAR_JOB_ID:=" not in script_text
-
-
-def test_job_script_does_not_normalize_cuda_visible_devices(script_text):
-    # No whitespace-stripping / unset-defaulting form.
-    forbidden_normalizations = (
-        "${CUDA_VISIBLE_DEVICES// /}",
-        "${CUDA_VISIBLE_DEVICES,,}",
-        "${CUDA_VISIBLE_DEVICES^^}",
-        "${CUDA_VISIBLE_DEVICES//}",
-    )
-    for f in forbidden_normalizations:
-        assert f not in script_text, (
-            f"CUDA_VISIBLE_DEVICES normalization is forbidden: {f!r}"
-        )
 
 
 # --- Source-commit validation ---------------------------------------
@@ -477,6 +549,13 @@ def _make_fake_repo(tmp_path: Path) -> Path:
     harness = scripts_dir / "run_gpu_smoke.sh"
     # Use a triple-quoted plain string (not an f-string) so the
     # literal ${OAR_JOB_ID} substring is preserved verbatim.
+    #
+    # Phase 9H: the fake harness does NOT require CUDA_VISIBLE_DEVICES.
+    # The real harness must not require it either. The harness
+    # intentionally echoes the inherited CUDA_VISIBLE_DEVICES value
+    # (when present, unchanged) into smoke.stdout.log so the
+    # Phase 9H byte-for-byte passthrough test can verify the
+    # wrapper never mutates it.
     harness_text = (
         "#!/usr/bin/env bash\n"
         "set -euo pipefail\n"
@@ -485,13 +564,17 @@ def _make_fake_repo(tmp_path: Path) -> Path:
         ': "${HF_HOME:?HF_HOME is required}"\n'
         ': "${REPO_ROOT:?REPO_ROOT is required}"\n'
         ': "${OAR_JOB_ID:?OAR_JOB_ID is required}"\n'
-        ': "${CUDA_VISIBLE_DEVICES:?CUDA_VISIBLE_DEVICES is required}"\n'
         ': "${EXPECTED_SOURCE_COMMIT:?EXPECTED_SOURCE_COMMIT is required}"\n'
         'printf \'{"oar_job_id":"%s","hostname":"fake","torch_version":"2.13.0","torch_cuda_runtime_version":"12.1","device_0_name":"L40S","visible_cuda_device_count":1}\\n\' "${OAR_JOB_ID}" > "${SMOKE_LOG_DIR}/gpu_preflight.json"\n'
         'printf \'{"source_commit":"%s","model_name":"sat-3l-sm","model_revision":"sat-sha","tokenizer_name":"facebookAI/xlm-roberta-base","tokenizer_revision":"tok-sha","oar_job_id":"%s","hostname":"fake"}\\n\' "${EXPECTED_SOURCE_COMMIT}" "${OAR_JOB_ID}" > "${SMOKE_LOG_DIR}/run_metadata.json"\n'
         'printf \'{"resolved_device":"cuda","model_name":"sat-3l-sm","input_count":3,"sentence_counts":[2,2,2],"elapsed_seconds":0.1,"torch_version":"2.13.0","torch_cuda_runtime_version":"12.1","cuda_device_name":"L40S"}\\n\' > "${SMOKE_LOG_DIR}/smoke_result.json"\n'
         'echo "smoke ran" > "${SMOKE_LOG_DIR}/smoke.stdout.log"\n'
         'echo "" > "${SMOKE_LOG_DIR}/smoke.stderr.log"\n'
+        # Echo the inherited CUDA_VISIBLE_DEVICES (verbatim) so the
+        # Phase 9H passthrough test can compare. When unset, this
+        # is empty (the variable expands to nothing under
+        # set -u because we guard with ``:-``).
+        'printf "%s\\n" "${CUDA_VISIBLE_DEVICES:-}" >> "${SMOKE_LOG_DIR}/smoke.stdout.log"\n'
         "exit 0\n"
     )
     harness.write_text(harness_text)
@@ -576,6 +659,11 @@ def _run_job(
     # We invoke the wrapper with the four positional arguments and a
     # batch of scheduler-set env vars. Run from an unrelated cwd to
     # prove the wrapper does not assume the working directory.
+    #
+    # Phase 9H: CUDA_VISIBLE_DEVICES is NOT set by default. The
+    # scheduler does not guarantee it on Grid'5000; the wrapper must
+    # succeed without it. Tests that need to verify "if present,
+    # inherit unchanged" pass it explicitly via cuda_visible_devices.
     unrelated_cwd = tmp_path / "unrelated_cwd"
     unrelated_cwd.mkdir(exist_ok=True)
     env = {**os.environ}
@@ -619,13 +707,20 @@ def test_missing_oar_job_id_aborts(tmp_path):
     assert proc.returncode != 0, proc.stdout + proc.stderr
 
 
-def test_missing_cuda_visible_devices_aborts(tmp_path):
+def test_missing_cuda_visible_devices_does_not_abort(tmp_path):
+    """Phase 9H: Grid'5000 does not guarantee CUDA_VISIBLE_DEVICES.
+    The wrapper must NOT abort when it is absent; the harness
+    asserts GPU scoping via torch.cuda.device_count() == 1."""
     proc = _run_job(
         tmp_path,
         oar_job_id="1000001",
         cuda_visible_devices_unset=True,
     )
-    assert proc.returncode != 0, proc.stdout + proc.stderr
+    # Wrapper proceeds: exits with the smoke harness's exit code (0).
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    log_dir = tmp_path / "persistent" / "logs" / "1000001"
+    assert log_dir.exists()
+    assert (log_dir / "smoke.exit_code").read_text().strip() == "0"
 
 
 # --- Executable: required positional arguments -------------------------
@@ -835,6 +930,75 @@ def test_successful_run_writes_all_six_artifacts(tmp_path):
     # Job directory itself is mode 0700.
     dir_stat = log_dir.stat()
     assert dir_stat.st_mode & 0o777 == 0o700
+
+
+# --- Phase 9H executable: CUDA_VISIBLE_DEVICES behaviour --------------
+
+
+def test_wrapper_proceeds_to_smoke_when_cuda_visible_devices_absent(tmp_path):
+    """Phase 9H: the wrapper must reach the smoke harness when
+    CUDA_VISIBLE_DEVICES is unset. The pre-existing harness already
+    requires OAR_JOB_ID; we verify the wrapper no longer adds a
+    CUDA_VISIBLE_DEVICES requirement on top."""
+    proc = _run_job(
+        tmp_path,
+        oar_job_id="1000500",
+        cuda_visible_devices_unset=True,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    log_dir = tmp_path / "persistent" / "logs" / "1000500"
+    assert (log_dir / "smoke.exit_code").read_text().strip() == "0"
+    # The harness's stdout file echoes the (empty) CUDA_VISIBLE_DEVICES
+    # value via the "${CUDA_VISIBLE_DEVICES:-}" guard.
+    stdout_log = (log_dir / "smoke.stdout.log").read_text()
+    # First line is the harness's own "smoke ran" marker; the second
+    # line is the CUDA_VISIBLE_DEVICES passthrough echo, which must
+    # be empty when the wrapper did not set the variable.
+    assert stdout_log.splitlines()[1] == ""
+
+
+def test_wrapper_passes_cuda_visible_devices_through_unchanged(tmp_path):
+    """Phase 9H: if CUDA_VISIBLE_DEVICES is set, the wrapper must
+    pass it to the smoke harness byte-for-byte unchanged. The
+    wrapper must not assign, default, normalize, or strip it."""
+    sentinel = "0,1,GPU-deadbeef-cafef00d"
+    proc = _run_job(
+        tmp_path,
+        oar_job_id="1000501",
+        cuda_visible_devices=sentinel,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    log_dir = tmp_path / "persistent" / "logs" / "1000501"
+    stdout_log = (log_dir / "smoke.stdout.log").read_text()
+    # The harness echoes the inherited value via
+    # ``printf "%s\n" "${CUDA_VISIBLE_DEVICES:-}" >> smoke.stdout.log``;
+    # the second line is the passthrough echo and must equal the
+    # sentinel byte-for-byte.
+    lines = stdout_log.splitlines()
+    assert lines[1] == sentinel, (
+        f"CUDA_VISIBLE_DEVICES was mutated: got {lines[1]!r}, expected {sentinel!r}"
+    )
+
+
+def test_wrapper_production_source_has_no_cuda_visible_devices_assignment(
+    script_text,
+):
+    """Final source-level audit: the production wrapper's executable
+    code must contain no form of CUDA_VISIBLE_DEVICES assignment,
+    default, or export. Comments referencing the variable name
+    (as a historical / explanatory reference) are allowed."""
+
+    code_lines = []
+    for raw in script_text.splitlines():
+        stripped = raw.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if "#" in stripped:
+            stripped = stripped.split("#", 1)[0].rstrip()
+        if stripped:
+            code_lines.append(stripped)
+    code_only = "\n".join(code_lines)
+    assert "CUDA_VISIBLE_DEVICES" not in code_only
 
 
 def test_smoke_failure_exit_code_is_preserved(tmp_path):
@@ -1096,7 +1260,7 @@ def _run_wrapper_with_paths(
     hf_home: Path,
     log_root: Path,
     oar_job_id: str = "12345",
-    cuda_visible_devices: str = "0",
+    cuda_visible_devices: str | None = None,
     extra_args: list[str] | None = None,
     expected_source_commit: str = TEST_EXPECTED_SOURCE_COMMIT,
 ) -> subprocess.CompletedProcess:
@@ -1122,11 +1286,12 @@ def _run_wrapper_with_paths(
         (repo / ".venv" / "bin" / "python").chmod(0o755)
     unrelated_cwd = tmp_path / "unrelated_cwd"
     unrelated_cwd.mkdir(exist_ok=True)
-    env = {
-        **os.environ,
-        "OAR_JOB_ID": oar_job_id,
-        "CUDA_VISIBLE_DEVICES": cuda_visible_devices,
-    }
+    env = {**os.environ, "OAR_JOB_ID": oar_job_id}
+    # Phase 9H: CUDA_VISIBLE_DEVICES is informational and may be
+    # absent. Tests that need to assert passthrough behavior pass
+    # a sentinel value explicitly; the default is "not set".
+    if cuda_visible_devices is not None:
+        env["CUDA_VISIBLE_DEVICES"] = cuda_visible_devices
     args = [
         "bash",
         str(JOB_SCRIPT),

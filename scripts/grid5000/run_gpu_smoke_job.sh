@@ -1,11 +1,19 @@
 #!/usr/bin/env bash
-# Grid'5000 non-interactive batch entrypoint (Phase 9D).
+# Grid'5000 non-interactive batch entrypoint (Phase 9D + Phase 9H).
 #
 # This script is the *compute-node wrapper* for a non-interactive
 # OAR batch job. It is the script that ``oarsub`` invokes inside
-# the allocation, after the scheduler has set ``OAR_JOB_ID`` and
-# ``CUDA_VISIBLE_DEVICES``. It does NOT submit a job; it is the
-# job payload.
+# the allocation, after the scheduler has set ``OAR_JOB_ID``.
+# It does NOT submit a job; it is the job payload.
+#
+# Phase 9H: ``CUDA_VISIBLE_DEVICES`` is informational only.
+# Grid'5000 scopes reserved GPUs through its resource isolation
+# and does not guarantee ``CUDA_VISIBLE_DEVICES`` is set on a
+# given allocation. The wrapper therefore never requires, reads,
+# assigns, defaults, normalises, prints, or exports it. The
+# authoritative runtime proof of GPU scoping is
+# ``torch.cuda.device_count() == 1`` inside ``gpu_preflight.py``,
+# which runs as the first phase of the committed smoke harness.
 #
 # Why batch instead of the interactive form of oarsub? An
 # interactive OAR job depends on a TTY-bridge shell that the
@@ -18,10 +26,10 @@
 #
 # Hard safety contract:
 #
-#   * requires OAR_JOB_ID and CUDA_VISIBLE_DEVICES in the
-#     scheduler-provided environment; never overwrites them and
-#     never normalizes CUDA_VISIBLE_DEVICES (whitespace, case,
-#     etc.);
+#   * requires OAR_JOB_ID in the scheduler-provided environment;
+#     never overwrites it;
+#   * never touches CUDA_VISIBLE_DEVICES (informational only;
+#     the compute-node preflight proves GPU scoping via Torch);
 #   * requires the four positional arguments REPO_ROOT HF_HOME
 #     LOG_ROOT EXPECTED_SOURCE_COMMIT -- they are not optional;
 #   * rejects /tmp, /var/tmp, /dev/shm, traversal, symlinks,
@@ -48,7 +56,6 @@ umask 077
 # --- Scheduler-owned variables (refuse to overwrite) -----------------
 
 : "${OAR_JOB_ID:?OAR_JOB_ID is required (set by the OAR scheduler; never modify)}"
-: "${CUDA_VISIBLE_DEVICES:?CUDA_VISIBLE_DEVICES is required (set by the OAR scheduler; never modify)}"
 
 # OAR_JOB_ID is used below as a path component of the
 # per-job log directory. Validate that it is exactly a
@@ -252,18 +259,19 @@ SMOKE_STDOUT="${JOB_LOG_DIR}/smoke.stdout.log"
 SMOKE_STDERR="${JOB_LOG_DIR}/smoke.stderr.log"
 SMOKE_EXIT_CODE="${JOB_LOG_DIR}/smoke.exit_code"
 
-# The committed smoke harness reads four exact environment
-# variables that we propagate from the wrapper's positional
-# arguments. CUDA_VISIBLE_DEVICES and OAR_JOB_ID are
-# scheduler-owned and must NEVER be reassigned by the
-# wrapper -- the ``env`` of the bash invocation below inherits
-# both directly. The defensive reminder is in the docstring.
+# The committed smoke harness reads the environment variables that
+# we propagate from the wrapper's positional arguments. OAR_JOB_ID
+# is scheduler-owned and must NEVER be reassigned by the wrapper --
+# the ``env`` of the bash invocation below inherits it directly.
+# CUDA_VISIBLE_DEVICES is informational only (Phase 9H); if the
+# scheduler set it, the harness inherits it unchanged. The wrapper
+# never reads, assigns, defaults, normalises, or exports it.
 SMOKE_LOG_DIR="${JOB_LOG_DIR}"
 export REPO_ROOT HF_HOME SMOKE_LOG_DIR EXPECTED_SOURCE_COMMIT
 
-# The harness validates paths, OAR_JOB_ID, CUDA_VISIBLE_DEVICES,
-# and EXPECTED_SOURCE_COMMIT *again* before any model work; this
-# is intentional defence-in-depth, not a duplicated contract.
+# The harness validates paths, OAR_JOB_ID, and
+# EXPECTED_SOURCE_COMMIT *again* before any model work; this is
+# intentional defence-in-depth, not a duplicated contract.
 set +e
 bash "${SMOKE_HARNESS}" \
     >"${SMOKE_STDOUT}" \

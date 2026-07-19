@@ -124,9 +124,37 @@ def test_script_requires_oar_job_id(script_text):
     assert "OAR_JOB_ID is required" in script_text
 
 
-def test_script_requires_cuda_visibility(script_text):
-    assert "CUDA_VISIBLE_DEVICES:?" in script_text
-    assert "CUDA_VISIBLE_DEVICES is required" in script_text
+def test_script_does_not_require_cuda_visibility(script_text):
+    """Phase 9H: Grid'5000 does not guarantee CUDA_VISIBLE_DEVICES.
+
+    The compute-node smoke payload must not require it as a hard
+    guard. The authoritative proof of GPU scoping is the
+    preflight's ``torch.cuda.device_count() == 1`` check.
+    """
+    forbidden = (
+        "CUDA_VISIBLE_DEVICES:?",
+        "CUDA_VISIBLE_DEVICES is required",
+        ":?CUDA_VISIBLE_DEVICES",
+    )
+    for f in forbidden:
+        assert f not in script_text, (
+            f"smoke payload must not require CUDA_VISIBLE_DEVICES: {f!r}"
+        )
+
+
+def test_script_does_not_export_cuda_visible_devices(script_text):
+    """Phase 9H: the payload must never assign, default, or export
+    CUDA_VISIBLE_DEVICES. If the scheduler set it, the harness
+    inherits it unchanged via the wrapper's bash invocation."""
+    forbidden = (
+        "export CUDA_VISIBLE_DEVICES=",
+        "CUDA_VISIBLE_DEVICES=",
+        "CUDA_VISIBLE_DEVICES:=",
+    )
+    for f in forbidden:
+        assert f not in script_text, (
+            f"smoke payload must not touch CUDA_VISIBLE_DEVICES: {f!r}"
+        )
 
 
 def test_script_requires_repo_root(script_text):
@@ -401,7 +429,8 @@ def test_preflight_requires_exactly_one_gpu():
 
     from tests.unit.scripts.test_gpu_preflight import _env
 
-    env = _env(environ={"OAR_JOB_ID": "OAR-9", "CUDA_VISIBLE_DEVICES": "0,1"})
+    # Phase 9H: CUDA_VISIBLE_DEVICES is not required by preflight.
+    env = _env(environ={"OAR_JOB_ID": "OAR-9"})
     with pytest.raises(pf.PreflightError, match="exactly one"):
         pf.run_preflight(env, torch_mod=_TwoDev())
 
@@ -531,7 +560,8 @@ def _drive_validation_prefix(env_overrides, fake_repo_root, fake_hf_home):
             env={
                 **os.environ,
                 "OAR_JOB_ID": "OAR-UNIT-TEST",
-                "CUDA_VISIBLE_DEVICES": "0",
+                # Phase 9H: CUDA_VISIBLE_DEVICES intentionally NOT
+                # exported. The validation prefix must not require it.
                 "REPO_ROOT": fake_repo_root,
                 "HF_HOME": fake_hf_home,
                 "SMOKE_LOG_DIR": str(tempfile.mkdtemp(prefix="smoke-log-test-")),
@@ -552,11 +582,14 @@ def test_validation_prefix_does_not_leak_repo_root():
     # We arrange for REPO_ROOT to be missing -- this is the first
     # validation that fails, and the script must report the error
     # *without* echoing the value.
+    #
+    # Phase 9H: CUDA_VISIBLE_DEVICES is informational and intentionally
+    # NOT set here; the script must not abort on its absence.
     proc = subprocess.run(
         [
             "bash",
             "-c",
-            f"set -euo pipefail; REPO_ROOT='{SENSITIVE_PATH}/repo' HF_HOME='/tmp/dummy-hf' SMOKE_LOG_DIR='/tmp/dummy-log' OAR_JOB_ID=OAR-1 CUDA_VISIBLE_DEVICES=0 bash '{SCRIPT}' || true",
+            f"set -euo pipefail; REPO_ROOT='{SENSITIVE_PATH}/repo' HF_HOME='/tmp/dummy-hf' SMOKE_LOG_DIR='/tmp/dummy-log' OAR_JOB_ID=OAR-1 bash '{SCRIPT}' || true",
         ],
         capture_output=True,
         text=True,
@@ -576,7 +609,7 @@ def test_validation_prefix_does_not_leak_hf_home():
         [
             "bash",
             "-c",
-            f"set -euo pipefail; REPO_ROOT='/tmp/dummy-repo' HF_HOME='{SENSITIVE_PATH}/cache' SMOKE_LOG_DIR='/tmp/dummy-log' OAR_JOB_ID=OAR-1 CUDA_VISIBLE_DEVICES=0 bash '{SCRIPT}' || true",
+            f"set -euo pipefail; REPO_ROOT='/tmp/dummy-repo' HF_HOME='{SENSITIVE_PATH}/cache' SMOKE_LOG_DIR='/tmp/dummy-log' OAR_JOB_ID=OAR-1 bash '{SCRIPT}' || true",
         ],
         capture_output=True,
         text=True,
@@ -596,7 +629,7 @@ def test_validation_prefix_does_not_leak_project_python():
         [
             "bash",
             "-c",
-            f"set -euo pipefail; REPO_ROOT='{sensitive_python}' HF_HOME='/tmp/dummy-hf' SMOKE_LOG_DIR='/tmp/dummy-log' OAR_JOB_ID=OAR-1 CUDA_VISIBLE_DEVICES=0 bash '{SCRIPT}' || true",
+            f"set -euo pipefail; REPO_ROOT='{sensitive_python}' HF_HOME='/tmp/dummy-hf' SMOKE_LOG_DIR='/tmp/dummy-log' OAR_JOB_ID=OAR-1 bash '{SCRIPT}' || true",
         ],
         capture_output=True,
         text=True,
@@ -1015,15 +1048,6 @@ def test_validator_works_from_unrelated_working_directory(tmp_path, monkeypatch)
 # --- Phase 9B amendment: scheduler env + run metadata ---------------
 
 
-def test_script_does_not_export_cuda_visible_devices(script_text):
-    # The scheduler owns CUDA_VISIBLE_DEVICES. The smoke must not
-    # overwrite it (no `export CUDA_VISIBLE_DEVICES=...` form).
-    assert "export CUDA_VISIBLE_DEVICES=" not in script_text
-    # And no direct assignment via ${CUDA_VISIBLE_DEVICES:=...} that
-    # would mask the scheduler value if it were blank.
-    assert "CUDA_VISIBLE_DEVICES:=" not in script_text
-
-
 def test_script_does_not_export_oar_job_id(script_text):
     # OAR_JOB_ID is set by the scheduler and must not be overwritten.
     assert "export OAR_JOB_ID=" not in script_text
@@ -1193,6 +1217,101 @@ def _drive_validation_prefix(
         capture_output=True,
         text=True,
         timeout=15,
+    )
+
+
+def _drive_validation_prefix_no_cvd(
+    tmp_path: Path, fake_repo: Path
+) -> subprocess.CompletedProcess:
+    """Phase 9H variant: drive the same validation prefix WITHOUT
+    CUDA_VISIBLE_DEVICES in the environment. The prefix must not
+    abort on the absence of CUDA_VISIBLE_DEVICES; we expect the
+    smoke to proceed past the early validation gates. We point
+    REPO_ROOT at a fake repo so the path-canonicalisation / interpreter
+    / harness gates are exercised; we use the interpreter-absence
+    gate as the eventual fail point (since the fake repo has no
+    ``.venv/bin/python``).
+    """
+    script_text = SCRIPT.read_text(encoding="utf-8")
+    block = _extract_preflight_validation_block(script_text)
+    fake_venv = tmp_path / "fake_venv_bin"
+    fake_venv.mkdir()
+    py = fake_venv / "python"
+    py.write_text("#!/usr/bin/env bash\nexit 0\n")
+    py.chmod(0o755)
+    driver = tmp_path / "driver_no_cvd.sh"
+    caller = (
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        f'REPO_ROOT="{fake_repo}"\n'
+        f'EXPECTED_SOURCE_COMMIT="{TEST_EXPECTED_SOURCE_COMMIT}"\n'
+        'PROJECT_PYTHON="' + str(py) + '"\n' + block + "\n"
+        "exit 0\n"
+    )
+    driver.write_text(caller)
+    driver.chmod(0o755)
+    return subprocess.run(
+        ["bash", str(driver)],
+        env=os.environ,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+
+
+def test_validation_prefix_does_not_abort_without_cuda_visible_devices(tmp_path):
+    """Phase 9H: the smoke validation prefix must not require
+    CUDA_VISIBLE_DEVICES. The prefix reaches the interpreter /
+    harness checks, exercising every gate that does not depend on
+    CUDA_VISIBLE_DEVICES, without aborting on the variable's
+    absence."""
+    # Build a real git repo so the EXPECTED_SOURCE_COMMIT / HEAD
+    # gate passes too. We expect failure only because the fake
+    # repo has no .venv/bin/python; that failure must be the
+    # interpreter-missing message, NOT a CUDA_VISIBLE_DEVICES
+    # error.
+    _, fake_repo = _build_env(tmp_path)
+    real_head = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=str(fake_repo),
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    # Reuse the validation-block driver but with the real HEAD so
+    # the EXPECTED_SOURCE_COMMIT gate also passes.
+    script_text = SCRIPT.read_text(encoding="utf-8")
+    block = _extract_preflight_validation_block(script_text)
+    fake_venv = tmp_path / "fake_venv_bin_no_cvd"
+    fake_venv.mkdir()
+    py = fake_venv / "python"
+    py.write_text("#!/usr/bin/env bash\nexit 0\n")
+    py.chmod(0o755)
+    driver = tmp_path / "driver_prefix_no_cvd.sh"
+    caller = (
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        f'REPO_ROOT="{fake_repo}"\n'
+        f'EXPECTED_SOURCE_COMMIT="{real_head}"\n'
+        'PROJECT_PYTHON="' + str(py) + '"\n' + block + "\n"
+        "exit 0\n"
+    )
+    driver.write_text(caller)
+    driver.chmod(0o755)
+    # CRITICAL: do NOT export CUDA_VISIBLE_DEVICES.
+    proc = subprocess.run(
+        ["bash", str(driver)],
+        env=os.environ,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    # Failure (if any) is downstream of CUDA_VISIBLE_DEVICES; the
+    # error must not mention CUDA_VISIBLE_DEVICES.
+    combined = (proc.stdout or "") + (proc.stderr or "")
+    assert "CUDA_VISIBLE_DEVICES" not in combined, (
+        f"validation prefix referenced CUDA_VISIBLE_DEVICES "
+        f"(should be informational only): {combined!r}"
     )
 
 

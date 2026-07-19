@@ -308,6 +308,54 @@ package remains pre-1.0 (currently `0.1.0`).
   `scripts/grid5000/submit_gpu_smoke.sh` in the sdist and still forbids
   `scripts/` paths in the wheel.
 
+### Changed (Phase 9H — `CUDA_VISIBLE_DEVICES` is informational only)
+
+- `scripts/grid5000/run_gpu_smoke_job.sh`: the compute-node wrapper no
+  longer requires, reads, assigns, defaults, normalises, prints, or
+  exports `CUDA_VISIBLE_DEVICES`. Grid'5000 scopes reserved GPUs through
+  its resource isolation and does not guarantee
+  `CUDA_VISIBLE_DEVICES` is exported on a given allocation; the wrapper
+  inherits any scheduler-set value unchanged through the `bash`
+  invocation. `OAR_JOB_ID` (numeric, scheduler-set) remains the only
+  scheduler-owned variable the wrapper requires.
+- `scripts/grid5000/run_gpu_smoke.sh`: the compute-node smoke payload no
+  longer requires `CUDA_VISIBLE_DEVICES`. The authoritative runtime proof
+  of GPU scoping is the `gpu_preflight.py` `torch.cuda.device_count() ==
+  1` check, which the payload runs as the first phase. `OAR_JOB_ID`
+  remains required; the payload never sets or exports
+  `CUDA_VISIBLE_DEVICES`.
+- `scripts/grid5000/gpu_preflight.py`: the preflight no longer reads
+  `CUDA_VISIBLE_DEVICES`. The required runtime conditions are Linux,
+  non-blank `OAR_JOB_ID`, `torch.cuda.is_available() is True`, exactly
+  one visible CUDA device, and `torch.cuda.get_device_name(0)`
+  succeeding. The preflight does not mutate `os.environ`. The result
+  schema is unchanged from Phase 9B (no new fields).
+- `docs/guides/grid5000.md`: the runtime contract now states
+  accurately that `CUDA_VISIBLE_DEVICES` is informational only on
+  Grid'5000; the GPU scoping proof is Torch reporting exactly one usable
+  CUDA device; explicit application device remains `cuda`; no CPU/MPS/
+  auto fallback. A new "`CUDA_VISIBLE_DEVICES` is informational only"
+  section links to the [official Grid'5000 GPU reservation
+  documentation](https://www.grid5000.fr/w/Hardware:_gpu) instead of
+  claiming undocumented environment behaviour.
+- `tests/unit/scripts/test_gpu_preflight.py`: rewritten for Phase 9H.
+  New RED→GREEN tests assert: `CUDA_VISIBLE_DEVICES` absence /
+  presence / arbitrary value all yield success; the preflight source
+  does not read `CUDA_VISIBLE_DEVICES`; `os.environ` is not mutated; the
+  JSON schema is unchanged from Phase 9B (six documented keys).
+- `tests/unit/scripts/test_run_gpu_smoke_job_sh.py`: updated for Phase 9H.
+  The wrapper no longer requires, exports, normalises, prints, or
+  references `CUDA_VISIBLE_DEVICES` in executable code (comments
+  documenting the contract are allowed). New executable tests assert
+  the wrapper proceeds to the smoke when `CUDA_VISIBLE_DEVICES` is
+  absent and passes any present value through to the smoke byte-for-byte
+  unchanged.
+- `tests/unit/scripts/test_run_gpu_smoke_sh.py`: updated for Phase 9H.
+  The smoke payload no longer requires, exports, normalises, or prints
+  `CUDA_VISIBLE_DEVICES`. New executable tests assert the validation
+  prefix does not abort without `CUDA_VISIBLE_DEVICES` and does not
+  mention it in error output.
+
 ## [0.1.0]
 - Initial pre-release: deterministic OSM-polygon → Wikipedia/Wikivoyage
   sentence-relevance dataset construction with read-only Hugging Face
