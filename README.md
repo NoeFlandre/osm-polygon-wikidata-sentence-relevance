@@ -89,14 +89,47 @@ In Hub mode, the resolved immutable commit SHA is what enters the
 pipeline and the manifest. No HF token is accepted, printed, or persisted;
 standard `huggingface_hub` authentication is used.
 
+### Hardware selection
+
+The SaT segmenter supports `--device {auto,cpu,cuda,mps}` (default
+`auto`): `auto` prefers CUDA when available, otherwise MPS, otherwise
+CPU. Explicit `cuda`/`mps` fail with exit code `1` when the requested
+backend is unavailable; the CLI never silently downgrades. Hardware
+selection happens after acquisition, only when the model is built, and
+it does not alter output schema, IDs, hashes, or dataset-card
+statistics. **One GPU only; multi-GPU is not implemented in this
+phase.** Production Grid'5000 runs should use `--device cuda`:
+
+```bash
+uv run osm-polygon-sentence-relevance \
+  --input-dataset-id NoeFlandre/osm-polygon-wikidata-only \
+  --output-dir ./out \
+  --input-dataset-revision main \
+  --pipeline-version 0.1.0 \
+  --device cuda
+```
+
+### Local source provenance
+
+`--input-source-dataset-id OWNER/DATASET` records the upstream source
+dataset ID for an already-local snapshot. Only valid with
+`--input-root`; populates the source provenance threaded into the
+manifest, statistics, and the generated `README.md` dataset card without
+triggering any network access.
+
 ## Optional extras
 
 The base install pulls in only `pyarrow`. Two extras are available:
 
-- `segmentation` (`wtpsplit>=2.2.1,<3` + `torch>=2.2,<3`) — installs the
+- `segmentation` (`wtpsplit==2.2.1` + `torch>=2.2,<3`) — installs the
   `wtpsplit` SaT adapter and its PyTorch runtime, as required by the
   default `SaTSentenceSegmenter`. The SaT model weights themselves are
-  still downloaded separately on first model construction.
+  still downloaded separately on first model construction. **`wtpsplit`
+  is pinned to exactly `2.2.1`**: the placement adapter is
+  intentionally version-specific (it descends into the
+  `PyTorchWrapper` that ships with 2.2.1) and refuses any other
+  version at runtime. A wider range would invite a configuration the
+  adapter has not been tested against.
 - `hub` (`huggingface_hub>=0.20.0`) — required for Hub input acquisition
   through `--input-dataset-id` and for programmatic publishing through
   `publish_export_directory`.

@@ -4,6 +4,7 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from osm_polygon_sentence_relevance.contracts.errors import AcquisitionError
 from osm_polygon_sentence_relevance.ingestion.discovery import discover_shards
@@ -64,7 +65,10 @@ def acquire_dataset_snapshot(
     # 3. Resolve revision using HfApi
     if hub_api is None:
         try:
-            api = huggingface_hub.HfApi()
+            # ``HfApi`` returns an Any-typed object from the perspective
+            # of this module; treat it as ``Any`` so callers can also
+            # inject their own Hub-API-compatible object.
+            api: Any = huggingface_hub.HfApi()
         except Exception as exc:
             raise AcquisitionError("Failed to initialize HfApi") from exc
     else:

@@ -62,8 +62,11 @@ class TestSegmentationExtra:
         )
 
     def test_segmentation_declares_wtpsplit(self):
-        assert "wtpsplit>=2.2.1,<3" in self._extra("segmentation"), (
-            "'segmentation' extra must declare 'wtpsplit>=2.2.1,<3'"
+        # wtpsplit is pinned to exactly 2.2.1 (Phase 9A amendment) —
+        # the placement adapter is intentionally version-specific and
+        # refuses any other version at runtime.
+        assert "wtpsplit==2.2.1" in self._extra("segmentation"), (
+            "'segmentation' extra must pin 'wtpsplit==2.2.1'"
         )
 
     def test_segmentation_declares_torch(self):

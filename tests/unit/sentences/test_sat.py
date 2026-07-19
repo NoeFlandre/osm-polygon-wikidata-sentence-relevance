@@ -42,21 +42,33 @@ def reset_fake():
     return
 
 
+class _CpuOnlyCaps:
+    """A no-accelerator capability snapshot for hardware-independent tests."""
+
+    cuda_available = False
+    mps_available = False
+
+
+@pytest.fixture
+def caps_cpu_only():
+    return _CpuOnlyCaps()
+
+
 class TestSaTLazyConstruction:
     def test_lazy_construction(self):
-        seg = SaTSentenceSegmenter(model_factory=make_factory())
+        seg = SaTSentenceSegmenter(model_factory=make_factory(), caps=caps_cpu_only)
         assert FakeSaTModel.constructed == []
         seg.split_batch(["A.", "B."], ["en", "en"])
         assert len(FakeSaTModel.constructed) == 1
 
     def test_constructed_once_across_calls(self):
-        seg = SaTSentenceSegmenter(model_factory=make_factory())
+        seg = SaTSentenceSegmenter(model_factory=make_factory(), caps=caps_cpu_only)
         seg.split_batch(["A."], ["en"])
         seg.split_batch(["B."], ["en"])
         assert len(FakeSaTModel.constructed) == 1
 
     def test_correct_default_model_name(self):
-        seg = SaTSentenceSegmenter(model_factory=make_factory())
+        seg = SaTSentenceSegmenter(model_factory=make_factory(), caps=caps_cpu_only)
         seg.split_batch(["A."], ["en"])
         assert FakeSaTModel.constructed[0].model_name == "sat-3l-sm"
 
@@ -65,6 +77,7 @@ class TestSaTLazyConstruction:
             "sat-12l",
             model_factory=make_factory(),
             model_kwargs={"flash_attention": True},
+            caps=caps_cpu_only,
         )
         seg.split_batch(["A."], ["en"])
         model = FakeSaTModel.constructed[0]
@@ -72,7 +85,7 @@ class TestSaTLazyConstruction:
         assert model.kwargs == {"flash_attention": True}
 
     def test_empty_batch_does_not_construct(self):
-        seg = SaTSentenceSegmenter(model_factory=make_factory())
+        seg = SaTSentenceSegmenter(model_factory=make_factory(), caps=caps_cpu_only)
         assert seg.split_batch([], []) == ()
         assert FakeSaTModel.constructed == []
 
@@ -82,18 +95,19 @@ class TestSaTInference:
         seg = SaTSentenceSegmenter(
             model_factory=make_factory(),
             split_kwargs={"do_flush": True},
+            caps=caps_cpu_only,
         )
         seg.split_batch(["A.", "B."], ["en", "en"])
         assert FakeSaTModel.split_calls == 1
         assert FakeSaTModel.last_split_kwargs == {"do_flush": True}
 
     def test_exactly_one_inference_call_per_batch(self):
-        seg = SaTSentenceSegmenter(model_factory=make_factory())
+        seg = SaTSentenceSegmenter(model_factory=make_factory(), caps=caps_cpu_only)
         seg.split_batch(["A.", "B.", "C."], ["en", "en", "en"])
         assert FakeSaTModel.split_calls == 1
 
     def test_input_and_output_order_preserved(self):
-        seg = SaTSentenceSegmenter(model_factory=make_factory())
+        seg = SaTSentenceSegmenter(model_factory=make_factory(), caps=caps_cpu_only)
         out = seg.split_batch(["a|b", "c|d"], ["en", "en"])
         assert out == (("a", "b"), ("c", "d"))
 
@@ -111,7 +125,7 @@ class TestSaTInference:
         def gen_factory(model_name, **kwargs):
             return GenModel(model_name, **kwargs)
 
-        seg = SaTSentenceSegmenter(model_factory=gen_factory)
+        seg = SaTSentenceSegmenter(model_factory=gen_factory, caps=caps_cpu_only)
         out = seg.split_batch(["a|b"], ["en"])
         assert out == (("a", "b"),)
         # Result must be immutable nested tuples, not a generator.
@@ -125,6 +139,7 @@ class TestSaTInference:
             model_factory=make_factory(),
             model_kwargs=model_kwargs,
             split_kwargs=split_kwargs,
+            caps=caps_cpu_only,
         )
         seg.split_batch(["A."], ["en"])
         model_kwargs["x"] = 999
@@ -140,7 +155,7 @@ class TestSaTErrors:
         def failing_factory(model_name, **kwargs):
             raise RuntimeError("boom-load")
 
-        seg = SaTSentenceSegmenter(model_factory=failing_factory)
+        seg = SaTSentenceSegmenter(model_factory=failing_factory, caps=caps_cpu_only)
         with pytest.raises(SegmentationError) as exc:
             seg.split_batch(["A."], ["en"])
         assert exc.value.__cause__ is not None
@@ -154,7 +169,7 @@ class TestSaTErrors:
         def boom_factory(model_name, **kwargs):
             return BoomModel(model_name, **kwargs)
 
-        seg = SaTSentenceSegmenter(model_factory=boom_factory)
+        seg = SaTSentenceSegmenter(model_factory=boom_factory, caps=caps_cpu_only)
         with pytest.raises(SegmentationError) as exc:
             seg.split_batch(["A."], ["en"])
         assert exc.value.__cause__ is not None
@@ -177,7 +192,9 @@ class TestSaTErrors:
         sys.modules.pop("wtpsplit", None)
         sys.meta_path.insert(0, blocked)
         try:
-            seg = SaTSentenceSegmenter()  # no factory -> uses real importer
+            seg = SaTSentenceSegmenter(
+                caps=caps_cpu_only
+            )  # no factory -> uses real importer
             with pytest.raises(SegmentationError) as exc:
                 seg.split_batch(["A."], ["en"])
             assert "uv sync --extra segmentation" in str(exc.value)
@@ -188,11 +205,11 @@ class TestSaTErrors:
 
 class TestSaTProtocolAndIntegration:
     def test_satisfies_sentence_segmenter(self):
-        seg = SaTSentenceSegmenter(model_factory=make_factory())
+        seg = SaTSentenceSegmenter(model_factory=make_factory(), caps=caps_cpu_only)
         assert isinstance(seg, SentenceSegmenter)
 
     def test_integrates_through_split_validated_batch(self):
-        seg = SaTSentenceSegmenter(model_factory=make_factory())
+        seg = SaTSentenceSegmenter(model_factory=make_factory(), caps=caps_cpu_only)
         out = split_validated_batch(seg, ["a|b", "c|d"], ["en", "en"])
         assert out == (("a", "b"), ("c", "d"))
 
@@ -205,7 +222,7 @@ class TestSaTProtocolAndIntegration:
             section_text_raw="First sentence.|Second sentence.",
             section_path_raw=['["Introduction"]'],
         )
-        seg = SaTSentenceSegmenter(model_factory=make_factory())
+        seg = SaTSentenceSegmenter(model_factory=make_factory(), caps=caps_cpu_only)
         result = segment_joined_sections(table, seg)
         rows = result.table.to_pylist()
         assert [r["sentence_text_raw"] for r in rows] == [

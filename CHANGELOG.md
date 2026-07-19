@@ -150,6 +150,62 @@ package remains pre-1.0 (currently `0.1.0`).
   files in the source distribution while excluding caches, data, model
   weights, and the local-only `.local-docs/` guide.
 
+### Added (Phase 9A — explicit accelerator selection)
+- `SaTSentenceSegmenter` accepts a `device` argument (`"auto"`,
+  `"cpu"`, `"cuda"`, `"mps"`) and an injectable `caps` capability
+  snapshot. `"auto"` prefers CUDA, then MPS, then CPU; explicit
+  unavailable accelerators fail with `SegmentationError` rather than
+  silently downgrading.
+- The build CLI exposes `--device {auto,cpu,cuda,mps}` (default
+  `auto`) and performs an early hardware-availability check before
+  acquisition or model construction. No Torch import occurs for
+  `--help`.
+- `--input-source-dataset-id OWNER/DATASET` records the upstream
+  source dataset ID for a previously-acquired local snapshot. Only
+  valid with `--input-root`; populates the manifest, statistics, and
+  generated `README.md` dataset card without triggering any network
+  access.
+- `sentences.device` exposes `PUBLIC_DEVICE_VALUES`,
+  `TorchCapabilities` Protocol, `resolve_device`, and `default_caps`
+  for programmatic use. The resolver is pure logic over an injected
+  capability snapshot; production callers use a lazy Torch-backed
+  default.
+
+### Changed (Phase 9A)
+- The wtpsplit placement helper is now narrowly versioned to wtpsplit
+  2.2.1 and selects the *complete classifier* owned by the
+  `wtpsplit.extract.PyTorchWrapper` (`SubwordXLMForTokenClassification`,
+  not its XLM-R backbone). The complete classifier is moved via a
+  single `.to(device)` call and verified by reading every parameter
+  and buffer device. Knowledge of the wtpsplit wrapper shape is
+  isolated to `sentences/_wtpsplit_device.py` (five private helpers)
+  with no wtpsplit-specific code remaining in `sentences/sat.py`.
+- The segmenter resolves its device **exactly once** per instance,
+  immediately before the first model construction. Subsequent batches
+  reuse both the resolved device and the placed model.
+- Device resolution and model-shape handling are now strictly
+  separated. The resolver never inspects the model and never rewrites
+  the resolved device based on the loaded model's shape; the
+  placement adapter is the only layer that may inspect the model,
+  and only to decide whether the model supports the resolved
+  device. The one exception is the legacy CPU-only test-double path:
+  a `device="cpu"` request against an unrecognised wrapper is a
+  no-op; any resolved accelerator (`cuda` / `mps`) against an
+  unrecognised wrapper raises `SegmentationError` rather than
+  silently running on CPU. This is the guard that prevents a
+  Grid'5000 run that selected CUDA from silently computing on CPU
+  after placement "fails" on the accelerator.
+- The `wtpsplit` entry in the `segmentation` optional extra is now
+  pinned to exactly `wtpsplit==2.2.1` (not the previous
+  `wtpsplit>=2.2.1,<3`). The lockfile records the pin. The
+  placement adapter is intentionally version-specific, so a wider
+  range would invite a configuration the adapter has not been
+  tested against. The `TestDeclaredVersionAgreement` metadata test
+  enforces the contract at the test-suite level.
+- `_ResolvedInput` no longer carries a redundant `local_source_dataset_id`
+  field; `dataset_id` is the single provenance value used by both Hub
+  acquisition and local mode with `--input-source-dataset-id`.
+
 ### Removed
 - The hard-coded external-drive data-directory path and all
   machine-specific filesystem probing from settings resolution. (Earlier

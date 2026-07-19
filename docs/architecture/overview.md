@@ -65,9 +65,62 @@ snapshot (excluding `articles/`), validates it, and returns an
 forwarded downstream (never a mutable `main`).
 
 In **local mode**, the supplied `--input-dataset-revision` is forwarded
-unchanged.
+unchanged. The optional `--input-source-dataset-id OWNER/DATASET`
+records the upstream source dataset ID for a previously-acquired local
+snapshot; it populates the source provenance threaded through the
+export chain (Parquet schema metadata, manifest, statistics, generated
+`README.md` dataset card) without triggering any network access.
 
 Both modes require `--input-dataset-revision` and `--pipeline-version`.
+
+## Hardware selection (Phase 9A)
+
+The SaT segmenter accepts a `device` argument: one of
+`"auto"`, `"cpu"`, `"cuda"`, `"mps"`. `"auto"` (default) resolves to
+`cuda` when available, otherwise `mps`, otherwise `cpu`. Explicit
+`cuda` / `mps` requests fail with `SegmentationError` when the
+requested backend is unavailable; the segmenter never silently
+downgrades. The CLI exposes the same flag (`--device`).
+
+The segmenter resolves the device **exactly once**, immediately before
+the first model construction, and reuses both the resolved device and
+the placed model across all subsequent batches. Capability resolution
+never re-probes the host. The CLI performs its required early
+hardware-availability validation separately, before acquisition.
+
+**Device resolution and model-shape handling are separate concerns.**
+The resolver does not inspect the loaded model — it returns the
+backend that matches the requested value (or the auto priority
+`cuda → mps → cpu`). The placement adapter in
+`sentences/_wtpsplit_device.py` then either moves the *complete*
+classifier onto that backend or raises. Once resolved, the device
+value is never rewritten based on the model's shape. This is what
+prevents a Grid'5000 run that selected CUDA from silently running
+SaT on CPU after a placement step "fails" on the accelerator.
+
+The placement helper is narrowly versioned to wtpsplit 2.2.1 and
+selects the *complete classifier* owned by the
+`wtpsplit.extract.PyTorchWrapper`, never recursing into its
+`SubwordXLMForTokenClassification.model` backbone. The complete
+classifier is moved once via `.to(device)`; placement is verified by
+reading every parameter and buffer device on the classifier, and a
+mismatch raises `SegmentationError`. Knowledge of the wtpsplit
+wrapping shape is isolated to five helpers local to
+`sentences/_wtpsplit_device.py`
+(`_load_wtpsplit_pytorch_wrapper_class`, `_extract_classifier`,
+`_classifier_observed_device`, `place_classifier`, `has_supported_shape`).
+The `wtpsplit` extra in `pyproject.toml` is **pinned to exactly
+`wtpsplit==2.2.1`**, not a range: the adapter is intentionally
+version-specific, and a wider range would invite a configuration the
+adapter has not been tested against. The
+`TestDeclaredVersionAgreement` metadata test enforces this
+agreement.
+
+Hardware selection never alters output schema, IDs, hashes, or
+dataset-card statistics; it only changes the runtime accelerator.
+**One GPU only.** Multi-GPU is not implemented in this phase. The
+expected production invocation is `osm-polygon-sentence-relevance
+--device cuda`.
 
 ## Where Wikipedia and Wikivoyage join
 
