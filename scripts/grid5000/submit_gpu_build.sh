@@ -129,7 +129,25 @@ _require_real_dir "REPO_ROOT"  "${REPO_ROOT}"
 _require_real_dir "HF_HOME"    "${HF_HOME}"
 _require_real_dir "LOG_ROOT"   "${LOG_ROOT}"
 _require_real_dir "INPUT_ROOT" "${INPUT_ROOT}"
-_require_real_dir "WORK_DIR"   "${WORK_DIR}"
+# WORK_DIR may exist (resume) or not (fresh). The compute-node
+# wrapper enforces the same semantic. On the frontend we only
+# reject a WORK_DIR that exists but is not a directory, or one
+# that is a symlink. A fresh non-existent WORK_DIR is acceptable.
+WORK_NORMALISED_F="${WORK_DIR%/}"
+if [ -e "${WORK_NORMALISED_F}" ]; then
+    if [ ! -d "${WORK_NORMALISED_F}" ]; then
+        echo "submit_gpu_build: WORK_DIR exists but is not a directory" >&2
+        exit 1
+    fi
+    WORK_PHYS="$(cd -- "${WORK_NORMALISED_F}" && pwd -P)" || {
+        echo "submit_gpu_build: WORK_DIR fails strict canonicalisation" >&2
+        exit 1
+    }
+    if [ "${WORK_PHYS}" != "${WORK_NORMALISED_F}" ]; then
+        echo "submit_gpu_build: WORK_DIR must not be a symlink" >&2
+        exit 1
+    fi
+fi
 
 OUTPUT_NORMALISED="${OUTPUT_DIR%/}"
 if [ -e "${OUTPUT_NORMALISED}" ]; then
