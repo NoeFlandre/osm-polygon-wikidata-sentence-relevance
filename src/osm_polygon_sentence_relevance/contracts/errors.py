@@ -137,6 +137,13 @@ class PublicationError(ValueError):
     """Raised when Hugging Face dataset publishing fails."""
 
 
+# ---------------------------------------------------------------------------
+# Checkpoint errors (Phase 9L-A)
+# ---------------------------------------------------------------------------
+class CheckpointError(ValueError):
+    """Raised when the optional persistent checkpoint layer rejects or fails."""
+
+
 __all__ = [
     "ConfigurationError",
     "SchemaContractError",
@@ -151,4 +158,5 @@ __all__ = [
     "ExportError",
     "AcquisitionError",
     "PublicationError",
+    "CheckpointError",
 ]

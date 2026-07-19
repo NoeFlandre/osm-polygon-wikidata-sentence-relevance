@@ -34,6 +34,7 @@ The package is organized into domain packages under
 | Publishing | `publishing/huggingface.py` | Programmatic one-commit publish of a validated export to an existing Hub dataset. |
 | Orchestration | `application/pipeline.py` | Tie the above stages together (injected segmenter). |
 | CLI | `application/cli.py` | Console entry point, argument resolution, JSON summary. Optional post-build publishing via `--publish-dataset-id`. |
+| Restartability | `application/checkpoint.py` | Optional per-shard checkpoints published as whole-directory atomic renames into `shards/active/<shard_key>/`, with `shards/inventory.json` reconciling added / removed / changed / unchanged shards. Invalid checkpoints are moved (never deleted) into `shards/quarantine/<shard_key>.<utc>.<hex8>/` with the original bytes preserved. Gated by `--work-dir` + `--source-commit`. |
 
 ## Compatibility-facade policy
 

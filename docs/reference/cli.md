@@ -19,6 +19,8 @@ usage: osm-polygon-sentence-relevance [-h]
     [--device {auto,cpu,cuda,mps}]
     [--input-source-dataset-id OWNER/DATASET]
     [--overwrite]
+    [--work-dir WORK_DIR]
+    [--source-commit SOURCE_COMMIT]
     [--publish-dataset-id OWNER/DATASET]
     [--publish-revision REVISION] [--publish-commit-message MESSAGE]
 ```
@@ -37,6 +39,8 @@ usage: osm-polygon-sentence-relevance [-h]
 | `--device` | no | `auto` | Accelerator for SaT inference. One of `auto`, `cpu`, `cuda`, `mps`. `auto` (default) prefers CUDA when available, otherwise MPS, otherwise CPU. Explicit `cuda` or `mps` fail with exit code `1` when the requested backend is unavailable; the CLI never silently downgrades. |
 | `--input-source-dataset-id` | no | — | Optional Hugging Face dataset ID of the upstream source for a local input snapshot. Only valid with `--input-root`; populates the source provenance recorded in the manifest and dataset card without triggering any network request. |
 | `--overwrite` | no | off | Overwrite an existing non-empty output directory. |
+| `--work-dir` | no | — | Optional persistent work directory for shard-level checkpoints and a factual progress heartbeat. When supplied, the pipeline publishes one checkpoint per shard as a whole-directory atomic rename under `${work_dir}/shards/active/<shard_key>/`, and writes a `heartbeat.json` updated at shard boundaries. A subsequent invocation with the same `--work-dir` resumes from the last valid checkpoint; invalid or mismatched checkpoints are moved into `${work_dir}/shards/quarantine/` with a UUID-suffixed unique name and their original bytes are preserved (never deleted). Cannot overlap with `--input-root` or `--output-dir`; ignored when omitted (legacy no-work-directory mode). |
+| `--source-commit` | required iff `--work-dir` is set | — | 40-character lowercase hex commit SHA binding each checkpoint and the heartbeat to a specific code revision. Validated against `^[0-9a-f]{40}$` and recorded verbatim into every checkpoint's metadata. When `--work-dir` is omitted the value is ignored. |
 | `--publish-dataset-id` | no | — | Optional Hugging Face dataset ID to publish the completed export to, after the build succeeds. The target repository must already exist; no repository is created. |
 | `--publish-revision` | no | `main` | Target Hugging Face dataset revision for publishing. Only used with `--publish-dataset-id`. |
 | `--publish-commit-message` | no | — | Optional commit message for the publishing commit. Only used with `--publish-dataset-id`. |
@@ -60,6 +64,16 @@ supplying it in Hub mode (`--input-dataset-id`) or with a blank value
 exits with status `1` before any acquisition, model construction, or
 pipeline execution. When supplied it records the source provenance in
 the manifest and generated dataset card.
+
+`--work-dir` is optional and orthogonal to the input/output flags. The
+CLI validates the syntactic form; the pipeline then rejects overlap
+with `--input-root` / `--output-dir` (including ancestor relationships)
+and refuses to write checkpoints for a `--work-dir` equal to or inside
+either of those paths. The pipeline also records the current source
+commit (from `osm_polygon_sentence_relevance.__version__`) and the
+selected `--sat-model` into every shard checkpoint and the heartbeat;
+this binds each artifact to the exact code revision and model that
+produced it.
 
 ## Exit statuses
 
@@ -107,6 +121,87 @@ that the success JSON also passes through to the manifest, statistics,
 Parquet schema metadata, and the generated `README.md` dataset card via
 `run_pipeline(input_dataset_id=...)`. In local mode (`--input-root`),
 `input.dataset_id` is `null` and no Hub identity is propagated.
+
+## Restartable builds (`--work-dir`)
+
+When `--work-dir` is supplied, the pipeline persists per-shard
+checkpoints and a factual progress heartbeat so a long build can be
+interrupted and resumed without re-running already-validated shards.
+Layout:
+
+```text
+${WORK_DIR}/
+    heartbeat.json                  # atomic, factual-only JSON
+    shards/
+        inventory.json              # run-level snapshot
+        active/
+            ${shard_key}/
+                segmented.parquet   # mode 0600
+                metadata.json       # mode 0600
+        quarantine/
+            ${shard_key}.${utc}.${hex8}/   # mode 0700; byte-identical to
+                                            # the rejected active checkpoint
+```
+
+The pipeline is **single-writer**: at most one invocation may own a
+given `--work-dir` at a time. Cross-filesystem moves are not supported;
+the active and quarantine trees live on the same filesystem.
+
+**Source-file binding.** Each checkpoint carries a `source_files` field
+in `metadata.json` whose entries are exactly the six files referenced
+by the corresponding `RegionShardSet` discovered for that shard (four
+core Parquet files plus the optional Wikivoyage pair). Each entry
+records the canonical forward-slash relative path, byte size, and
+SHA-256. On resume every referenced source file is re-hashed; any
+change in size, SHA-256, presence, or absence triggers quarantine of
+that shard's active directory. The pipeline therefore detects edits to
+source bytes even when the file path and pinned revision are
+unchanged.
+
+**Run-level inventory.** `shards/inventory.json` records the discovered
+shard keys and each shard's source manifest. Reconciliation is
+**per shard**:
+
+- an added shard is processed alone, the unchanged ones are reused;
+- a removed shard quarantines its own orphaned checkpoint;
+- a changed shard quarantines only its own active directory;
+- unchanged shards with matching manifests reuse their previously
+  published bytes — joins and segmentation are not invoked for them.
+
+**Publication.** A new checkpoint is published as a whole-directory
+atomic rename from a unique sibling staging directory into `active/`.
+The staging directory is preserved on every failure as evidence; the
+active slot is never modified in place, never overwritten, never
+silently replaced. On any failure mid-publish the previous active
+checkpoint (if any) is unaffected.
+
+**Quarantine, never delete.** When a checkpoint is rejected for any
+reason — corrupt metadata, SHA mismatch, missing report field,
+unexpected directory entries, wrong mode, stale identity, source-file
+drift, wrong schema version — its entire active directory is moved
+into `quarantine/`. The bytes are preserved exactly (no chmod, no
+rewrite) under a UUID-suffixed unique name. **No code path
+automatically deletes checkpoints.** Multiple failed attempts
+accumulate as multiple quarantine directories.
+
+**Heartbeat.** `heartbeat.json` records factual values only:
+`stage`, `total_shards`, `completed_shards`, `current_shard_key`,
+`retained_sentence_occurrence_count`, `dropped_empty_raw_count`,
+`dropped_empty_normalized_count`, `elapsed_seconds`,
+`input_dataset_revision`, `source_commit`. **Heartbeat failures
+propagate visibly** — they raise and abort the current run, while
+every successfully published checkpoint remains valid for the next
+run. The pipeline never silently swallows heartbeat errors.
+
+**Required flag.** `--source-commit` (40-char lowercase hex) is
+required when `--work-dir` is set and is recorded into every
+checkpoint's metadata and the heartbeat. The CLI rejects non-conforming
+values before any acquisition or model construction.
+
+A failure before final export preserves every previously-published
+checkpoint and the previously-completed output directory; the resume
+reuses the checkpoint bytes and only re-runs the shards that were not
+yet validated at the moment of failure.
 
 ## Publishing (optional, post-build)
 
