@@ -1,4 +1,4 @@
-"""Regression tests for the wtpsplit placement boundary (Phase 9A amendment).
+"""Regression tests for the wtpsplit placement boundary (Phase 9A amendment; Phase 9K placement-shape correction).
 
 The real wtpsplit 2.2.1 wraps a Hugging Face token-classification model in
 a custom ``PyTorchWrapper`` whose ``__getattr__`` delegates to the
@@ -6,9 +6,9 @@ a custom ``PyTorchWrapper`` whose ``__getattr__`` delegates to the
 
     SaT                                        (façade, exposes ``split``)
       .model -> PyTorchWrapper                  (delegation shell)
-          .model -> SubwordXLMForTokenClassification
-              .model       -> XLM-R backbone       (must NOT be the target)
-              .classifier  -> nn.Linear            (must NOT be the target)
+          .model -> SubwordXLMForTokenClassification   <-- placement target
+              .roberta     -> XLM-R backbone   (must NOT be touched)
+              .classifier  -> nn.Linear head   (must NOT be touched)
 
 Naively recursing through ``.model`` would land on the backbone; calling
 ``.to(device)`` there leaves the classifier head on CPU and risks a
@@ -18,6 +18,14 @@ The placement helper MUST select the *complete classifier* owned by the
 PyTorchWrapper, verify all of its parameters and buffers are on the
 requested device, and refuse to operate on a wrapper shape it does not
 recognize.
+
+The contract is purely "complete ``torch.nn.Module`` at ``wrapper.model``";
+the names of the backbone (``roberta`` / ``bert`` / ``xlm_roberta`` / …)
+and of the classification head (``classifier`` / ``score`` / ``head`` /
+…) are owned by the encoder family and are NOT preconditions. A naïve
+check for ``.model`` on the inner classifier (Phase 9A) wrongly rejected
+the real ``SubwordXLMForTokenClassification`` whose backbone is named
+``.roberta``.
 
 These tests do NOT import the real ``wtpsplit`` package so that the
 ``wtpsplit`` symbol never enters ``sys.modules`` during collection and
@@ -221,28 +229,36 @@ class TestClassifierPlacementMismatchedShapeFails:
         with pytest.raises(SegmentationError, match="torch.nn.Module"):
             _wtpsplit_mod.place_classifier(_BareFacade(), "mps")
 
-    def test_wrapper_with_non_classifier_inner_rejected(self, caps_cpu_only):
-        """If the PyTorchWrapper's ``.model`` is a torch module without
-        a complete-classifier shape, the helper must refuse it; we
-        refuse to gamble on a partial classifier.
+    def test_wrapper_with_torch_inner_accepted_regardless_of_submodule_names(
+        self, caps_cpu_only
+    ):
+        """A wrapper whose inner is *any* complete ``torch.nn.Module``
+        (regardless of whether it carries ``.classifier`` / ``.score``
+        or a backbone named ``.model``) is now accepted on CPU; the
+        new placement contract is purely "complete ``torch.nn.Module``
+        at ``wrapper.model``". The classification head's name is
+        version-fragile and is no longer a precondition.
         """
 
         class _BackboneOnly(nn.Module):
             def __init__(self) -> None:
                 super().__init__()
-                # No ``.classifier`` head — partial classifier.
+                # No ``.classifier`` head, no ``.model`` backbone.
                 self.linear = nn.Linear(4, 4)
                 self.config = type("Cfg", (), {})()
 
-        class _BadFacade:
+        class _Facade:
             def __init__(self) -> None:
                 self.model = _MockPyTorchWrapper(_BackboneOnly())
 
             def split(self, texts, **kwargs):
                 return [[t] for t in texts]
 
-        with pytest.raises(SegmentationError, match="classifier"):
-            _wtpsplit_mod.place_classifier(_BadFacade(), "cpu")
+        # CPU legacy path: silent no-op (the inner is a torch module
+        # but has no parameters that move on CPU; placement is a no-op
+        # in practice).
+        result = _wtpsplit_mod.place_classifier(_Facade(), "cpu")
+        assert result is not None
 
 
 class TestVerificationReadsClassifierNotFaçade:
@@ -829,40 +845,25 @@ class TestExtractClassifierShape:
         with pytest.raises(SegmentationError, match="wrapper"):
             _wtpsplit_mod._extract_classifier(_Facade())
 
-    def test_classifier_missing_backbone_attribute(self, caps_cpu_only):
-        class _ClassifierNoBackbone(nn.Module):
-            def __init__(self):
-                super().__init__()
-                # No ``.model`` attribute.
-                self.proj = nn.Linear(2, 2)
-                self.config = type("Cfg", (), {})()
+    def test_classifier_missing_inner_rejected(self, caps_cpu_only):
+        """A wrapper whose inner is missing ``.model`` must be
+        rejected at ``_extract_classifier`` time. We retain the
+        ``wrapper.model is None`` rejection path because it is a
+        legitimate sanity check (the wtpsplit wrapper must own a
+        model object).
+        """
+
+        class _WrapperWithNoneModel:
+            model = None
 
         class _Facade:
             def __init__(self):
-                self.model = _MockPyTorchWrapper(_ClassifierNoBackbone())
+                self.model = _WrapperWithNoneModel()
 
             def split(self, texts, **kwargs):
                 return [[t] for t in texts]
 
-        with pytest.raises(SegmentationError, match="backbone"):
-            _wtpsplit_mod._extract_classifier(_Facade())
-
-    def test_classifier_missing_head_attribute(self, caps_cpu_only):
-        class _ClassifierNoHead(nn.Module):
-            def __init__(self):
-                super().__init__()
-                self.model = nn.Linear(2, 2)
-                # No ``.classifier`` and no ``.score``.
-                self.config = type("Cfg", (), {})()
-
-        class _Facade:
-            def __init__(self):
-                self.model = _MockPyTorchWrapper(_ClassifierNoHead())
-
-            def split(self, texts, **kwargs):
-                return [[t] for t in texts]
-
-        with pytest.raises(SegmentationError, match="head"):
+        with pytest.raises(SegmentationError, match="wrapper"):
             _wtpsplit_mod._extract_classifier(_Facade())
 
 
@@ -973,6 +974,296 @@ class TestHasSupportedShape:
                 self.model = _MockPyTorchWrapper(_Classifier())
 
         assert _wtpsplit_mod.has_supported_shape(_Facade()) is True
+
+
+class TestFaithfulWtpsplitShape:
+    """Faithful regression: real wtpsplit classifier uses a registered
+    backbone attribute that is NOT ``.model``.
+
+    The real ``SubwordXLMForTokenClassification`` exposes its backbone
+    under the registered-submodule name chosen by the underlying
+    encoder: ``.roberta`` for XLM-RoBERTa backbones, ``.xlm_roberta`` /
+    ``.bert`` / ``.deberta`` for other encoder families. A complete
+    classifier may therefore call its backbone ``.roberta`` (or any
+    other name) and have no ``.model`` attribute of its own.
+
+    The placement adapter MUST:
+
+    1. Accept a wrapper whose inner classifier is a complete
+       ``torch.nn.Module`` with a registered backbone under any name
+       (``.roberta`` here).
+    2. Place the *complete classifier* (i.e. ``wrapper.model``)
+       exactly once -- never descend into the backbone.
+    3. Verify every recursively-registered parameter and buffer lives
+       on the requested device after ``.to(device)`` returns.
+    4. Refuse a wrapper whose inner is not a ``torch.nn.Module``.
+    5. Refuse a façade whose ``.model`` is not a
+       ``PyTorchWrapper``.
+    6. Refuse partial / no-op placement.
+    7. Refuse mixed-device parameters / buffers.
+    8. Treat ``has_supported_shape`` and ``_extract_classifier`` as
+       agreeing on the same structural contract.
+
+    These tests do NOT inspect or rely on the internal backbone name;
+    the contract is purely "complete ``torch.nn.Module`` at
+    ``wrapper.model``".
+    """
+
+    def _make_real_shape_classifier(self) -> nn.Module:
+        """Build a complete ``nn.Module`` whose backbone is named
+        ``.roberta`` (as in the real ``SubwordXLMForTokenClassification``).
+        """
+
+        class _RealBackbone(nn.Module):
+            def __init__(self) -> None:
+                super().__init__()
+                self.dense = nn.Linear(8, 8)
+
+        class _RealClassifier(nn.Module):
+            def __init__(self) -> None:
+                super().__init__()
+                # Registered backbone under a *non*-``.model`` name.
+                self.roberta = _RealBackbone()
+                # No ``.classifier`` / ``.score`` head required.
+                self.head = nn.Linear(8, 2)
+                self.config = type("Cfg", (), {"model_type": "xlm-roberta"})()
+
+        return _RealClassifier()
+
+    def _make_facade(self, inner: nn.Module) -> object:
+        class _Facade:
+            def __init__(self) -> None:
+                self.model = _MockPyTorchWrapper(inner)
+
+            def split(self, texts, **kwargs):
+                return [[t] for t in texts]
+
+        return _Facade()
+
+    # ------------------------------------------------------------------
+    # 1) Faithful regression: real-shape classifier with `.roberta`
+    # ------------------------------------------------------------------
+
+    def test_real_shape_with_roberta_backbone_is_accepted(self, caps_cpu_only):
+        """A real-shape ``SubwordXLMForTokenClassification`` (backbone
+        ``.roberta``, no ``.model`` of its own) must be accepted and
+        placed as a unit. With the old backbone-name assertion, the
+        helper raised ``"no backbone attribute (`.model`)"`` and the
+        smoke failed.
+        """
+        classifier = self._make_real_shape_classifier()
+        facade = self._make_facade(classifier)
+
+        # Sanity: the classifier indeed has no ``.model`` attribute.
+        assert not hasattr(classifier, "model")
+        # Sanity: it has a registered backbone under ``.roberta``.
+        assert isinstance(classifier.roberta, nn.Module)
+
+        placed = _wtpsplit_mod.place_classifier(facade, "cpu")
+        assert placed is classifier
+
+    def test_real_shape_classifier_not_backbone_is_placed(self, caps_cpu_only):
+        """The placement helper must place the *complete classifier*
+        (``wrapper.model``) and never descend into ``.roberta``. We
+        spy on the classifier's ``.to()`` to record exactly which
+        object it was called on.
+        """
+        captured: dict[str, object] = {}
+
+        classifier = self._make_real_shape_classifier()
+        original_to = classifier.to
+
+        def _spy_to(device):  # type: ignore[no-untyped-def]
+            captured["target"] = classifier
+            captured["device"] = device
+            return original_to(device)
+
+        classifier.to = _spy_to  # type: ignore[method-assign]
+        facade = self._make_facade(classifier)
+        _wtpsplit_mod.place_classifier(facade, "cpu")
+
+        assert captured.get("target") is classifier
+        assert captured.get("target") is not classifier.roberta
+        assert captured.get("device") == "cpu"
+
+    def test_real_shape_recursive_parameters_all_on_requested_device(
+        self, caps_cpu_only
+    ):
+        """Every registered parameter and buffer of the complete
+        classifier (including the ones inside ``.roberta`` and the
+        head) must be on the requested device after placement.
+        """
+        classifier = self._make_real_shape_classifier()
+        facade = self._make_facade(classifier)
+        _wtpsplit_mod.place_classifier(facade, "cpu")
+
+        # Walk every parameter recursively.
+        for name, tensor in classifier.named_parameters():
+            assert tensor.device.type == "cpu", (
+                f"parameter {name!r} device type {tensor.device.type!r} != 'cpu'"
+            )
+        for name, tensor in classifier.named_buffers():
+            assert tensor.device.type == "cpu", (
+                f"buffer {name!r} device type {tensor.device.type!r} != 'cpu'"
+            )
+
+    # ------------------------------------------------------------------
+    # 2) Preserved rejections: unrecognised wrapper shape
+    # ------------------------------------------------------------------
+
+    def test_facade_without_real_wrapper_rejected(self, caps_cpu_only):
+        """A façade whose ``.model`` is not a ``PyTorchWrapper`` is
+        still rejected. CPU path: silently no-ops (legacy test-double
+        path). Accelerator path: must raise.
+        """
+
+        class _Facade:
+            model = object()  # not a PyTorchWrapper
+
+            def split(self, texts, **kwargs):
+                return [[t] for t in texts]
+
+        # CPU legacy path: silent no-op.
+        result = _wtpsplit_mod.place_classifier(_Facade(), "cpu")
+        assert result is not None
+
+        # CUDA accelerator: must raise, never silently degrade.
+        with pytest.raises(SegmentationError):
+            _wtpsplit_mod.place_classifier(_Facade(), "cuda")
+
+        # MPS accelerator: must raise.
+        with pytest.raises(SegmentationError):
+            _wtpsplit_mod.place_classifier(_Facade(), "mps")
+
+    def test_wrapper_with_non_torch_inner_rejected(self, caps_cpu_only):
+        """If ``wrapper.model`` is not a ``torch.nn.Module``, the
+        helper must refuse it. CPU path: legacy no-op. Accelerator:
+        raise.
+        """
+
+        class _InnerNotTorch:
+            pass
+
+        class _Facade:
+            def __init__(self) -> None:
+                self.model = _MockPyTorchWrapper(_InnerNotTorch())  # type: ignore[arg-type]
+
+            def split(self, texts, **kwargs):
+                return [[t] for t in texts]
+
+        # CPU legacy: silent no-op.
+        _wtpsplit_mod.place_classifier(_Facade(), "cpu")
+        # CUDA accelerator: raise with a torch-module hint.
+        with pytest.raises(SegmentationError, match="torch.nn.Module"):
+            _wtpsplit_mod.place_classifier(_Facade(), "cuda")
+
+    # ------------------------------------------------------------------
+    # 3) Preserved rejections: partial / no-op / mixed-device placement
+    # ------------------------------------------------------------------
+
+    def test_partial_placement_silently_no_op_raises_on_cuda(self):
+        """A classifier whose ``.to("cuda")`` silently no-ops is
+        detected by the verification step (which reads every
+        parameter/buffer device) and surfaced as
+        :class:`SegmentationError`. Inference must not be called.
+        """
+        inference_calls: list[object] = []
+
+        class _NoOpClassifier(nn.Module):
+            def __init__(self) -> None:
+                super().__init__()
+                self.roberta = nn.Linear(2, 2)
+                self.head = nn.Linear(2, 2)
+                self.config = type("Cfg", (), {})()
+
+            def to(self, device):  # type: ignore[override]
+                return self
+
+        class _Facade:
+            def __init__(self) -> None:
+                self.model = _MockPyTorchWrapper(_NoOpClassifier())
+
+            def split(self, texts, **kwargs):
+                inference_calls.append(texts)
+                return [[t] for t in texts]
+
+        seg = SaTSentenceSegmenter(
+            model_factory=lambda *_a, **_kw: _Facade(),
+            caps=_Caps(cuda=True, mps=False),
+            device="cuda",
+        )
+        with pytest.raises(SegmentationError):
+            seg.split_batch(["a|b"], ["en"])
+        assert inference_calls == [], (
+            "model.split must not be called when placement failed"
+        )
+        assert seg.resolved_device is None
+
+    def test_mixed_device_parameters_raises(self, monkeypatch):
+        """A classifier whose parameters straddle two device types
+        after ``.to`` is detected by the verification step.
+        """
+
+        class _CpuParam:
+            device = type("D", (), {"type": "cpu"})()
+
+        class _CudaParam:
+            device = type("D", (), {"type": "cuda"})()
+
+        class _MixedClassifier(nn.Module):
+            def __init__(self) -> None:
+                super().__init__()
+                self.roberta = nn.Linear(2, 2)
+                self.head = nn.Linear(2, 2)
+                self.config = type("Cfg", (), {})()
+
+            def to(self, device):  # type: ignore[override]
+                return self
+
+            def parameters(self):  # type: ignore[override]
+                return iter([_CpuParam(), _CudaParam()])
+
+        class _Facade:
+            def __init__(self) -> None:
+                self.model = _MockPyTorchWrapper(_MixedClassifier())
+
+            def split(self, texts, **kwargs):
+                return [[t] for t in texts]
+
+        with pytest.raises(SegmentationError, match="multiple devices"):
+            _wtpsplit_mod.place_classifier(_Facade(), "cpu")
+
+    # ------------------------------------------------------------------
+    # 4) ``has_supported_shape`` and ``_extract_classifier`` agree
+    # ------------------------------------------------------------------
+
+    def test_has_supported_shape_and_extract_classifier_agree_real(self):
+        """For a real-shape ``SubwordXLMForTokenClassification``
+        (backbone ``.roberta``, no ``.model``), both
+        ``has_supported_shape`` and ``_extract_classifier`` must
+        accept the same wrapper.
+        """
+        classifier = self._make_real_shape_classifier()
+        facade = self._make_facade(classifier)
+        assert _wtpsplit_mod.has_supported_shape(facade) is True
+        extracted = _wtpsplit_mod._extract_classifier(facade)
+        assert extracted is classifier
+
+    def test_has_supported_shape_false_for_non_torch_inner(self):
+        """A façade whose ``wrapper.model`` is not a ``torch.nn.Module``
+        must be rejected by *both* helpers.
+        """
+
+        class _InnerNotTorch:
+            pass
+
+        class _Facade:
+            def __init__(self) -> None:
+                self.model = _MockPyTorchWrapper(_InnerNotTorch())  # type: ignore[arg-type]
+
+        assert _wtpsplit_mod.has_supported_shape(_Facade()) is False
+        with pytest.raises(SegmentationError, match="torch.nn.Module"):
+            _wtpsplit_mod._extract_classifier(_Facade())
 
 
 class TestIsTorchModule:

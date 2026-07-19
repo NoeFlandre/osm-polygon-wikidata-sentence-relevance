@@ -1,4 +1,4 @@
-"""Placement adapter for wtpsplit 2.2.1 (Phase 9A amendment).
+"""Placement adapter for wtpsplit 2.2.1 (Phase 9A amendment; Phase 9K placement-shape correction).
 
 This module isolates *every* wtpsplit-specific concern behind a small,
 narrowly-versioned surface:
@@ -10,9 +10,12 @@ narrowly-versioned surface:
 - :func:`_extract_classifier` descends *exactly one level* into the
   wrapper and returns the *complete* classifier (the
   ``SubwordXLMForTokenClassification`` instance). It refuses to
-  recurse, refuses shapes it does not recognise, and refuses wrappers
-  whose inner classifier lacks both a backbone (``classifier.model``)
-  and a head (``classifier.classifier`` / ``classifier.score``).
+  recurse and refuses shapes it does not recognise. It does NOT
+  assume the inner classifier calls its backbone ``.model`` or its
+  head ``.classifier`` / ``.score``; complete Transformers
+  classifiers register those submodules under encoder-family names
+  (``.roberta`` / ``.bert`` / etc.). The placement contract is
+  purely "complete ``torch.nn.Module`` at ``wrapper.model``".
 - :func:`_place_classifier` calls ``classifier.to(device)`` once and
   verifies every parameter and buffer now reports ``device.type ==
   device``. Partial placements raise.
@@ -130,14 +133,27 @@ def _extract_classifier(model: object) -> object:
 
         SaT                                       (façade)
           .model -> wtpsplit.extract.PyTorchWrapper
-              .model -> SubwordXLMForTokenClassification   <-- target
-                  .model      -> XLM-R backbone             (must NOT be touched)
-                  .classifier -> nn.Linear                  (must NOT be touched)
+              .model -> <complete torch.nn.Module>     <-- target
+                  .<backbone-name> -> encoder body
+                      (e.g. ``.roberta``, ``.bert``,
+                       ``.xlm_roberta``, ``.deberta``)
+                  .<head-name>     -> nn.Linear
+                      (e.g. ``.classifier``, ``.score``,
+                       ``.head``, or registered head name)
 
-    A naïve ``.model`` recursion would descend into the backbone and
-    silently leave the classifier head on its original device. We
-    refuse to recurse past the wrapper: the *complete* classifier is
-    the object held at ``wrapper.model``, full stop.
+    ``wrapper.model`` is the *complete* classifier used for inference.
+    The adapter must NOT descend into the backbone, must NOT inspect
+    the backbone's registered-submodule name (``roberta`` /
+    ``bert`` / etc.), and must NOT assume the classification head is
+    called ``classifier`` / ``score``. Naming of those internal
+    submodules is owned by the encoder family and changes between
+    wtpsplit / transformers releases; the placement contract is
+    purely "complete ``torch.nn.Module`` at ``wrapper.model``".
+
+    A naïve ``.model`` recursion would land on the backbone and leave
+    the head on its original device. We refuse to recurse past the
+    wrapper: the *complete* classifier is the object held at
+    ``wrapper.model``, full stop.
     """
     PyTorchWrapper = _load_wtpsplit_pytorch_wrapper_class()
     facade = model
@@ -166,21 +182,6 @@ def _extract_classifier(model: object) -> object:
             "`wrapper.model` is not a torch.nn.Module; the installed "
             "wrapper shape is unsupported "
             f"(got {type(classifier).__name__!r})"
-        )
-    # Require both a backbone (``.model``) and a head (``.classifier``
-    # or ``.score``). The real ``SubwordXLMForTokenClassification``
-    # always has both; refusing to guess is the whole point.
-    if not hasattr(classifier, "model"):
-        raise SegmentationError(
-            "SaTSentenceSegmenter: the complete classifier has no "
-            "backbone attribute (`.model`); the installed wrapper shape "
-            "is unsupported"
-        )
-    if not (hasattr(classifier, "classifier") or hasattr(classifier, "score")):
-        raise SegmentationError(
-            "SaTSentenceSegmenter: the complete classifier has no "
-            "classification head attribute (`.classifier`/`.score`); "
-            "the installed wrapper shape is unsupported"
         )
     return classifier
 

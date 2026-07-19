@@ -308,6 +308,40 @@ package remains pre-1.0 (currently `0.1.0`).
   `scripts/grid5000/submit_gpu_smoke.sh` in the sdist and still forbids
   `scripts/` paths in the wheel.
 
+### Fixed (Phase 9K — wtpsplit classifier placement shape)
+
+- `src/osm_polygon_sentence_relevance/sentences/_wtpsplit_device.py`:
+  the placement adapter was rejecting the *real* wtpsplit classifier
+  on Grid'5000 because `_extract_classifier` asserted that the
+  classifier at `wrapper.model` expose a backbone attribute named
+  `.model` and a head attribute named `.classifier` or `.score`.
+  Real `SubwordXLMForTokenClassification` registers its backbone
+  under `.roberta` (and other encoder families register it under
+  `.bert`, `.xlm_roberta`, `.deberta`, …) and the head under
+  whichever name the encoder family chose. The adapter now treats
+  the placement contract as purely "complete `torch.nn.Module` at
+  `wrapper.model`". The naïve backbone-name and head-name
+  `hasattr` checks were removed. The complete classifier is still
+  placed (and never recursed into), `.to(device)` is still called
+  exactly once, and every recursively-registered parameter and
+  buffer is still verified on the requested device afterwards. The
+  module docstring was updated to state the corrected contract.
+- `tests/unit/sentences/test_sat_placement.py`: added a new
+  `TestFaithfulWtpsplitShape` class with regression tests proving
+  that a wrapper whose inner is a complete `torch.nn.Module`
+  carrying its backbone under `.roberta` (no `.model`, no
+  `.classifier`, no `.score`) is now accepted, that placement
+  targets `wrapper.model` exactly once (never `.roberta`), that
+  every recursively-registered parameter and buffer lands on the
+  requested device, that `has_supported_shape` and
+  `_extract_classifier` agree on the same structural contract, and
+  that the previously-preserved rejections (no real wrapper, inner
+  not a `torch.nn.Module`, partial / no-op placement, mixed-device
+  parameters/buffers) still hold. Two old tests that asserted the
+  incorrect backbone-name precondition were removed; one was
+  reframed to assert the new contract. The top-of-file test
+  docstring was updated to describe the corrected shape.
+
 ### Fixed (Phase 9I-fix — `run_metadata.py` CLI dispatcher)
 
 - `scripts/grid5000/_run_metadata.py`: the smoke shell payload invokes
