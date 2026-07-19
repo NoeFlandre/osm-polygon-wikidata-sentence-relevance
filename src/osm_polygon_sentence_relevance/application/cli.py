@@ -87,6 +87,37 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Overwrite existing output directory",
     )
     parser.add_argument(
+        "--work-dir",
+        default=None,
+        help=(
+            "Optional persistent work directory for shard-level "
+            "checkpoints and a factual progress heartbeat. When "
+            "supplied, the pipeline publishes one checkpoint per "
+            "shard after segmentation, written under "
+            "${work_dir}/shards/active/<shard_key>/, and a "
+            "heartbeat.json updated at shard boundaries. A "
+            "subsequent invocation with the same work_dir resumes "
+            "from the last valid checkpoint; invalid or mismatched "
+            "checkpoints are moved into "
+            "${work_dir}/shards/quarantine/ with a UUID-suffixed "
+            "unique name and their original bytes are preserved. "
+            "Cannot overlap with --input-root or --output-dir. "
+            "Ignored when omitted (legacy no-work-directory mode)."
+        ),
+    )
+    parser.add_argument(
+        "--source-commit",
+        default=None,
+        help=(
+            "Source commit SHA (40 lowercase hex characters) to bind "
+            "each checkpoint and the heartbeat to a specific code "
+            "revision. Required when --work-dir is supplied; "
+            "ignored otherwise. The value is validated as a 40-char "
+            "lowercase hex string and is recorded verbatim into "
+            "every shard checkpoint."
+        ),
+    )
+    parser.add_argument(
         "--publish-dataset-id",
         help="Optional Hugging Face dataset ID to publish the export to "
         "(after a successful build). The target repository must already "
@@ -180,6 +211,35 @@ def _validate_args(parsed: argparse.Namespace) -> None:
     publish_dataset_id = parsed.publish_dataset_id
     publish_revision = parsed.publish_revision
     publish_commit_message = parsed.publish_commit_message
+
+    # ``--work-dir`` is optional and orthogonal to all publishing flags.
+    # We only validate the syntactic form here; overlap with input /
+    # output is checked by the pipeline itself (after argument
+    # validation), once the canonical paths are resolved.
+    work_dir = parsed.work_dir
+    if work_dir is not None:
+        if not isinstance(work_dir, str) or not work_dir.strip():
+            raise ValueError("work_dir must be a non-blank string when provided")
+        if work_dir != work_dir.strip():
+            raise ValueError(
+                "work_dir has surrounding whitespace; surrounding "
+                "whitespace is rejected, not silently normalized"
+            )
+        # ``--source-commit`` must be supplied when ``--work-dir`` is.
+        source_commit = parsed.source_commit
+        if source_commit is None:
+            raise ValueError(
+                "--source-commit is required when --work-dir is set; "
+                "provide a 40-char lowercase hex Git commit SHA"
+            )
+        if (
+            not isinstance(source_commit, str)
+            or not source_commit.strip()
+            or not __import__("re").match(r"^[0-9a-f]{40}$", source_commit.strip())
+        ):
+            raise ValueError(
+                "--source-commit must be a 40-character lowercase hex string"
+            )
 
     if publish_dataset_id is None:
         # A revision or commit message without a dataset id is invalid.
@@ -327,6 +387,9 @@ def main(
             # chain (Parquet metadata -> manifest -> statistics -> card);
             # local mode omits it (``None``).
             input_dataset_id=resolved.dataset_id,
+            work_dir=parsed_args.work_dir,
+            source_commit=parsed_args.source_commit,
+            model_name=parsed_args.sat_model,
         )
 
         summary = json.loads(_serialize_summary(res, resolved))

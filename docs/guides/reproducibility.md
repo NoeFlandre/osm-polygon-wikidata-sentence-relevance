@@ -154,6 +154,45 @@ documented in [the data contract](../reference/data-contract.md), gives strong e
 reproduction. Equality of just `manifest.sha256` is **not** by itself a
 universal cross-platform guarantee.
 
+## Restartable builds (`--work-dir`)
+
+A long build can be interrupted and resumed without re-running
+already-validated shards by passing an optional persistent work
+directory together with the explicit commit SHA:
+
+```bash
+uv run osm-polygon-sentence-relevance \
+  --input-dataset-id NoeFlandre/osm-polygon-wikidata-only \
+  --output-dir ./out \
+  --input-dataset-revision main \
+  --pipeline-version 0.1.0 \
+  --work-dir /path/to/persistent/work \
+  --source-commit $(git rev-parse HEAD)
+```
+
+The pipeline publishes each shard as a whole-directory atomic rename
+under `${work_dir}/shards/active/${shard_key}/` together with
+`heartbeat.json` at the work-directory root. A run-level
+`shards/inventory.json` records the discovered shard keys and each
+shard's source-file manifest (path / size / SHA-256). Each checkpoint
+re-binds to its source files on resume, so any change in bytes is
+detected even when file paths are unchanged; unchanged shards with
+matching manifests reuse their previously-published bytes, and joins /
+segmentation are not invoked for them. Invalid, mismatched, or
+content-drifted checkpoints are moved — never deleted — into
+`${work_dir}/shards/quarantine/` with a UUID-suffixed unique name. A
+single shard that fails validation never causes the others to be
+quarantined (per-shard reconciliation). Heartbeat failures propagate
+visibly; they never invalidate a previously-published checkpoint.
+
+Replacing `--work-dir` requires `--source-commit`. Source commits must
+match `^[0-9a-f]{40}$` (40 lowercase hex characters, e.g. a Git commit
+SHA); package `__version__` is no longer used as a substitute.
+
+`--work-dir` is optional: when omitted, the pipeline preserves its
+legacy behaviour (no checkpoint layer, no resume on interruption), and
+`--source-commit` is ignored.
+
 ## Verification commands
 
 ```bash

@@ -38,11 +38,33 @@ publish the completed export with `--publish-dataset-id` (plus optional
 `--publish-revision` and `--publish-commit-message`) after a successful
 build. The target repository must already exist and no token is accepted.
 
+Restartable builds are supported through an optional `--work-dir`
+flag. Each shard is published as a whole-directory atomic rename under
+`${work_dir}/shards/active/${shard_key}/` together with a factual
+progress `heartbeat.json` at the work-directory root. A subsequent
+invocation with the same `--work-dir` resumes from the last valid
+checkpoint; invalid or mismatched checkpoints are moved (never deleted)
+into `${work_dir}/shards/quarantine/${shard_key}.${utc}.${hex8}/` with
+their original bytes preserved byte-for-byte. Each checkpoint carries
+a per-file source manifest: the six source files referenced by the
+discovered `RegionShardSet` (paths, sizes, and SHA-256). On resume
+every source file is re-hashed; any change in bytes, presence or
+absence quarantines that shard's checkpoint. A run-level
+`shards/inventory.json` reconciles per shard (added / removed / changed
+/ unchanged), so adding or removing a single shard never invalidates
+the others. `--source-commit` (40-char lowercase hex) is required when
+`--work-dir` is set and is recorded into every checkpoint. Heartbeat
+failures propagate visibly; they never silently drop a previously
+published checkpoint. Cross-shard global deduplication and report
+aggregation remain identical with or without `--work-dir`. See
+[`docs/reference/cli.md`](docs/reference/cli.md) and
+[`docs/guides/reproducibility.md`](docs/guides/reproducibility.md).
+
 **Not implemented (out of scope):**
 
 - Hugging Face dataset repository creation.
 - Sentence classification or labelling.
-- Concurrency, resumable, or incremental builds.
+- Concurrency (parallel shard segmentation).
 
 ## Development setup
 
