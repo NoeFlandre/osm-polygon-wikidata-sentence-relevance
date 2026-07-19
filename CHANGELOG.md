@@ -308,6 +308,27 @@ package remains pre-1.0 (currently `0.1.0`).
   `scripts/grid5000/submit_gpu_smoke.sh` in the sdist and still forbids
   `scripts/` paths in the wheel.
 
+### Fixed (Phase 9I-fix — `run_metadata.py` CLI dispatcher)
+
+- `scripts/grid5000/_run_metadata.py`: the smoke shell payload invokes
+  this module as a CLI process with eight positional arguments, but the
+  module only defined `write_run_metadata(...)` as a top-level function
+  and had no `if __name__ == "__main__"` entry point. The CLI therefore
+  exited 0 without writing the destination, breaking the run-metadata
+  phase of every remote smoke. Added a thin `main(argv) -> int`
+  dispatcher that delegates to the existing function (no validation or
+  atomic-write logic is duplicated) and raises `SystemExit(main())`
+  under `__main__`. Exit codes are 0 (success), 1 (documented failure),
+  2 (usage error). All error messages remain path-free. The helper
+  contract — atomic no-clobber install, mode 0600 destination, seven-key
+  strict schema, `RunMetadataError` preservation — is unchanged.
+- `tests/unit/scripts/test_run_metadata_cli.py`: new RED→GREEN
+  subprocess-level tests proving the helper creates the seven-key JSON
+  at the destination, refuses to overwrite, writes mode 0600 inside a
+  0700 directory, rejects every documented failure path with a
+  non-zero exit code, and never echoes the supplied destination or any
+  supplied argument value in error output.
+
 ### Changed (Phase 9H — `CUDA_VISIBLE_DEVICES` is informational only)
 
 - `scripts/grid5000/run_gpu_smoke_job.sh`: the compute-node wrapper no

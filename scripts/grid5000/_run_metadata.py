@@ -60,8 +60,9 @@ import contextlib
 import json
 import os
 import re
+import sys
 import tempfile
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 
@@ -267,5 +268,90 @@ __all__ = [
     "EXPECTED_TOKENIZER_NAME",
     "RUN_METADATA_KEYS",
     "RunMetadataError",
+    "main",
     "write_run_metadata",
 ]
+
+
+# ---------------------------------------------------------------------------
+# CLI adapter (Phase 9I-fix).
+#
+# The smoke shell payload invokes this module as a command, with the
+# 9 positional arguments required to install one run-metadata artefact.
+# The CLI is a thin wrapper around :func:`write_run_metadata`; it
+# performs no validation or atomic-write logic of its own, so the
+# function-level guarantees are preserved end-to-end.
+#
+# Exit codes:
+#   * 0  - success; the destination file was installed atomically with
+#          mode 0600.
+#   * 1  - documented failure (validation, atomic-install, or
+#          destination-already-exists). A stable, path-free message is
+#          written to stderr.
+#   * 2  - usage error (wrong argument count). A stable usage message
+#          is written to stderr; no path or argument values are echoed.
+#
+# The CLI never overwrites an existing destination and never prints the
+# supplied path on any failure path.
+# ---------------------------------------------------------------------------
+
+_USAGE = (
+    "usage: _run_metadata.py "
+    "<destination> <source_commit> <model_name> <model_revision> "
+    "<tokenizer_name> <tokenizer_revision> <oar_job_id> <hostname>\n"
+)
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """CLI entry point. Returns a process exit code.
+
+    Parameters
+    ----------
+    argv:
+        Sequence of CLI arguments, excluding the program name. When
+        ``None``, :data:`sys.argv[1:]` is used (production).
+    """
+    if argv is None:
+        argv = sys.argv[1:]
+    args = list(argv)
+    if len(args) != 8:
+        sys.stderr.write(_USAGE)
+        return 2
+    (
+        destination,
+        source_commit,
+        model_name,
+        model_revision,
+        tokenizer_name,
+        tokenizer_revision,
+        oar_job_id,
+        hostname,
+    ) = args
+    try:
+        write_run_metadata(
+            destination,
+            source_commit,
+            model_name,
+            model_revision,
+            tokenizer_name,
+            tokenizer_revision,
+            oar_job_id,
+            hostname,
+        )
+    except RunMetadataError as exc:
+        sys.stderr.write(f"run_metadata failed: {exc}\n")
+        return 1
+    except FileExistsError:
+        # ``write_run_metadata`` already converts this to
+        # ``RunMetadataError("destination already exists; not
+        # overwriting")``; the bare ``FileExistsError`` branch is
+        # defensive only.
+        sys.stderr.write(
+            "run_metadata failed: destination already exists; not overwriting\n"
+        )
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
