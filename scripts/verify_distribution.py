@@ -168,16 +168,35 @@ def verify_sdist(sdist: Path) -> None:
     # Public Grid'5000 operational scripts must ship in the sdist
     # so a remote node can run the non-interactive smoke without a
     # checkout of the full repo. The supporting Python helpers that
-    # the payload imports must also ship.
-    for public_script in (
+    # the payload imports must also ship. The three shell scripts
+    # must additionally be regular files with mode 0755 so a
+    # downstream operator can invoke them without restoring the
+    # executable bit manually.
+    shell_scripts = (
         "scripts/grid5000/run_gpu_smoke.sh",
         "scripts/grid5000/run_gpu_smoke_job.sh",
+        "scripts/grid5000/submit_gpu_smoke.sh",
+    )
+    for public_script in (
+        *shell_scripts,
         "scripts/grid5000/gpu_preflight.py",
         "scripts/grid5000/_validate_artifact.py",
         "scripts/grid5000/_run_metadata.py",
     ):
         if not in_sdist(public_script):
             _fail(f"sdist is missing public script: {public_script}")
+
+    # Open the sdist once and inspect each shell script's TarInfo:
+    # it must be a regular file with mode 0o755.
+    with tarfile.open(sdist) as tf:
+        shell_members = {name: tf.getmember(f"{root}/{name}") for name in shell_scripts}
+    for rel, member in shell_members.items():
+        if not member.isreg():
+            _fail(f"sdist shell script is not a regular file: {rel}")
+        if member.mode != 0o755:
+            _fail(
+                f"sdist shell script mode must be 0755, got {oct(member.mode)}: {rel}"
+            )
 
     flat = "\n".join(names)
     for forbidden in SDIST_FORBIDDEN:

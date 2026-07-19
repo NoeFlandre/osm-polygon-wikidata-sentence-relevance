@@ -217,8 +217,13 @@ def _make_fake_sdist(
     tmp_path: Path,
     *,
     omit_script: str | None = None,
+    shell_script_modes: dict[str, int] | None = None,
 ) -> Path:
-    """Build a minimal fake sdist tarball on disk and return its path."""
+    """Build a minimal fake sdist tarball on disk and return its path.
+
+    ``shell_script_modes`` lets tests stamp each public shell
+    script with a custom TarInfo mode (default 0o755 for all).
+    """
     import tarfile
 
     sdist = tmp_path / "fake-0.1.0.tar.gz"
@@ -227,10 +232,13 @@ def _make_fake_sdist(
     public_scripts = [
         "scripts/grid5000/run_gpu_smoke.sh",
         "scripts/grid5000/run_gpu_smoke_job.sh",
+        "scripts/grid5000/submit_gpu_smoke.sh",
         "scripts/grid5000/gpu_preflight.py",
         "scripts/grid5000/_validate_artifact.py",
         "scripts/grid5000/_run_metadata.py",
     ]
+    shell_only = set(public_scripts[:3])
+    modes = shell_script_modes or {}
     with tarfile.open(sdist, "w:gz") as tf:
         # Minimal required sdist layout.
         for doc in [
@@ -271,6 +279,10 @@ def _make_fake_sdist(
             data = b"# stub\n"
             info = tarfile.TarInfo(f"{root}/{script}")
             info.size = len(data)
+            # Stamp shell scripts with their configured mode so
+            # tests can exercise the mode-0755 contract.
+            if script in shell_only:
+                info.mode = modes.get(script, 0o755)
             tf.addfile(info, io.BytesIO(data))
     return sdist
 
@@ -283,6 +295,7 @@ class TestVerifierRequiresPublicScriptsInSdist:
         [
             "scripts/grid5000/run_gpu_smoke.sh",
             "scripts/grid5000/run_gpu_smoke_job.sh",
+            "scripts/grid5000/submit_gpu_smoke.sh",
             "scripts/grid5000/gpu_preflight.py",
             "scripts/grid5000/_validate_artifact.py",
             "scripts/grid5000/_run_metadata.py",
@@ -300,3 +313,33 @@ class TestVerifierRequiresPublicScriptsInSdist:
         sdist = _make_fake_sdist(tmp_path)
         # Should not raise.
         v.verify_sdist(sdist)
+
+
+class TestVerifierRequiresShellScriptMode0755:
+    """Each public shell script in the sdist must be a regular file
+    with mode 0o755. Stamping it with any other permission (e.g.
+    the historical 0o711) must fail verification so a downstream
+    operator never has to restore the executable bit manually."""
+
+    @pytest.mark.parametrize(
+        ("script", "bad_mode"),
+        [
+            ("scripts/grid5000/run_gpu_smoke.sh", 0o711),
+            ("scripts/grid5000/run_gpu_smoke.sh", 0o644),
+            ("scripts/grid5000/run_gpu_smoke_job.sh", 0o711),
+            ("scripts/grid5000/run_gpu_smoke_job.sh", 0o600),
+            ("scripts/grid5000/submit_gpu_smoke.sh", 0o711),
+            ("scripts/grid5000/submit_gpu_smoke.sh", 0o755 ^ 0o001),
+        ],
+    )
+    def test_incorrectly_permissioned_shell_script_rejected(
+        self, tmp_path: Path, script: str, bad_mode: int
+    ) -> None:
+        v = _load_verifier()
+        sdist = _make_fake_sdist(
+            tmp_path,
+            shell_script_modes={script: bad_mode},
+        )
+        with pytest.raises(SystemExit) as exc_info:
+            v.verify_sdist(sdist)
+        assert exc_info.value.code == 1
