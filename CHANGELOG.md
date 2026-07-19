@@ -222,6 +222,30 @@ package remains pre-1.0 (currently `0.1.0`).
 - Sentence classification or labelling.
 - Concurrency, resumable builds, or incremental builds.
 
+### Added (Phase 9B -- Grid'5000 GPU smoke tooling, safety amendment)
+- `scripts/grid5000/gpu_preflight.py`: read-only preflight snapshot
+  proving Linux, OAR allocation, `torch.cuda.is_available()`, exactly
+  one visible NVIDIA device; emits a stable JSON record (OAR job ID,
+  hostname, Torch/CUDA versions, device identity) to stdout.
+- `scripts/grid5000/run_gpu_smoke.sh`: the OAR job payload. Requires
+  `OAR_JOB_ID` and `CUDA_VISIBLE_DEVICES`, the locked interpreter at
+  `${REPO_ROOT}/.venv/bin/python`, and caller-provided persistent
+  `HF_HOME` and `SMOKE_LOG_DIR`. The validator is invoked by
+  absolute script path (`${ARTIFACT_VALIDATOR}`) so the payload
+  works from any working directory. Per-phase cleanup traps remove
+  every temporary file on success, failure, or interruption.
+  Restricted `umask 077` for log permissions.
+- `scripts/grid5000/_validate_artifact.py`: private reusable
+  validators (`validate_preflight`, `validate_smoke_result`) and
+  an atomic no-clobber install helper (`install_artifact` using
+  `os.link`). Both validators enforce an exact-schema key set
+  (missing or extra keys rejected with a stable, path-free message);
+  finite-number and bool-rejection contract; cleanup-failure path
+  raises `ArtifactValidationError` without echoing paths.
+- Path-redaction, collision-safe atomic writes, OAR plan correction,
+  commit-based remote reproducibility, cache staging plan: see
+  `docs/guides/grid5000.md` and `tests/unit/scripts/`.
+
 ## [0.1.0]
 - Initial pre-release: deterministic OSM-polygon → Wikipedia/Wikivoyage
   sentence-relevance dataset construction with read-only Hugging Face

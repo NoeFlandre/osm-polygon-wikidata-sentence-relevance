@@ -19,6 +19,8 @@ pre-1.0 (alpha).
   [Data contract](reference/data-contract.md)
 - **I want the why behind the package layout** →
   [ADR 0001: Domain package layout](architecture/decisions/0001-domain-package-layout.md)
+- **I want to run a SaT GPU smoke test on Grid'5000** →
+  [Grid'5000 CUDA smoke](guides/grid5000.md)
 
 ## Repository layout
 
