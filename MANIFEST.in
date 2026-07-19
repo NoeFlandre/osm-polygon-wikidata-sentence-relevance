@@ -13,6 +13,7 @@ include .python-version
 
 recursive-include docs *.md
 recursive-include scripts *.py
+recursive-include scripts *.sh
 recursive-include tests *.py
 
 # Exclude caches, build output, data, credentials, model weights, and

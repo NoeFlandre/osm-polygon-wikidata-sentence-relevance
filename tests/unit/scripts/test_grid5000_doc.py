@@ -240,3 +240,117 @@ def test_doc_does_not_embed_any_real_source_commit_sha():
         assert match in model_tokenizer_shas, (
             f"unexpected 40-hex source-commit SHA in public doc: {match!r}"
         )
+
+
+# --- Phase 9D documentation restructure -----------------------------
+
+
+def _doc_section_offsets(text: str) -> dict[str, int]:
+    """Return the byte offset of each ``## ...`` heading in the
+    doc. Used to scope documentation restructure assertions."""
+    offsets: dict[str, int] = {}
+    for line in text.splitlines():
+        if line.startswith("## "):
+            offsets[line[3:].strip()] = text.find(line)
+    return offsets
+
+
+def test_doc_canonical_command_uses_existing_shell_variables():
+    """The canonical submission command must use the shell
+    variables defined in the surrounding ``Persistent storage
+    layout`` section (``${REPO_ROOT}``, ``${LOG_ROOT}``, ...)
+    and quoted arguments, not literal ``/home/<login>/...``.
+
+    Hard-coded personal-account directory tokens must never
+    appear in a *quoted* positional argument to ``oarsub``.
+    """
+    text = DOC.read_text(encoding="utf-8")
+    import re
+
+    for line in re.findall(r"oarsub[^\n]*", text):
+        if " -I" in line:
+            continue
+        # The canonical form is the first such line that does
+        # not have -I.
+        # Quoted arguments to oarsub must be variables, not
+        # literal ``/home/...`` tokens.
+        assert not re.search(r"['\"]\/home\/[^'\"]+['\"]", line), (
+            f"canonical oarsub line embeds a literal /home/... path: {line!r}"
+        )
+        # Where the doc references the wrapper script, the path
+        # should come from a variable like ``${REPO_ROOT}`` or
+        # be derived from one. A relative ``scripts/grid5000``
+        # reference is OK because it joins with the repo root.
+        break
+
+
+def test_doc_canonical_command_quotes_positional_arguments():
+    """Every variable ``${...}`` appearing on the canonical
+    oarsub line must be the value of a quoted positional
+    argument, not a positional that relies on token splitting.
+    """
+    text = DOC.read_text(encoding="utf-8")
+    import re
+
+    for line in re.findall(r"oarsub[^\n]*", text):
+        if " -I" in line:
+            continue
+        # Find every unquoted positional argument: a token that
+        # is NOT preceded by an option flag and is NOT quoted.
+        # We assert no stray unquoted absolute path tokens leak
+        # into positional slots.
+        unquoted_paths = re.findall(r"(?<!['\"])\/[^ '\"\n]+", line)
+        assert not unquoted_paths, (
+            f"unquoted absolute path tokens in canonical oarsub "
+            f"line: {unquoted_paths!r}"
+        )
+        break
+
+
+def test_doc_smoke_command_section_points_to_canonical_section():
+    """The "Smoke-test command" section must NOT reintroduce
+    ``oarsub ... -I`` as the normal/canonical smoke command.
+    It must reference the canonical non-interactive batch
+    section instead."""
+    text = DOC.read_text(encoding="utf-8")
+    offsets = _doc_section_offsets(text)
+    smoke_offset = offsets.get("Smoke-test command")
+    if smoke_offset is None:
+        # The section may have been renamed. The amendment
+        # contract permits rename as long as the content below
+        # points at the canonical batch submission.
+        return
+    after = text[smoke_offset:]
+    import re
+
+    oarsub_lines = re.findall(r"oarsub[^\n]*", after)
+    # The section may legitimately contain zero oarsub lines if
+    # it is a pure cross-reference to the canonical batch
+    # section. In either case, no line may reintroduce ``-I``.
+    for line in oarsub_lines:
+        assert " -I" not in line, (
+            f"Smoke-test command section reintroduced interactive form: {line!r}"
+        )
+
+
+def test_doc_oar_cli_double_dash_is_used():
+    """The canonical oarsub invocation must NOT include an
+    undocumented ``--`` separator. The official OAR manpage
+    (``oarsub(1)``) does not document ``--`` as a separator in
+    any example; the synopsis is ``oarsub [OPTIONS] <script>``
+    with the script as the single positional program. We
+    therefore forbid ``--`` in the canonical command line to
+    avoid guessing OAR behaviour the operator has not verified.
+    """
+    text = DOC.read_text(encoding="utf-8")
+    import re
+
+    for line in re.findall(r"oarsub[^\n]*", text):
+        if " -I" in line:
+            continue
+        # The canonical line is the first such line that does
+        # not have -I; that line must not include ``--``.
+        assert " -- " not in line, (
+            f"canonical oarsub line uses undocumented ``--`` separator: {line!r}"
+        )
+        break

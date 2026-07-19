@@ -133,6 +133,10 @@ def verify_wheel(wheel: Path) -> None:
                 _fail(f"wheel contains forbidden path: {n}")
         if n.startswith("docs/") or "local-docs" in n:
             _fail(f"wheel contains documentation: {n}")
+        # Operational shell scripts and the scripts/ package must
+        # never leak into the wheel as installed modules.
+        if n.endswith(".sh") or n.startswith("scripts/") or "/scripts/" in n:
+            _fail(f"wheel contains operational script path: {n}")
 
 
 def verify_sdist(sdist: Path) -> None:
@@ -160,6 +164,20 @@ def verify_sdist(sdist: Path) -> None:
         _fail("sdist is missing source tree (src/)")
     if not in_sdist("tests"):
         _fail("sdist is missing tests/")
+
+    # Public Grid'5000 operational scripts must ship in the sdist
+    # so a remote node can run the non-interactive smoke without a
+    # checkout of the full repo. The supporting Python helpers that
+    # the payload imports must also ship.
+    for public_script in (
+        "scripts/grid5000/run_gpu_smoke.sh",
+        "scripts/grid5000/run_gpu_smoke_job.sh",
+        "scripts/grid5000/gpu_preflight.py",
+        "scripts/grid5000/_validate_artifact.py",
+        "scripts/grid5000/_run_metadata.py",
+    ):
+        if not in_sdist(public_script):
+            _fail(f"sdist is missing public script: {public_script}")
 
     flat = "\n".join(names)
     for forbidden in SDIST_FORBIDDEN:

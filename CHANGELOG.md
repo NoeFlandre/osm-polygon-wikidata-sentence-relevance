@@ -246,6 +246,35 @@ package remains pre-1.0 (currently `0.1.0`).
   commit-based remote reproducibility, cache staging plan: see
   `docs/guides/grid5000.md` and `tests/unit/scripts/`.
 
+### Added (Phase 9D — non-interactive Grid'5000 GPU smoke jobs)
+- `scripts/grid5000/run_gpu_smoke_job.sh`: non-interactive OAR batch
+  entrypoint that `oarsub` invokes inside the allocation. The scheduler,
+  not the local SSH transport, owns job lifetime, which removes the
+  interactive-`-I` frag failure mode. The script requires the scheduler-set
+  `OAR_JOB_ID` (validated as exactly decimal digits) and
+  `CUDA_VISIBLE_DEVICES`, and the four positional arguments
+  `REPO_ROOT HF_HOME LOG_ROOT EXPECTED_SOURCE_COMMIT`. It strictly
+  canonicalises each path (absolute, no traversal, no symlink in the
+  resolved chain), refuses ephemeral node-local storage, and invokes the
+  committed `run_gpu_smoke.sh` payload exactly once, capturing stdout,
+  stderr, and the real exit code without masking, retry, or CPU/MPS/auto
+  fallback. On a zero smoke exit it enforces an exact six-artifact success
+  contract: exactly six direct entries in a mode-0700 directory, each an
+  expected regular file (mode 0600); any unexpected or missing entry fails
+  the contract while preserving all artefacts for forensic inspection.
+- Public docs (`docs/guides/grid5000.md`) restructured so the canonical
+  submission path is the non-interactive batch form and the interactive
+  `-I` form is retained only as a human-held debugging option, never as the
+  smoke command. The canonical `oarsub` line uses the caller's exported
+  `${REPO_ROOT}`, `${HF_HOME}`, `${LOG_ROOT}`, and `${SOURCE_COMMIT}`
+  variables with quoted positional arguments and no personal absolute paths.
+- `tests/unit/scripts/test_run_gpu_smoke_job_sh.py`: RED→GREEN contract
+  tests for the batch wrapper (path canonicalisation, `OAR_JOB_ID`
+  validation, exact four-positional-argument check, six-artifact success
+  contract, failure-code preservation, and a forbidden-pattern audit).
+- `MANIFEST.in` now ships the public Grid'5000 shell scripts (`scripts/*.sh`)
+  in the sdist; the wheel remains package-code only.
+
 ## [0.1.0]
 - Initial pre-release: deterministic OSM-polygon → Wikipedia/Wikivoyage
   sentence-relevance dataset construction with read-only Hugging Face

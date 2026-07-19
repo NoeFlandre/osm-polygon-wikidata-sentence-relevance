@@ -7,6 +7,7 @@ to themselves; they exercise the actual zip-scanning logic.
 
 from __future__ import annotations
 
+import io
 import zipfile
 from pathlib import Path
 
@@ -183,3 +184,119 @@ class TestVerifierRejectsMissingFacade:
         wheel = _make_fake_wheel(tmp_path)
         # Should not raise.
         v.verify_wheel(wheel)
+
+
+class TestVerifierRejectsOperationalScriptsInWheel:
+    """Operational shell scripts and the scripts/ package must never
+    leak into the installed wheel."""
+
+    def test_shell_script_in_wheel_rejected(self, tmp_path: Path) -> None:
+        v = _load_verifier()
+        wheel = _make_fake_wheel(tmp_path)
+        prefix = "osm_polygon_sentence_relevance/"
+        with zipfile.ZipFile(wheel, "a") as zf:
+            zf.writestr(
+                f"{prefix}scripts/grid5000/run_gpu_smoke_job.sh", b"#!/bin/sh\n"
+            )
+        with pytest.raises(SystemExit) as exc_info:
+            v.verify_wheel(wheel)
+        assert exc_info.value.code == 1
+
+    def test_scripts_package_dir_in_wheel_rejected(self, tmp_path: Path) -> None:
+        v = _load_verifier()
+        wheel = _make_fake_wheel(tmp_path)
+        prefix = "osm_polygon_sentence_relevance/"
+        with zipfile.ZipFile(wheel, "a") as zf:
+            zf.writestr(f"{prefix}scripts/verify_distribution.py", b"# stub\n")
+        with pytest.raises(SystemExit) as exc_info:
+            v.verify_wheel(wheel)
+        assert exc_info.value.code == 1
+
+
+def _make_fake_sdist(
+    tmp_path: Path,
+    *,
+    omit_script: str | None = None,
+) -> Path:
+    """Build a minimal fake sdist tarball on disk and return its path."""
+    import tarfile
+
+    sdist = tmp_path / "fake-0.1.0.tar.gz"
+    root = "osm_polygon_sentence_relevance-0.1.0"
+
+    public_scripts = [
+        "scripts/grid5000/run_gpu_smoke.sh",
+        "scripts/grid5000/run_gpu_smoke_job.sh",
+        "scripts/grid5000/gpu_preflight.py",
+        "scripts/grid5000/_validate_artifact.py",
+        "scripts/grid5000/_run_metadata.py",
+    ]
+    with tarfile.open(sdist, "w:gz") as tf:
+        # Minimal required sdist layout.
+        for doc in [
+            "docs/architecture/overview.md",
+            "docs/guides/getting-started.md",
+            "docs/guides/development.md",
+            "docs/guides/reproducibility.md",
+            "docs/reference/api.md",
+            "docs/reference/cli.md",
+            "docs/reference/data-contract.md",
+            "docs/index.md",
+        ]:
+            info = tarfile.TarInfo(f"{root}/{doc}")
+            info.size = 0
+            tf.addfile(info)
+        for gov in [
+            "README.md",
+            "LICENSE",
+            "CHANGELOG.md",
+            "CONTRIBUTING.md",
+            "SECURITY.md",
+            "MANIFEST.in",
+            "pyproject.toml",
+        ]:
+            info = tarfile.TarInfo(f"{root}/{gov}")
+            info.size = 0
+            tf.addfile(info)
+        # src/ and tests/ minimal placeholders.
+        for rel in ["src/dummy.py", "tests/dummy.py"]:
+            data = b"# stub\n"
+            info = tarfile.TarInfo(f"{root}/{rel}")
+            info.size = len(data)
+            tf.addfile(info, io.BytesIO(data))
+        # Public scripts.
+        for script in public_scripts:
+            if omit_script == script:
+                continue
+            data = b"# stub\n"
+            info = tarfile.TarInfo(f"{root}/{script}")
+            info.size = len(data)
+            tf.addfile(info, io.BytesIO(data))
+    return sdist
+
+
+class TestVerifierRequiresPublicScriptsInSdist:
+    """The public Grid'5000 operational scripts must ship in the sdist."""
+
+    @pytest.mark.parametrize(
+        "missing",
+        [
+            "scripts/grid5000/run_gpu_smoke.sh",
+            "scripts/grid5000/run_gpu_smoke_job.sh",
+            "scripts/grid5000/gpu_preflight.py",
+            "scripts/grid5000/_validate_artifact.py",
+            "scripts/grid5000/_run_metadata.py",
+        ],
+    )
+    def test_missing_public_script_rejected(self, tmp_path: Path, missing: str) -> None:
+        v = _load_verifier()
+        sdist = _make_fake_sdist(tmp_path, omit_script=missing)
+        with pytest.raises(SystemExit) as exc_info:
+            v.verify_sdist(sdist)
+        assert exc_info.value.code == 1
+
+    def test_complete_sdist_accepted(self, tmp_path: Path) -> None:
+        v = _load_verifier()
+        sdist = _make_fake_sdist(tmp_path)
+        # Should not raise.
+        v.verify_sdist(sdist)
