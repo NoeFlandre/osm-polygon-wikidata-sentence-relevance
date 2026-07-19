@@ -46,10 +46,10 @@ set -euo pipefail
 
 umask 077
 
-# --- Positional arguments (exactly eight required) --------------------
+# --- Positional arguments (exactly nine required) --------------------
 
-if [ "$#" -ne 8 ]; then
-    echo "submit_gpu_build: exactly eight positional arguments are required" >&2
+if [ "$#" -ne 9 ]; then
+    echo "submit_gpu_build: exactly nine positional arguments are required" >&2
     exit 1
 fi
 
@@ -62,6 +62,10 @@ fi
 #   $6 = OUTPUT_DIR
 #   $7 = EXPECTED_SOURCE_COMMIT  (40 lowercase hex)
 #   $8 = INPUT_REVISION          (40 lowercase hex; never "main")
+#   $9 = BATCH_SIZE              (positive integer; no default;
+#       the remote launcher must receive an explicit value.
+#       128 is documented as the CLI's ordinary-use default, but
+#       the launcher is not allowed to fall back to it silently.)
 REPO_ROOT="${1}"; readonly REPO_ROOT
 HF_HOME="${2}"; readonly HF_HOME
 LOG_ROOT="${3}"; readonly LOG_ROOT
@@ -70,6 +74,7 @@ WORK_DIR="${5}"; readonly WORK_DIR
 OUTPUT_DIR="${6}"; readonly OUTPUT_DIR
 EXPECTED_SOURCE_COMMIT="${7}"; readonly EXPECTED_SOURCE_COMMIT
 INPUT_REVISION="${8}"; readonly INPUT_REVISION
+BATCH_SIZE="${9}"; readonly BATCH_SIZE
 
 # --- Path validation: absolute, non-empty, traversal-free, no symlink -
 
@@ -210,6 +215,40 @@ if [[ ! "${INPUT_REVISION}" =~ ^[0-9a-f]{40}$ ]]; then
     exit 1
 fi
 
+# --- BATCH_SIZE: positive integer (Phase 9M-B) -----------------------
+#
+# Reject booleans (true/false in any case), leading/trailing
+# whitespace, leading zeros that would change the value, zero,
+# negative values, decimal values, and any non-digit content.
+# bash arithmetic expansion with /0 is used as the canonical
+# positive-integer probe; a non-integer or zero value raises an
+# arithmetic error under ``set -e``.
+if [ -z "${BATCH_SIZE}" ]; then
+    echo "submit_gpu_build: BATCH_SIZE is empty" >&2
+    exit 1
+fi
+case "${BATCH_SIZE}" in
+    [Tt][Rr][Uu][Ee]|[Ff][Aa][Ll][Ss][Ee])
+        echo "submit_gpu_build: BATCH_SIZE is a boolean (got ${BATCH_SIZE}); a positive integer is required" >&2
+        exit 1
+        ;;
+esac
+if [[ ! "${BATCH_SIZE}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "submit_gpu_build: BATCH_SIZE must be a positive integer with no leading zeros (got ${BATCH_SIZE})" >&2
+    exit 1
+fi
+# Confirm the parsed value is genuinely positive (>0) using bash
+# arithmetic. Arithmetic substitution raises an error under
+# ``set -e`` if the expression yields 0 or evaluates non-numeric.
+if [ "$((BATCH_SIZE / BATCH_SIZE))" -ne 1 ] 2>/dev/null; then
+    echo "submit_gpu_build: BATCH_SIZE must be > 0 (got ${BATCH_SIZE})" >&2
+    exit 1
+fi
+if [ "${BATCH_SIZE}" -lt 1 ]; then
+    echo "submit_gpu_build: BATCH_SIZE must be >= 1 (got ${BATCH_SIZE})" >&2
+    exit 1
+fi
+
 # --- Compute-node wrapper presence + executable ----------------------
 
 WRAPPER="${REPO_ROOT}/scripts/grid5000/run_gpu_build_job.sh"
@@ -258,8 +297,9 @@ QUOTED_WORK="$(shell_quote "${WORK_DIR}")"
 QUOTED_OUTPUT="$(shell_quote "${OUTPUT_DIR}")"
 QUOTED_COMMIT="$(shell_quote "${EXPECTED_SOURCE_COMMIT}")"
 QUOTED_REVISION="$(shell_quote "${INPUT_REVISION}")"
+QUOTED_BATCH="$(shell_quote "${BATCH_SIZE}")"
 
-COMMAND_STRING="exec ${QUOTED_WRAPPER} ${QUOTED_REPO} ${QUOTED_HF} ${QUOTED_LOG} ${QUOTED_INPUT} ${QUOTED_WORK} ${QUOTED_OUTPUT} ${QUOTED_COMMIT} ${QUOTED_REVISION}"
+COMMAND_STRING="exec ${QUOTED_WRAPPER} ${QUOTED_REPO} ${QUOTED_HF} ${QUOTED_LOG} ${QUOTED_INPUT} ${QUOTED_WORK} ${QUOTED_OUTPUT} ${QUOTED_COMMIT} ${QUOTED_REVISION} ${QUOTED_BATCH}"
 
 # --- Submit exactly once --------------------------------------------
 #

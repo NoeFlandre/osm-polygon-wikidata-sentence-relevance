@@ -121,11 +121,11 @@ def test_submit_script_has_no_forbidden_patterns(script_text):
         assert pat not in script_text, f"forbidden pattern in submit helper: {pat!r}"
 
 
-def test_submit_script_documents_eight_positional_arguments(script_text):
-    for n in range(1, 9):
+def test_submit_script_documents_nine_positional_arguments(script_text):
+    for n in range(1, 10):
         assert f"${n}" in script_text
-    assert '"$#" -ne 8' in script_text or "[ $# -ne 8 ]" in script_text, (
-        "expected guard requiring exactly eight positional arguments"
+    assert '"$#" -ne 9' in script_text or "[ $# -ne 9 ]" in script_text, (
+        "expected guard requiring exactly nine positional arguments"
     )
 
 
@@ -222,6 +222,7 @@ def _make_fake_compute_wrapper(tmp_path: Path) -> Path:
         'printf "%s\\n" "$6" > "${cap}.arg6"\n'
         'printf "%s\\n" "$7" > "${cap}.arg7"\n'
         'printf "%s\\n" "$8" > "${cap}.arg8"\n'
+        'printf "%s\\n" "$9" > "${cap}.arg9"\n'
         'printf "%s\\n" "$#" > "${cap}.count"\n'
         'touch "${cap}.ran"\n'
         "exit 0\n"
@@ -268,6 +269,7 @@ def _run_submit(
     output_dir: Path,
     source_commit: str,
     input_revision: str,
+    batch_size: str = "128",
     extra_args: list[str] | None = None,
     env: dict[str, str] | None = None,
     wrapper_present: bool = True,
@@ -301,6 +303,7 @@ def _run_submit(
         str(output_dir),
         source_commit,
         input_revision,
+        batch_size,
     ]
     if extra_args:
         args.extend(extra_args)
@@ -329,7 +332,7 @@ class TestArgumentCount:
             timeout=30,
         )
         assert proc.returncode != 0
-        assert "exactly eight positional arguments" in proc.stderr
+        assert "exactly nine positional arguments" in proc.stderr
 
     def test_three_args_fails(self, tmp_path):
         proc = subprocess.run(
@@ -342,7 +345,7 @@ class TestArgumentCount:
         )
         assert proc.returncode != 0
 
-    def test_nine_args_fails(self, tmp_path):
+    def test_ten_args_fails(self, tmp_path):
         layout = _make_persistent_layout(tmp_path)
         proc = _run_submit(
             tmp_path,
@@ -378,6 +381,7 @@ class TestPathGuards:
                 str(layout["output_dir"]),
                 TEST_SOURCE_COMMIT,
                 TEST_INPUT_REVISION,
+                "128",
             ],
             cwd=str(tmp_path),
             env={
@@ -555,6 +559,146 @@ class TestCommitAndRevisionGuard:
         assert proc.returncode != 0
 
 
+# --- Batch-size guards (Phase 9M-B) -----------------------------------
+
+
+class TestBatchSizeGuard:
+    def test_zero_batch_size_rejected(self, tmp_path):
+        layout = _make_persistent_layout(tmp_path)
+        proc = _run_submit(
+            tmp_path,
+            repo_root=layout["repo_root"],
+            hf_home=layout["hf_home"],
+            log_root=layout["log_root"],
+            input_root=layout["input_root"],
+            work_dir=layout["work_dir"],
+            output_dir=layout["output_dir"],
+            source_commit=TEST_SOURCE_COMMIT,
+            input_revision=TEST_INPUT_REVISION,
+            batch_size="0",
+        )
+        assert proc.returncode != 0
+        assert "BATCH_SIZE" in proc.stderr
+
+    def test_negative_batch_size_rejected(self, tmp_path):
+        layout = _make_persistent_layout(tmp_path)
+        proc = _run_submit(
+            tmp_path,
+            repo_root=layout["repo_root"],
+            hf_home=layout["hf_home"],
+            log_root=layout["log_root"],
+            input_root=layout["input_root"],
+            work_dir=layout["work_dir"],
+            output_dir=layout["output_dir"],
+            source_commit=TEST_SOURCE_COMMIT,
+            input_revision=TEST_INPUT_REVISION,
+            batch_size="-1",
+        )
+        assert proc.returncode != 0
+        assert "BATCH_SIZE" in proc.stderr
+
+    def test_decimal_batch_size_rejected(self, tmp_path):
+        layout = _make_persistent_layout(tmp_path)
+        proc = _run_submit(
+            tmp_path,
+            repo_root=layout["repo_root"],
+            hf_home=layout["hf_home"],
+            log_root=layout["log_root"],
+            input_root=layout["input_root"],
+            work_dir=layout["work_dir"],
+            output_dir=layout["output_dir"],
+            source_commit=TEST_SOURCE_COMMIT,
+            input_revision=TEST_INPUT_REVISION,
+            batch_size="12.5",
+        )
+        assert proc.returncode != 0
+        assert "BATCH_SIZE" in proc.stderr
+
+    def test_bool_true_batch_size_rejected(self, tmp_path):
+        layout = _make_persistent_layout(tmp_path)
+        proc = _run_submit(
+            tmp_path,
+            repo_root=layout["repo_root"],
+            hf_home=layout["hf_home"],
+            log_root=layout["log_root"],
+            input_root=layout["input_root"],
+            work_dir=layout["work_dir"],
+            output_dir=layout["output_dir"],
+            source_commit=TEST_SOURCE_COMMIT,
+            input_revision=TEST_INPUT_REVISION,
+            batch_size="true",
+        )
+        assert proc.returncode != 0
+        assert "BATCH_SIZE" in proc.stderr
+
+    def test_bool_false_batch_size_rejected(self, tmp_path):
+        layout = _make_persistent_layout(tmp_path)
+        proc = _run_submit(
+            tmp_path,
+            repo_root=layout["repo_root"],
+            hf_home=layout["hf_home"],
+            log_root=layout["log_root"],
+            input_root=layout["input_root"],
+            work_dir=layout["work_dir"],
+            output_dir=layout["output_dir"],
+            source_commit=TEST_SOURCE_COMMIT,
+            input_revision=TEST_INPUT_REVISION,
+            batch_size="False",
+        )
+        assert proc.returncode != 0
+        assert "BATCH_SIZE" in proc.stderr
+
+    def test_leading_zero_batch_size_rejected(self, tmp_path):
+        layout = _make_persistent_layout(tmp_path)
+        proc = _run_submit(
+            tmp_path,
+            repo_root=layout["repo_root"],
+            hf_home=layout["hf_home"],
+            log_root=layout["log_root"],
+            input_root=layout["input_root"],
+            work_dir=layout["work_dir"],
+            output_dir=layout["output_dir"],
+            source_commit=TEST_SOURCE_COMMIT,
+            input_revision=TEST_INPUT_REVISION,
+            batch_size="0128",
+        )
+        assert proc.returncode != 0
+        assert "BATCH_SIZE" in proc.stderr
+
+    def test_non_integer_batch_size_rejected(self, tmp_path):
+        layout = _make_persistent_layout(tmp_path)
+        proc = _run_submit(
+            tmp_path,
+            repo_root=layout["repo_root"],
+            hf_home=layout["hf_home"],
+            log_root=layout["log_root"],
+            input_root=layout["input_root"],
+            work_dir=layout["work_dir"],
+            output_dir=layout["output_dir"],
+            source_commit=TEST_SOURCE_COMMIT,
+            input_revision=TEST_INPUT_REVISION,
+            batch_size="abc",
+        )
+        assert proc.returncode != 0
+        assert "BATCH_SIZE" in proc.stderr
+
+    def test_positive_integer_batch_size_accepted(self, tmp_path):
+        layout = _make_persistent_layout(tmp_path)
+        proc = _run_submit(
+            tmp_path,
+            repo_root=layout["repo_root"],
+            hf_home=layout["hf_home"],
+            log_root=layout["log_root"],
+            input_root=layout["input_root"],
+            work_dir=layout["work_dir"],
+            output_dir=layout["output_dir"],
+            source_commit=TEST_SOURCE_COMMIT,
+            input_revision=TEST_INPUT_REVISION,
+            batch_size="16",
+        )
+        assert proc.returncode == 0, proc.stderr
+
+
 # --- Wrapper-presence guards -----------------------------------------
 
 
@@ -626,6 +770,7 @@ class TestOarsubGuard:
                 str(layout["output_dir"]),
                 TEST_SOURCE_COMMIT,
                 TEST_INPUT_REVISION,
+                "128",
             ],
             cwd=str(tmp_path),
             env={
@@ -735,6 +880,7 @@ class TestExactlyOnceSubmission:
                 str(layout["output_dir"]),
                 TEST_SOURCE_COMMIT,
                 TEST_INPUT_REVISION,
+                "128",
             ],
             cwd=str(tmp_path),
             env={
@@ -753,8 +899,8 @@ class TestExactlyOnceSubmission:
 # --- Serialization contract: the eight arguments survive intact ----
 
 
-class TestEightArgSerialization:
-    def test_eight_args_survive_quoting(self, tmp_path):
+class TestNineArgSerialization:
+    def test_nine_args_survive_quoting(self, tmp_path):
         layout = _make_persistent_layout(tmp_path)
         _run_submit(
             tmp_path,
@@ -766,6 +912,7 @@ class TestEightArgSerialization:
             output_dir=layout["output_dir"],
             source_commit=TEST_SOURCE_COMMIT,
             input_revision=TEST_INPUT_REVISION,
+            batch_size="128",
         )
         cmd = (tmp_path / "oarsub_capture.argv").read_text().splitlines()[-1]
         wrapper_cap_prefix = tmp_path / "wrapper_cap"
@@ -812,6 +959,7 @@ class TestEightArgSerialization:
             wrapper_cap_prefix.with_suffix(".arg8").read_text().strip()
             == TEST_INPUT_REVISION
         )
+        assert wrapper_cap_prefix.with_suffix(".arg9").read_text().strip() == "128"
 
     def test_special_chars_in_path_preserve(self, tmp_path):
         """A path containing a single quote must still be delivered

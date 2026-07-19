@@ -17,6 +17,7 @@ from osm_polygon_sentence_relevance.contracts.constants import (
 )
 from osm_polygon_sentence_relevance.contracts.errors import (
     AcquisitionError,
+    CheckpointError,
     ConfigurationError,
     ExportError,
     FinalizationError,
@@ -61,6 +62,7 @@ __all__ = [
     "ExportError",
     "AcquisitionError",
     "PublicationError",
+    "CheckpointError",
     # schemas
     "SCHEMA_REGISTRY",
     "OUTPUT_SENTENCE_SCHEMA",
