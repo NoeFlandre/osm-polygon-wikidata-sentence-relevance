@@ -12,10 +12,16 @@ from osm_polygon_sentence_relevance.application.pipeline import (
     PipelineResult,
     run_pipeline,
 )
+from osm_polygon_sentence_relevance.contracts.errors import SegmentationError
 from osm_polygon_sentence_relevance.ingestion.acquisition import AcquisitionResult
 from osm_polygon_sentence_relevance.publishing import (
     PublicationResult,
     publish_export_directory,
+)
+from osm_polygon_sentence_relevance.sentences.device import (
+    PUBLIC_DEVICE_VALUES,
+    default_caps,
+    resolve_device,
 )
 from osm_polygon_sentence_relevance.sentences.sat import SaTSentenceSegmenter
 
@@ -54,6 +60,26 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--sat-model", default="sat-3l-sm", help="wtpsplit SaT model name"
+    )
+    parser.add_argument(
+        "--device",
+        default="auto",
+        choices=sorted(PUBLIC_DEVICE_VALUES),
+        help=(
+            "Accelerator for SaT inference. ``auto`` (default) prefers "
+            "CUDA, then MPS, then CPU. Explicit ``cuda``/``mps`` fail "
+            "when the backend is unavailable."
+        ),
+    )
+    parser.add_argument(
+        "--input-source-dataset-id",
+        default=None,
+        help=(
+            "Optional Hugging Face dataset ID of the upstream source for "
+            "a local input snapshot. Only valid with --input-root; it "
+            "populates the source provenance recorded in the manifest and "
+            "dataset card without triggering any network request."
+        ),
     )
     parser.add_argument(
         "--overwrite",
@@ -115,6 +141,40 @@ def _validate_args(parsed: argparse.Namespace) -> None:
                 "whitespace is rejected, not silently normalized"
             )
 
+    # Validate the requested inference device eagerly. The CLI performs
+    # both the syntactic / public-set check and a hardware-availability
+    # probe (via the production capability snapshot) so explicit
+    # unavailable accelerators fail before acquisition or model
+    # construction. ``--help`` is served by argparse before this function
+    # is reached, so no Torch import occurs for the help path.
+    device_value = parsed.device
+    if not isinstance(device_value, str) or not device_value.strip():
+        raise ValueError("device cannot be blank")
+    if device_value not in PUBLIC_DEVICE_VALUES:
+        raise ValueError(
+            f"device must be one of {sorted(PUBLIC_DEVICE_VALUES)}; "
+            f"got {device_value!r}"
+        )
+    try:
+        resolve_device(device_value, caps=default_caps())
+    except SegmentationError as exc:
+        raise ValueError(str(exc)) from exc
+
+    # ``--input-source-dataset-id`` is only meaningful with ``--input-root``.
+    # Hub acquisition already carries the dataset ID; supplying both would
+    # create ambiguity.
+    source_dataset_id = parsed.input_source_dataset_id
+    if source_dataset_id is not None:
+        if parsed.input_root is None:
+            raise ValueError("input-source-dataset-id is only valid with --input-root")
+        if not isinstance(source_dataset_id, str) or not source_dataset_id.strip():
+            raise ValueError("input-source-dataset-id cannot be blank")
+        if source_dataset_id != source_dataset_id.strip():
+            raise ValueError(
+                "input-source-dataset-id has surrounding whitespace; "
+                "surrounding whitespace is rejected, not silently normalized"
+            )
+
     # Publishing is optional and strictly post-build. Validate all
     # publishing relationships before acquisition or model construction.
     publish_dataset_id = parsed.publish_dataset_id
@@ -153,7 +213,11 @@ def _resolve_input(
         input_root = Path(parsed.input_root)
         return _ResolvedInput(
             mode="local",
-            dataset_id=None,
+            # ``dataset_id`` is the single provenance value: Hub
+            # acquisitions supply the upstream ID; local snapshots
+            # may carry the source dataset ID via
+            # ``--input-source-dataset-id``; otherwise ``None``.
+            dataset_id=parsed.input_source_dataset_id,
             requested_revision=requested_revision,
             resolved_revision=requested_revision,
             snapshot_path=str(input_root),
@@ -247,6 +311,7 @@ def main(
         segmenter = SaTSentenceSegmenter(
             model_name=parsed_args.sat_model,
             model_factory=model_factory,
+            device=parsed_args.device,
         )
 
         # Run pipeline with the resolved input root and immutable revision.

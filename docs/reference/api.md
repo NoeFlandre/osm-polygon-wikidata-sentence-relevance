@@ -58,10 +58,41 @@ All canonical modules live under
 - `segmentation.SentenceSegmenter` (protocol)
 - `segmentation.SegmentationReport`
 - `segmentation.split_validated_batch(...)`
+- `device.PUBLIC_DEVICE_VALUES` — `frozenset({"auto", "cpu", "cuda", "mps"})`.
+- `device.TorchCapabilities` — `Protocol` exposing `cuda_available: bool`
+  and `mps_available: bool`. Production callers use
+  `device.default_caps()` which lazily probes Torch; tests inject a
+  fake.
+- `device.resolve_device(value, *, caps) -> str` — pure function.
+  `value` must be one of the four public device strings. `"auto"`
+  resolves to `cuda` when available, otherwise `mps`, otherwise `cpu`.
+  Explicit `cuda` / `mps` raise `SegmentationError` when the backend
+  is unavailable; the resolver never silently downgrades.
 - `sat.SaTSentenceSegmenter` (optional `segmentation` extra:
-  installs the `wtpsplit` adapter plus its required PyTorch runtime;
-  the SaT model itself is constructed lazily and its weights are
-  downloaded separately on first model construction)
+  installs the `wtpsplit` adapter **pinned to exactly `wtpsplit==2.2.1`**
+  plus its required PyTorch runtime; the SaT model itself is
+  constructed lazily and its weights are downloaded separately on
+  first model construction).
+  Constructor signature: `SaTSentenceSegmenter(model_name="sat-3l-sm",
+  *, model_factory=None, model_kwargs=None, split_kwargs=None,
+  device="auto", caps=None)`. The device is resolved **exactly once**
+  per segmenter, immediately before model construction. The complete
+  classifier (the `wtpsplit.extract.PyTorchWrapper`-owned
+  `SubwordXLMForTokenClassification`, **not** its backbone) is moved
+  to the resolved device and verified by reading every parameter
+  and buffer. Hardware selection never alters output schema, IDs,
+  hashes, or dataset-card statistics; only the runtime
+  accelerator differs. Device resolution and model-shape handling
+  are kept separate: the segmenter never inspects the model to
+  decide which device to use, and never silently rewrites a
+  resolved accelerator (`cuda` / `mps`) to `cpu` after the fact —
+  a real wtpsplit model that cannot honour a resolved accelerator
+  fails with `SegmentationError` rather than running on CPU.
+- `sat.WTPSPLIT_SUPPORTED_VERSION` — the wtpsplit version the
+  placement adapter is structurally tested against (`"2.2.1"`).
+  This must agree with the segmentation-extras pin in
+  `pyproject.toml`; the metadata test
+  `TestDeclaredVersionAgreement` enforces the contract.
 - `table.SegmentedTableResult`
 - `table.segment_joined_sections(...)`
 - `finalization.FinalizationReport`
@@ -72,7 +103,10 @@ All canonical modules live under
   pipeline_version, input_dataset_id=None) -> FinalizedDataset`. When
   `input_dataset_id` is a non-blank string the value is recorded as
   Parquet schema metadata under the key `b"input_dataset_id"` and is
-  later cross-checked by the validator against the manifest.
+  later cross-checked by the validator against the manifest. In CLI
+  local mode (`--input-root`) the value is sourced from
+  `--input-source-dataset-id`; in Hub mode it is the upstream
+  `--input-dataset-id`.
 
 ### `osm_polygon_sentence_relevance.joins`
 

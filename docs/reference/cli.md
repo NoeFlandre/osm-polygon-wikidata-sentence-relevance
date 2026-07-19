@@ -15,7 +15,10 @@ usage: osm-polygon-sentence-relevance [-h]
     --input-dataset-revision INPUT_DATASET_REVISION
     --pipeline-version PIPELINE_VERSION
     [--batch-size BATCH_SIZE]
-    [--sat-model SAT_MODEL] [--overwrite]
+    [--sat-model SAT_MODEL]
+    [--device {auto,cpu,cuda,mps}]
+    [--input-source-dataset-id OWNER/DATASET]
+    [--overwrite]
     [--publish-dataset-id OWNER/DATASET]
     [--publish-revision REVISION] [--publish-commit-message MESSAGE]
 ```
@@ -31,6 +34,8 @@ usage: osm-polygon-sentence-relevance [-h]
 | `--pipeline-version` | yes | — | Pipeline version recorded into the output metadata. |
 | `--batch-size` | no | `128` | Batch size for the segmenter (must be a positive integer). |
 | `--sat-model` | no | `sat-3l-sm` | wtpsplit SaT model name. |
+| `--device` | no | `auto` | Accelerator for SaT inference. One of `auto`, `cpu`, `cuda`, `mps`. `auto` (default) prefers CUDA when available, otherwise MPS, otherwise CPU. Explicit `cuda` or `mps` fail with exit code `1` when the requested backend is unavailable; the CLI never silently downgrades. |
+| `--input-source-dataset-id` | no | — | Optional Hugging Face dataset ID of the upstream source for a local input snapshot. Only valid with `--input-root`; populates the source provenance recorded in the manifest and dataset card without triggering any network request. |
 | `--overwrite` | no | off | Overwrite an existing non-empty output directory. |
 | `--publish-dataset-id` | no | — | Optional Hugging Face dataset ID to publish the completed export to, after the build succeeds. The target repository must already exist; no repository is created. |
 | `--publish-revision` | no | `main` | Target Hugging Face dataset revision for publishing. Only used with `--publish-dataset-id`. |
@@ -44,6 +49,17 @@ and `--publish-commit-message` are only valid together with
 `--publish-dataset-id`. Supplying either without a publishing dataset ID
 exits with status `1` before any acquisition, model construction, or
 pipeline execution. No token or repository-creation flag exists.
+
+`--device` is validated for syntactic correctness and hardware availability
+before any acquisition, model construction, or pipeline execution.
+Explicit `cuda` or `mps` exit with status `1` when the requested backend
+is unavailable on the host.
+
+`--input-source-dataset-id` is only valid together with `--input-root`;
+supplying it in Hub mode (`--input-dataset-id`) or with a blank value
+exits with status `1` before any acquisition, model construction, or
+pipeline execution. When supplied it records the source provenance in
+the manifest and generated dataset card.
 
 ## Exit statuses
 

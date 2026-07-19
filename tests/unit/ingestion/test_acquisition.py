@@ -124,6 +124,25 @@ class TestAcquisition:
         assert "uv sync --extra hub" in str(exc_info.value)
         assert "huggingface_hub" in str(exc_info.value)
 
+    def test_lazy_hfapi_construction_failure_wrapped(self, monkeypatch):
+        """When ``hub_api`` is not injected and ``HfApi()`` itself
+        raises (e.g. due to a network/auth error), the function must
+        wrap the error in ``AcquisitionError``.
+        """
+
+        class _BoomHfApi:
+            def __init__(self):
+                raise RuntimeError("network/auth boom")
+
+        # Monkey-patch the ``huggingface_hub`` import to return a
+        # module whose ``HfApi`` constructor raises.
+        class _FakeModule:
+            HfApi = _BoomHfApi
+
+        monkeypatch.setitem(sys.modules, "huggingface_hub", _FakeModule())
+        with pytest.raises(AcquisitionError, match="Failed to initialize HfApi"):
+            acquire_dataset_snapshot("my/dataset", "main")
+
     def test_blank_or_non_string_arguments_fail_early(self, monkeypatch):
         # Block huggingface_hub import locally to prove it fails BEFORE imports
         monkeypatch.setitem(sys.modules, "huggingface_hub", None)
