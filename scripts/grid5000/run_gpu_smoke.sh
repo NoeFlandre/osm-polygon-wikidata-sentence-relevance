@@ -132,6 +132,10 @@ if [ -e "${SMOKE_LOG_DIR}/smoke_result.json" ]; then
     echo "run_gpu_smoke: smoke_result.json already exists in SMOKE_LOG_DIR" >&2
     exit 1
 fi
+if [ -e "${SMOKE_LOG_DIR}/run_metadata.json" ]; then
+    echo "run_gpu_smoke: run_metadata.json already exists in SMOKE_LOG_DIR" >&2
+    exit 1
+fi
 
 # --- Offline / determinism (only HF_HOME is exported; no REPO_ROOT) -
 
@@ -196,11 +200,113 @@ fi
 # Disarm the preflight trap before declaring the smoke-result temp.
 trap - EXIT INT TERM
 
+# === Phase 1.5: write deterministic run metadata ====================
+# The metadata records the exact source commit and the immutable
+# model/tokenizer revisions so the smoke can be re-derived later.
+RUN_METADATA_PATH="${SMOKE_LOG_DIR}/run_metadata.json"
+RUN_METADATA_HELPER="${REPO_ROOT}/scripts/grid5000/_run_metadata.py"
+
+# Refuse to overwrite any pre-existing run-metadata artifact.
+if [ -e "${RUN_METADATA_PATH}" ]; then
+    echo "run_gpu_smoke: run_metadata.json already exists in SMOKE_LOG_DIR" >&2
+    exit 1
+fi
+if [ ! -r "${RUN_METADATA_HELPER}" ]; then
+    echo "run_gpu_smoke: _run_metadata.py is missing" >&2
+    exit 1
+fi
+
+# Discover the exact source commit and hostname from the
+# scheduler-owned compute node. We invoke the VCS tool (read-only)
+# so the contract is "same checkout, same content" regardless of
+# worktree / packed-refs shape.
+if ! command -v git >/dev/null 2>&1; then
+    echo "run_gpu_smoke: git binary is required (command -v git failed)" >&2
+    exit 1
+fi
+
+# EXPECTED_SOURCE_COMMIT must be passed by the operator; no
+# default, ever. The payload is modified *after* Phase 9B was
+# committed, so a hardcoded default would self-reference.
+: "${EXPECTED_SOURCE_COMMIT:?EXPECTED_SOURCE_COMMIT is required (40 lowercase hex chars)}"
+if [[ ! "${EXPECTED_SOURCE_COMMIT}" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "run_gpu_smoke: EXPECTED_SOURCE_COMMIT is not exactly 40 lowercase hex characters" >&2
+    exit 1
+fi
+
+SOURCE_COMMIT="$(
+    set +e
+    git -C "${REPO_ROOT}" rev-parse HEAD 2>/dev/null
+    git_rev_parse_rc=$?
+    set -e
+    if [ "${git_rev_parse_rc}" -ne 0 ]; then
+        echo "run_gpu_smoke: git rev-parse HEAD failed" >&2
+        exit 1
+    fi
+)"
+if [ -z "${SOURCE_COMMIT}" ]; then
+    echo "run_gpu_smoke: git rev-parse HEAD returned empty" >&2
+    exit 1
+fi
+
+# Refuse to run from a dirty checkout: any uncommitted or staged
+# change would mean the metadata SHA disagrees with the runtime
+# files. The git stderr is silenced so REPO_ROOT (which git
+# would otherwise include in error messages) never appears in
+# the captured stdout/stderr.
+DIRTY_OUTPUT="$(
+    set +e
+    git -C "${REPO_ROOT}" status --porcelain 2>/dev/null
+    git_status_rc=$?
+    set -e
+    if [ "${git_status_rc}" -ne 0 ]; then
+        echo "run_gpu_smoke: git status --porcelain failed" >&2
+        exit 1
+    fi
+)"
+if [ -n "${DIRTY_OUTPUT}" ]; then
+    echo "run_gpu_smoke: working tree is dirty (git status --porcelain is non-empty)" >&2
+    exit 1
+fi
+
+if [ "${SOURCE_COMMIT}" != "${EXPECTED_SOURCE_COMMIT}" ]; then
+    echo "run_gpu_smoke: source commit ${SOURCE_COMMIT} does not match EXPECTED_SOURCE_COMMIT" >&2
+    exit 1
+fi
+
+HOSTNAME_SHORT="$(hostname -s 2>/dev/null || echo unknown)"
+
+set +e
+# Run-metadata keys (exact schema enforced by the helper):
+#   source_commit  model_name  model_revision
+#   tokenizer_name  tokenizer_revision  oar_job_id  hostname
+"${PROJECT_PYTHON}" "${RUN_METADATA_HELPER}" "${RUN_METADATA_PATH}" \
+    "${SOURCE_COMMIT}" \
+    "sat-3l-sm" \
+    "137da054051ad9f1eac42025f758db4ac9f22535" \
+    "facebookAI/xlm-roberta-base" \
+    "e73636d4f797dec63c3081bb6ed5c7b0bb3f2089" \
+    "${OAR_JOB_ID}" \
+    "${HOSTNAME_SHORT}"
+metadata_rc=$?
+set -e
+
+if [ "${metadata_rc}" -ne 0 ]; then
+    echo "run_gpu_smoke: run_metadata.json write failed" >&2
+    exit 1
+fi
+
+# Refuse to proceed if the metadata file was not produced (defensive).
+if [ ! -f "${RUN_METADATA_PATH}" ]; then
+    echo "run_gpu_smoke: run_metadata.json was not created" >&2
+    exit 1
+fi
+
 # === Phase 2: real SaT inference on CUDA ============================
 
-# Preflight has been validated and installed. No temp file is in
-# play. Create the smoke-result temp file; the active trap now
-# covers exactly this temp file.
+# Preflight has been validated and installed. Run metadata is in
+# place. No temp file is in play. Create the smoke-result temp file;
+# the active trap now covers exactly this temp file.
 SMOKE_RESULT_TMP="$(mktemp "${SMOKE_LOG_DIR}/.smoke_result.XXXXXX.json")"
 
 cleanup_result() {
