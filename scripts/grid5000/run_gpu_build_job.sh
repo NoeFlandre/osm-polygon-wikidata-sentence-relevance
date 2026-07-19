@@ -63,10 +63,10 @@ if ! [[ "${OAR_JOB_ID}" =~ ^[0-9]+$ ]]; then
     exit 1
 fi
 
-# --- Positional arguments (exactly eight required) --------------------
+# --- Positional arguments (exactly nine required) --------------------
 
-if [ "$#" -ne 8 ]; then
-    echo "run_gpu_build_job: exactly eight positional arguments are required" >&2
+if [ "$#" -ne 9 ]; then
+    echo "run_gpu_build_job: exactly nine positional arguments are required" >&2
     exit 1
 fi
 
@@ -78,6 +78,7 @@ WORK_DIR="${5}"; readonly WORK_DIR                         # "$5"
 OUTPUT_DIR="${6}"; readonly OUTPUT_DIR                     # "$6"
 EXPECTED_SOURCE_COMMIT="${7}"; readonly EXPECTED_SOURCE_COMMIT  # "$7"
 INPUT_REVISION="${8}"; readonly INPUT_REVISION             # "$8"
+BATCH_SIZE="${9}"; readonly BATCH_SIZE                     # "$9"
 
 # --- Path validation: absolute, non-empty, traversal-free, no symlink -
 
@@ -266,6 +267,30 @@ if [[ ! "${INPUT_REVISION}" =~ ^[0-9a-f]{40}$ ]]; then
     exit 1
 fi
 
+# --- BATCH_SIZE: positive integer (Phase 9M-B) -----------------------
+#
+# Mirror the submit-adapter validation. Booleans, leading
+# whitespace, leading zeros, zero, negative, decimal, and
+# non-digit values are all rejected with a non-zero exit.
+if [ -z "${BATCH_SIZE}" ]; then
+    echo "run_gpu_build_job: BATCH_SIZE is empty" >&2
+    exit 1
+fi
+case "${BATCH_SIZE}" in
+    [Tt][Rr][Uu][Ee]|[Ff][Aa][Ll][Ss][Ee])
+        echo "run_gpu_build_job: BATCH_SIZE is a boolean (got ${BATCH_SIZE}); a positive integer is required" >&2
+        exit 1
+        ;;
+esac
+if [[ ! "${BATCH_SIZE}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "run_gpu_build_job: BATCH_SIZE must be a positive integer with no leading zeros (got ${BATCH_SIZE})" >&2
+    exit 1
+fi
+if [ "${BATCH_SIZE}" -lt 1 ] 2>/dev/null; then
+    echo "run_gpu_build_job: BATCH_SIZE must be >= 1 (got ${BATCH_SIZE})" >&2
+    exit 1
+fi
+
 # --- Locked interpreter and committed build payload -----------------
 
 PROJECT_PYTHON="${REPO_ROOT_REAL}/.venv/bin/python"
@@ -356,7 +381,7 @@ BUILD_EXIT_CODE="${JOB_LOG_DIR}/build.exit_code"
 # set it, the payload inherits it unchanged.
 BUILD_LOG_DIR="${JOB_LOG_DIR}"
 export REPO_ROOT HF_HOME BUILD_LOG_DIR INPUT_ROOT WORK_DIR OUTPUT_DIR
-export EXPECTED_SOURCE_COMMIT INPUT_REVISION
+export EXPECTED_SOURCE_COMMIT INPUT_REVISION BATCH_SIZE
 
 set +e
 bash "${BUILD_PAYLOAD}" \

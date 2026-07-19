@@ -128,10 +128,10 @@ def test_job_script_does_not_touch_cuda_visible_devices(script_text):
 
 
 def test_job_script_documents_eight_positional_arguments(script_text):
-    for n in range(1, 9):
+    for n in range(1, 10):
         assert f"${n}" in script_text
-    assert '"$#" -ne 8' in script_text or "[ $# -ne 8 ]" in script_text, (
-        "expected guard requiring exactly eight positional arguments"
+    assert '"$#" -ne 9' in script_text or "[ $# -ne 9 ]" in script_text, (
+        "expected guard requiring exactly nine positional arguments"
     )
 
 
@@ -208,6 +208,7 @@ def _make_fake_payload(tmp_path: Path) -> Path:
         'printf "%s\\n" "${OUTPUT_DIR:-}" > "${cap}.output_dir"\n'
         'printf "%s\\n" "${EXPECTED_SOURCE_COMMIT:-}" > "${cap}.expected"\n'
         'printf "%s\\n" "${INPUT_REVISION:-}" > "${cap}.input_revision"\n'
+        'printf "%s\\n" "${BATCH_SIZE:-}" > "${cap}.batch_size"\n'
         'touch "${cap}.ran"\n'
         "exit 0\n"
     )
@@ -280,6 +281,7 @@ def _run_job(
     existing_log_dir: bool = False,
     existing_output_dir: bool = False,
     existing_work_dir_files: bool = False,
+    batch_size: str = "128",
     extra_args: list[str] | None = None,
 ) -> subprocess.CompletedProcess:
     """Invoke the job wrapper. Source commit is derived from
@@ -360,6 +362,7 @@ def _run_job(
         str(output_dir),
         current_head,
         input_revision,
+        batch_size,
     ]
     if extra_args:
         args.extend(extra_args)
@@ -388,9 +391,9 @@ class TestArgumentCount:
             timeout=30,
         )
         assert proc.returncode != 0
-        assert "exactly eight positional arguments" in proc.stderr
+        assert "exactly nine positional arguments" in proc.stderr
 
-    def test_nine_args_fails(self, tmp_path):
+    def test_ten_args_fails(self, tmp_path):
         layout = _make_layout(tmp_path)
         _seed_repo(layout["repo"])
         proc = _run_job(
@@ -473,6 +476,7 @@ class TestPathGuards:
                 str(layout["output"]),
                 TEST_SOURCE_COMMIT,
                 TEST_INPUT_REVISION,
+                "128",
             ],
             cwd=str(tmp_path),
             env={
@@ -653,6 +657,7 @@ class TestCommitAndRevisionGuard:
                 str(layout["output"]),
                 "Z" * 40,
                 TEST_INPUT_REVISION,
+                "128",
             ],
             cwd=str(tmp_path),
             env={
@@ -684,6 +689,7 @@ class TestCommitAndRevisionGuard:
                 str(layout["output"]),
                 head,
                 "main",
+                "128",
             ],
             cwd=str(tmp_path),
             env={
@@ -697,6 +703,207 @@ class TestCommitAndRevisionGuard:
         )
         assert proc.returncode != 0
         assert "INPUT_REVISION" in proc.stderr
+
+
+# --- Batch-size guards (Phase 9M-B) -----------------------------------
+
+
+class TestBatchSizeGuard:
+    def test_zero_batch_size_rejected(self, tmp_path):
+        layout = _make_layout(tmp_path)
+        head = _seed_repo(layout["repo"])
+        proc = subprocess.run(
+            [
+                "bash",
+                str(JOB_SCRIPT),
+                str(layout["repo"]),
+                str(layout["hf"]),
+                str(layout["log"]),
+                str(layout["input"]),
+                str(layout["work"]),
+                str(layout["output"]),
+                head,
+                TEST_INPUT_REVISION,
+                "0",
+            ],
+            cwd=str(tmp_path),
+            env={
+                **os.environ,
+                "OAR_JOB_ID": TEST_OAR_JOB_ID,
+                "PATH": os.environ.get("PATH", ""),
+            },
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert proc.returncode != 0
+        assert "BATCH_SIZE" in proc.stderr
+
+    def test_negative_batch_size_rejected(self, tmp_path):
+        layout = _make_layout(tmp_path)
+        head = _seed_repo(layout["repo"])
+        proc = subprocess.run(
+            [
+                "bash",
+                str(JOB_SCRIPT),
+                str(layout["repo"]),
+                str(layout["hf"]),
+                str(layout["log"]),
+                str(layout["input"]),
+                str(layout["work"]),
+                str(layout["output"]),
+                head,
+                TEST_INPUT_REVISION,
+                "-1",
+            ],
+            cwd=str(tmp_path),
+            env={
+                **os.environ,
+                "OAR_JOB_ID": TEST_OAR_JOB_ID,
+                "PATH": os.environ.get("PATH", ""),
+            },
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert proc.returncode != 0
+        assert "BATCH_SIZE" in proc.stderr
+
+    def test_decimal_batch_size_rejected(self, tmp_path):
+        layout = _make_layout(tmp_path)
+        head = _seed_repo(layout["repo"])
+        proc = subprocess.run(
+            [
+                "bash",
+                str(JOB_SCRIPT),
+                str(layout["repo"]),
+                str(layout["hf"]),
+                str(layout["log"]),
+                str(layout["input"]),
+                str(layout["work"]),
+                str(layout["output"]),
+                head,
+                TEST_INPUT_REVISION,
+                "12.5",
+            ],
+            cwd=str(tmp_path),
+            env={
+                **os.environ,
+                "OAR_JOB_ID": TEST_OAR_JOB_ID,
+                "PATH": os.environ.get("PATH", ""),
+            },
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert proc.returncode != 0
+        assert "BATCH_SIZE" in proc.stderr
+
+    def test_bool_true_batch_size_rejected(self, tmp_path):
+        layout = _make_layout(tmp_path)
+        head = _seed_repo(layout["repo"])
+        proc = subprocess.run(
+            [
+                "bash",
+                str(JOB_SCRIPT),
+                str(layout["repo"]),
+                str(layout["hf"]),
+                str(layout["log"]),
+                str(layout["input"]),
+                str(layout["work"]),
+                str(layout["output"]),
+                head,
+                TEST_INPUT_REVISION,
+                "true",
+            ],
+            cwd=str(tmp_path),
+            env={
+                **os.environ,
+                "OAR_JOB_ID": TEST_OAR_JOB_ID,
+                "PATH": os.environ.get("PATH", ""),
+            },
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert proc.returncode != 0
+        assert "BATCH_SIZE" in proc.stderr
+
+    def test_leading_zero_batch_size_rejected(self, tmp_path):
+        layout = _make_layout(tmp_path)
+        head = _seed_repo(layout["repo"])
+        proc = subprocess.run(
+            [
+                "bash",
+                str(JOB_SCRIPT),
+                str(layout["repo"]),
+                str(layout["hf"]),
+                str(layout["log"]),
+                str(layout["input"]),
+                str(layout["work"]),
+                str(layout["output"]),
+                head,
+                TEST_INPUT_REVISION,
+                "0128",
+            ],
+            cwd=str(tmp_path),
+            env={
+                **os.environ,
+                "OAR_JOB_ID": TEST_OAR_JOB_ID,
+                "PATH": os.environ.get("PATH", ""),
+            },
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert proc.returncode != 0
+        assert "BATCH_SIZE" in proc.stderr
+
+    def test_non_integer_batch_size_rejected(self, tmp_path):
+        layout = _make_layout(tmp_path)
+        head = _seed_repo(layout["repo"])
+        proc = subprocess.run(
+            [
+                "bash",
+                str(JOB_SCRIPT),
+                str(layout["repo"]),
+                str(layout["hf"]),
+                str(layout["log"]),
+                str(layout["input"]),
+                str(layout["work"]),
+                str(layout["output"]),
+                head,
+                TEST_INPUT_REVISION,
+                "abc",
+            ],
+            cwd=str(tmp_path),
+            env={
+                **os.environ,
+                "OAR_JOB_ID": TEST_OAR_JOB_ID,
+                "PATH": os.environ.get("PATH", ""),
+            },
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert proc.returncode != 0
+        assert "BATCH_SIZE" in proc.stderr
+
+    def test_positive_integer_batch_size_accepted(self, tmp_path):
+        layout = _make_layout(tmp_path)
+        _seed_repo(layout["repo"])
+        proc = _run_job(
+            tmp_path,
+            repo_root=layout["repo"],
+            hf_home=layout["hf"],
+            log_root=layout["log"],
+            input_root=layout["input"],
+            work_dir=layout["work"],
+            output_dir=layout["output"],
+            input_revision=TEST_INPUT_REVISION,
+            batch_size="16",
+        )
+        assert proc.returncode == 0, proc.stderr
 
 
 # --- Payload guards --------------------------------------------------
@@ -795,7 +1002,7 @@ class TestInterpreterGuards:
 
 
 class TestPayloadInvocation:
-    def test_payload_invoked_with_all_eight_args(self, tmp_path):
+    def test_payload_invoked_with_all_nine_args(self, tmp_path):
         layout = _make_layout(tmp_path)
         _seed_repo(layout["repo"])
         proc = _run_job(
@@ -807,6 +1014,7 @@ class TestPayloadInvocation:
             work_dir=layout["work"],
             output_dir=layout["output"],
             input_revision=TEST_INPUT_REVISION,
+            batch_size="16",
         )
         assert proc.returncode == 0, proc.stderr
 
@@ -834,6 +1042,7 @@ class TestPayloadInvocation:
             cap.with_suffix(".input_revision").read_text().strip()
             == TEST_INPUT_REVISION
         )
+        assert cap.with_suffix(".batch_size").read_text().strip() == "16"
         assert cap.with_suffix(".build_log_dir").read_text().strip() == str(
             layout["log"] / TEST_OAR_JOB_ID
         )

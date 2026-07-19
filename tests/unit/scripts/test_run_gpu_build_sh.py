@@ -124,6 +124,7 @@ def test_payload_script_inherits_required_env(script_text):
         "OUTPUT_DIR",
         "EXPECTED_SOURCE_COMMIT",
         "INPUT_REVISION",
+        "BATCH_SIZE",
     ):
         assert var in script_text, f"{var} missing in payload"
 
@@ -144,6 +145,14 @@ def test_payload_script_uses_input_root_not_dataset_id(script_text):
 def test_payload_script_pins_input_revision(script_text):
     assert "--input-dataset-revision" in script_text
     assert "INPUT_REVISION" in script_text
+
+
+def test_payload_script_uses_batch_size_env_var(script_text):
+    # The payload must pass through BATCH_SIZE, not hard-code 128
+    # (the documented default is for ordinary CLI use only).
+    assert '--batch-size "${BATCH_SIZE}"' in script_text
+    assert "BATCH_SIZE is required" in script_text
+    assert "positive integer" in script_text
 
 
 def test_payload_script_passes_work_dir_and_source_commit(script_text):
@@ -314,6 +323,7 @@ def _run_payload(
     source_commit: str,
     input_revision: str,
     oar_job_id: str = TEST_OAR_JOB_ID,
+    batch_size: str = "128",
     cli_overwrite: str | None = None,
 ) -> subprocess.CompletedProcess:
     fake_bin = _make_fake_bin(tmp_path)
@@ -350,6 +360,7 @@ def _run_payload(
         "OUTPUT_DIR": str(output_dir),
         "EXPECTED_SOURCE_COMMIT": source_commit,
         "INPUT_REVISION": input_revision,
+        "BATCH_SIZE": batch_size,
         "PAYLOAD_CAPTURE": str(tmp_path / "payload_cap"),
         "PATH": os.environ.get("PATH", ""),
     }

@@ -54,6 +54,36 @@ package remains pre-1.0 (currently `0.1.0`).
   pinned-local-input behavior, the resume procedure, the
   no-publishing boundary, and the proposed walltime.
 
+### Fixed (Phase 9M -- diagnostic amendment for the Grid'5000 build)
+- **9M-A: CLI now surfaces the full bounded `__cause__` chain on
+  failure.** The outer `except Exception` in
+  `application.cli` renders a cycle-safe, traceback-free
+  `Error: <Type>: <message>` line followed by one
+  `Caused by: <Type>: <message>` line per hop, capped by depth
+  (`DEFAULT_MAX_DEPTH = 8`) and message length
+  (`DEFAULT_MAX_MESSAGE_LENGTH = 512`). Cycles render as
+  `Caused by: <circular>`; deep chains end with
+  `Caused by: <truncated>`. The renderer lives in the private
+  `contracts._exception_chain` module; it is imported
+  directly by the CLI and is not part of the public
+  contracts surface. The renderer never emits traceback
+  frames, file paths, or local-variable bindings. Exit code 1
+  is preserved; the existing `build.exit_code` and
+  success-JSON contract are unchanged. This makes the
+  underlying CUDA OOM, weight-load mismatch, or
+  join-integrity failure visible in the build log without
+  leaking host paths or internal frames.
+- **9M-B: launcher contract for `BATCH_SIZE`.** The Grid'5000
+  launcher family now accepts a ninth positional argument
+  `BATCH_SIZE`, validated at three layers (frontend adapter,
+  compute-node wrapper, compute-node payload) to reject
+  empty, boolean, decimal, leading-zero, and non-integer
+  values before submission. The compute-node payload invokes
+  the CLI as `--batch-size "${BATCH_SIZE}"` (the documented
+  CLI default of 128 remains the value for ordinary CLI use;
+  the remote launcher does not default). The previous
+  hard-coded `--batch-size 128` is removed from the payload.
+
 ### Added
 - Domain-package reorganization of the implementation under `src/`:
   `application/` (CLI + pipeline), `ingestion/` (acquisition, discovery,

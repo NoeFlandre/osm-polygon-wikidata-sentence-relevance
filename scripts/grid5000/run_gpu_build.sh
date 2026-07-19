@@ -84,6 +84,27 @@ if [[ ! "${INPUT_REVISION}" =~ ^[0-9a-f]{40}$ ]]; then
     exit 1
 fi
 
+# --- BATCH_SIZE: positive integer (Phase 9M-B) -----------------------
+#
+# The remote launcher requires an explicit BATCH_SIZE; it does NOT
+# default to the documented CLI value (128). Reject booleans,
+# leading zeros, zero, negative, decimal, and non-digit values.
+: "${BATCH_SIZE:?BATCH_SIZE is required (positive integer; the remote launcher does not default)}"
+case "${BATCH_SIZE}" in
+    [Tt][Rr][Uu][Ee]|[Ff][Aa][Ll][Ss][Ee])
+        echo "run_gpu_build: BATCH_SIZE is a boolean (got ${BATCH_SIZE}); a positive integer is required" >&2
+        exit 1
+        ;;
+esac
+if [[ ! "${BATCH_SIZE}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "run_gpu_build: BATCH_SIZE must be a positive integer with no leading zeros (got ${BATCH_SIZE})" >&2
+    exit 1
+fi
+if [ "${BATCH_SIZE}" -lt 1 ] 2>/dev/null; then
+    echo "run_gpu_build: BATCH_SIZE must be >= 1 (got ${BATCH_SIZE})" >&2
+    exit 1
+fi
+
 # --- Locked interpreter --------------------------------------------
 
 PROJECT_PYTHON="${REPO_ROOT}/.venv/bin/python"
@@ -325,7 +346,7 @@ set +e
     --output-dir "${OUTPUT_DIR}" \
     --pipeline-version "${PIPELINE_VERSION}" \
     --device cuda \
-    --batch-size 128 \
+    --batch-size "${BATCH_SIZE}" \
     --sat-model "sat-3l-sm" \
     --work-dir "${WORK_DIR}" \
     --source-commit "${EXPECTED_SOURCE_COMMIT}"

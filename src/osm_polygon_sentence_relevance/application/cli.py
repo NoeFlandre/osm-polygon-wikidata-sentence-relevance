@@ -12,6 +12,9 @@ from osm_polygon_sentence_relevance.application.pipeline import (
     PipelineResult,
     run_pipeline,
 )
+from osm_polygon_sentence_relevance.contracts._exception_chain import (
+    format_exception_chain,
+)
 from osm_polygon_sentence_relevance.contracts.errors import SegmentationError
 from osm_polygon_sentence_relevance.ingestion.acquisition import AcquisitionResult
 from osm_polygon_sentence_relevance.publishing import (
@@ -428,5 +431,10 @@ def main(
         return 0
 
     except Exception as e:
-        print(f"Error: {e}", file=sys.stderr)
+        # Render the bounded exception chain so the build log
+        # surfaces the actual underlying cause (e.g. CUDA OOM,
+        # allocator failure, weight-load mismatch) instead of just
+        # the top-level message. No traceback frames, file paths,
+        # or local variable bindings are emitted.
+        print(format_exception_chain(e), file=sys.stderr)
         return 1
