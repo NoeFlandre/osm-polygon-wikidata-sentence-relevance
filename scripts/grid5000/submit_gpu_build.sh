@@ -271,18 +271,12 @@ COMMAND_STRING="exec ${QUOTED_WRAPPER} ${QUOTED_REPO} ${QUOTED_HF} ${QUOTED_LOG}
 RESOURCE_SPEC="gpu=1,walltime=12:00:00"
 
 # OAR writes OAR.<jobid>.stdout / OAR.<jobid>.stderr into its
-# launching_directory. Submitting from inside REPO_ROOT would
-# pollute the git working tree (OAR's two redirected files
-# would show up in `git status --porcelain`, and the wrapper's
-# clean-tree guard would reject the allocation before any work
-# runs). Switch to an ephemeral, job-scoped launching directory
-# under /tmp so OAR's redirected files never touch the source
-# tree. The compute-node wrapper still resolves REPO_ROOT via
-# its explicit positional argument, so the cwd switch is safe.
-LAUNCH_DIR="/tmp/oar-g5k-${USER}-$$-launching"
-mkdir -m 0700 -p "${LAUNCH_DIR}"
-cd "${LAUNCH_DIR}"
-unset LAUNCH_DIR
-
+# launching_directory. Submitting from the repo root places those
+# files inside REPO_ROOT; they are excluded from version control
+# by the .gitignore rule for `OAR.*.stdout` / `OAR.*.stderr` so
+# they do not pollute the working tree (the wrapper's clean-tree
+# guard then passes). The compute-node wrapper still resolves
+# REPO_ROOT via its explicit positional argument, so the
+# launching_directory only matters for OAR's stdout/stderr files.
 oarsub -q production -l "${RESOURCE_SPEC}" "${COMMAND_STRING}"
 exit $?

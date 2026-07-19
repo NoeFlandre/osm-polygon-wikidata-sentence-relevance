@@ -36,3 +36,10 @@ htmlcov/
 *.bin
 *.pt
 
+# OAR scheduler stdout/stderr files written into the launching
+# directory on the Grid'5000 frontend. The compute-node wrapper
+# checks `git status --porcelain` and rejects a dirty tree, so
+# these redirected files must not appear as untracked entries.
+OAR.*.stdout
+OAR.*.stderr
+
