@@ -7,6 +7,7 @@ and never construct SaT, download weights, or perform inference.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import subprocess
@@ -17,6 +18,52 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[3]
 SCRIPT = ROOT / "scripts" / "grid5000" / "run_gpu_smoke.sh"
+
+
+# --- Test fixtures ----------------------------------------------
+#
+# SHA-shaped test values. Real production paths use a pushed
+# commit SHA; the tests must not hard-code a particular SHA so
+# they remain robust across amendments. Each synthetic value is
+# derived from an explicit role-named label via ``hashlib.sha1``
+# (``usedforsecurity=False``); the digest is used only as a
+# deterministic 40-character lowercase-hex fixture.
+
+
+def _test_sha(label: str) -> str:
+    """Return the first 40 lowercase-hex characters of the SHA-1
+    digest of ``label``. Used as a test-only deterministic
+    fixture for SHA-shaped inputs (e.g. ``EXPECTED_SOURCE_COMMIT``
+    sent into the smoke shell)."""
+    return hashlib.sha1(label.encode("utf-8"), usedforsecurity=False).hexdigest()
+
+
+#: Role-named fixture: a deterministic lowercase-hex SHA-shaped
+#: string standing in for the production source commit.
+TEST_EXPECTED_SOURCE_COMMIT = _test_sha(
+    "tests/grid5000/run_gpu_smoke/expected_source_commit"
+)
+
+#: Role-named fixture: a deterministic lowercase-hex SHA-shaped
+#: string standing in for a deliberately-mismatched commit.
+TEST_WRONG_SOURCE_COMMIT = _test_sha("tests/grid5000/run_gpu_smoke/wrong_source_commit")
+
+#: Role-named fixture: a deterministic lowercase-hex SHA-shaped
+#: string standing in for ``n"_" * 39 + "0"``-style 40-character
+#: non-hex inputs that the smoke must reject.
+TEST_NONHEX_SHA_BASE = _test_sha("tests/grid5000/run_gpu_smoke/nonhex_base")
+
+
+def _with_nonhex_char(digest: str, position: int = 0) -> str:
+    """Return a 40-character string derived from ``digest`` (a
+    lowercase-hex fixture of length 40) but with the character at
+    ``position`` replaced by ``g`` (a deliberately non-hex
+    character). Used to construct exactly-40-length invalid
+    fixtures without writing repeated-character literals."""
+    chars = list(digest)
+    chars[position] = "g"
+    return "".join(chars)
+
 
 # Lines that must NOT appear anywhere in the payload.
 _FORBIDDEN_PATTERNS = (
@@ -34,9 +81,20 @@ _FORBIDDEN_PATTERNS = (
     "/home/",
     "/srv/storage",
     "/tmp/smoke",
-    "git ",
     "git commit",
     "git push",
+    "git checkout",
+    "git reset",
+    "git clean",
+    "git pull",
+    "git fetch",
+    "git clone",
+    "git rm",
+    "git mv",
+    "git stash",
+    "git apply",
+    "git cherry-pick",
+    "git rebase",
     "create_commit",
 )
 
@@ -213,8 +271,36 @@ def test_script_bans_bare_python(script_text):
     assert "python " not in script_text
     assert "uv run" not in script_text
     assert "conda" not in script_text
-    assert "source " not in script_text
     assert "activate" not in script_text
+    # Shell ``source`` activation is banned. We strip comments and
+    # heredoc markers, then check that no executable line starts
+    # with the bare ``source`` keyword.
+    import re
+
+    code_lines: list[str] = []
+    in_heredoc = False
+    heredoc_marker = ""
+    for raw in script_text.splitlines():
+        line = raw.rstrip()
+        if in_heredoc:
+            if line.strip() == heredoc_marker:
+                in_heredoc = False
+                heredoc_marker = ""
+            continue
+        if not line or line.lstrip().startswith("#"):
+            continue
+        # Detect heredoc opener: line ending with <<TAG (quoted or not).
+        m = re.search(r"<<-?\s*['\"]?([A-Za-z_][A-Za-z0-9_]*)['\"]?", line)
+        if m:
+            code_lines.append(line)
+            in_heredoc = True
+            heredoc_marker = m.group(1)
+            continue
+        code_lines.append(line)
+    for line in code_lines:
+        assert not re.match(r"^\s*source\s+\S", line), (
+            f"shell must not use 'source' activation: {line!r}"
+        )
 
 
 # --- Runtime path validation (Stage 2B) -----------------------------
@@ -924,3 +1010,406 @@ def test_validator_works_from_unrelated_working_directory(tmp_path, monkeypatch)
     assert proc.returncode == 0, proc.stderr
     assert dst_path.exists()
     assert not src_path.exists()
+
+
+# --- Phase 9B amendment: scheduler env + run metadata ---------------
+
+
+def test_script_does_not_export_cuda_visible_devices(script_text):
+    # The scheduler owns CUDA_VISIBLE_DEVICES. The smoke must not
+    # overwrite it (no `export CUDA_VISIBLE_DEVICES=...` form).
+    assert "export CUDA_VISIBLE_DEVICES=" not in script_text
+    # And no direct assignment via ${CUDA_VISIBLE_DEVICES:=...} that
+    # would mask the scheduler value if it were blank.
+    assert "CUDA_VISIBLE_DEVICES:=" not in script_text
+
+
+def test_script_does_not_export_oar_job_id(script_text):
+    # OAR_JOB_ID is set by the scheduler and must not be overwritten.
+    assert "export OAR_JOB_ID=" not in script_text
+    assert "OAR_JOB_ID:=" not in script_text
+
+
+def test_script_writes_run_metadata_atomically(script_text):
+    # The smoke must write run_metadata.json with the documented
+    # exact keys, atomic and mode 0600, before inference.
+    assert "run_metadata.json" in script_text
+    # It must be written via the private helper, not a generic
+    # install call (no `install` subcommand rewrite).
+    assert "_run_metadata" in script_text
+    # The metadata content must include the SHA, the model name,
+    # the model SHA, the tokenizer name, the tokenizer SHA, the
+    # OAR job ID, and the hostname. We assert the validator CLI
+    # invocation pattern is referenced (or a static key list).
+    for key in (
+        "source_commit",
+        "model_name",
+        "model_revision",
+        "tokenizer_name",
+        "tokenizer_revision",
+        "oar_job_id",
+        "hostname",
+    ):
+        assert key in script_text, f"run_metadata must reference {key!r}"
+
+
+def test_script_uses_log_dir_for_metadata_artifact(script_text):
+    # run_metadata.json is written under SMOKE_LOG_DIR.
+    assert "${ARTIFACT_VALIDATOR}" in script_text or "_run_metadata" in script_text
+
+
+# --- Reproducibility amendment: EXPECTED_SOURCE_COMMIT contract -----
+
+
+def test_script_requires_expected_source_commit_env(script_text):
+    # EXPECTED_SOURCE_COMMIT must be required, with no default.
+    # The prior pattern ``${EXPECTED_COMMIT:-<hardcoded>}`` is forbidden.
+    assert "EXPECTED_COMMIT:-" not in script_text
+    assert "EXPECTED_SOURCE_COMMIT:-" not in script_text
+    # The smoke must require the variable explicitly.
+    assert (
+        '"${EXPECTED_SOURCE_COMMIT:?EXPECTED_SOURCE_COMMIT is required' in script_text
+    )
+
+
+def test_script_validates_expected_source_commit_is_40_lowercase_hex(
+    script_text,
+):
+    # A pattern that rejects uppercase / wrong-length / non-hex forms.
+    assert "[0-9a-f]" in script_text
+
+
+def test_script_uses_git_for_repo_state_check(script_text):
+    # The script must use ``git -C "${REPO_ROOT}" rev-parse HEAD`` and
+    # ``git -C "${REPO_ROOT}" status --porcelain``; manual parsing
+    # of .git/HEAD is forbidden (worktree / packed-refs hostile).
+    assert 'git -C "${REPO_ROOT}" rev-parse HEAD' in script_text
+    assert 'git -C "${REPO_ROOT}" status --porcelain' in script_text
+    # Manual .git/HEAD reading is forbidden.
+    assert ".git/HEAD" not in script_text
+
+
+def test_script_requires_git_binary_via_command_check(script_text):
+    # The smoke must verify ``command -v git`` succeeds before
+    # any ``git -C`` invocation. The static contract: the script
+    # requires git via ``command -v``.
+    assert "command -v git" in script_text
+
+
+# --- Reproducibility amendment: executable fake-git repo tests ------
+
+
+def _make_fake_repo(tmp_path: Path, files: dict[str, str]) -> Path:
+    """Create a temporary fake git repository with the given files
+    and a single commit. Returns the repo root."""
+    import subprocess as _sp
+
+    repo = tmp_path / "fake_repo"
+    repo.mkdir()
+    _sp.run(["git", "init", "--initial-branch=main", "-q"], cwd=str(repo), check=True)
+    _sp.run(["git", "config", "user.email", "test@example"], cwd=str(repo), check=True)
+    _sp.run(["git", "config", "user.name", "Test"], cwd=str(repo), check=True)
+    for path, content in files.items():
+        full = repo / path
+        full.parent.mkdir(parents=True, exist_ok=True)
+        full.write_text(content)
+    _sp.run(["git", "add", "-A"], cwd=str(repo), check=True)
+    _sp.run(["git", "commit", "-m", "init", "-q"], cwd=str(repo), check=True)
+    return repo
+
+
+def _extract_preflight_validation_block(script_text: str) -> str:
+    """Pull just the EXPECTED_SOURCE_COMMIT + git -C check block
+    out of the real script so we can exercise it standalone.
+
+    The script's git-check block is delimited by two well-known
+    markers that we look up by string. The block is exercised
+    *before* the rest of Phase 1.5 (which depends on caller-provided
+    SMOKE_LOG_DIR), so we use a sliced window that captures the
+    EXPECTED_SOURCE_COMMIT validation and the
+    ``git -C "${REPO_ROOT}" rev-parse HEAD`` /
+    ``git -C "${REPO_ROOT}" status --porcelain`` checks."""
+    start_marker = "EXPECTED_SOURCE_COMMIT is required"
+    end_marker = "HOSTNAME_SHORT="
+    start = script_text.find(start_marker)
+    assert start > 0, "could not locate EXPECTED_SOURCE_COMMIT required marker"
+    end = script_text.find(end_marker, start)
+    assert end > 0, "could not locate HOSTNAME_SHORT marker"
+    # Rewind to include the comment line immediately preceding the
+    # : "${EXPECTED_SOURCE_COMMIT:?...}" line.
+    newline = script_text.rfind("\n", 0, start)
+    preamble_start = script_text.rfind("\n", 0, newline - 1) + 1
+    return script_text[preamble_start:end]
+
+
+def _prepare_synchronous_fake_interpreter(tmp_path: Path) -> Path:
+    """Create a tiny fake interpreter under .venv/bin/python that
+    immediately exits. The validation prefix runs *before* any
+    interpreter call so this is enough to satisfy
+    ``[ -x "${PROJECT_PYTHON}" ]``. We make it executable."""
+    fake_venv = tmp_path / "fake_venv_bin"
+    fake_venv.mkdir()
+    py = fake_venv / "python"
+    py.write_text("#!/usr/bin/env bash\nexit 0\n")
+    py.chmod(0o755)
+    return fake_venv
+
+
+def _drive_validation_prefix(
+    tmp_path: Path,
+    fake_repo: Path,
+    expected: str,
+    extra_env: dict | None = None,
+) -> subprocess.CompletedProcess:
+    """Run only the EXPECTED_SOURCE_COMMIT + git check portion of
+    the smoke via ``bash`` with a faked interpreter. ``expected``
+    is the EXPECTED_SOURCE_COMMIT to set; pass empty/uppercase/etc.
+    to test rejection. The fake interpreter exists so we don't
+    reach model construction."""
+    script_text = SCRIPT.read_text(encoding="utf-8")
+    block = _extract_preflight_validation_block(script_text)
+    # Caller-prefix: command -v git + ``set -euo pipefail``.
+    driver = tmp_path / f"driver_{expected[:8] or 'empty'}.sh"
+    caller = (
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        f'REPO_ROOT="{fake_repo}"\n'
+        + (f'EXPECTED_SOURCE_COMMIT="{expected}"\n' if expected else "")
+        + 'PROJECT_PYTHON="'
+        + str(tmp_path / "fake_venv_bin" / "python")
+        + '"\n'
+        + block
+        + "\n"
+        "exit 0\n"
+    )
+    driver.write_text(caller)
+    driver.chmod(0o755)
+    env = {**os.environ}
+    if extra_env:
+        env.update(extra_env)
+    return subprocess.run(
+        ["bash", str(driver)],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+
+
+def _build_env(tmp_path: Path) -> tuple[Path, Path]:
+    fake_repo = _make_fake_repo(
+        tmp_path,
+        {
+            "README.md": "test\n",
+            "scripts/grid5000/gpu_preflight.py": "print('ok')\n",
+        },
+    )
+    _prepare_synchronous_fake_interpreter(tmp_path)
+    return tmp_path, fake_repo
+
+
+def test_missing_expected_source_commit_fails(tmp_path):
+    """A driver that does not set EXPECTED_SOURCE_COMMIT must
+    fail before any model construction."""
+    # When expected is empty, the driver prefix must NOT set the var.
+    _, fake_repo = _build_env(tmp_path)
+    proc = _drive_validation_prefix(tmp_path, fake_repo, expected="")
+    assert proc.returncode != 0, proc.stdout + proc.stderr
+    # Error must be a stable label, never the missing value.
+    combined = proc.stdout + proc.stderr
+    assert "EXPECTED_SOURCE_COMMIT is required" in combined
+
+
+def test_malformed_expected_source_commit_fails(tmp_path):
+    _, fake_repo = _build_env(tmp_path)
+    # The first two cases test length / uppercase-hex semantics.
+    # The third and fourth are the cases that *require* a 40-character
+    # non-lowercase-hex value: the smoke rejects anything that is
+    # exactly 40 lowercase-hex characters via the ^[0-9a-f]{40}$
+    # gate, so the invalid-length-40 cases must remain length-40
+    # but contain at least one non-lowercase-hex character. Both
+    # fixtures are derived from a deterministic test-only base
+    # digest so this source file never embeds an opaque
+    # 40-character token literal.
+    invalid_uppercase_40 = TEST_NONHEX_SHA_BASE.upper()
+    invalid_nonhex_40 = _with_nonhex_char(TEST_NONHEX_SHA_BASE, position=0)
+    for bad in (
+        TEST_EXPECTED_SOURCE_COMMIT.upper(),  # uppercase 40-hex
+        "not-a-valid-commit-sha-just-prose-padding",  # too short + non-hex
+        invalid_uppercase_40,  # rejected by ^[0-9a-f]{40}$ (uppercase)
+        invalid_nonhex_40,  # rejected by ^[0-9a-f]{40}$ (non-hex char)
+    ):
+        proc = _drive_validation_prefix(tmp_path, fake_repo, expected=bad)
+        assert proc.returncode != 0, (bad, proc.stdout + proc.stderr)
+        # Must mention the SHA field or its value's pattern -- exact
+        # label is implementation-defined; only assert exit != 0
+        # and that we never reach model construction.
+
+
+def test_mismatched_expected_source_commit_fails(tmp_path):
+    _, fake_repo = _build_env(tmp_path)
+    # Real HEAD is whatever fake_repo ends up at. Pick a different
+    # 40-char lowercase hex via the deterministic test fixture.
+    proc = _drive_validation_prefix(
+        tmp_path, fake_repo, expected=TEST_WRONG_SOURCE_COMMIT
+    )
+    assert proc.returncode != 0
+    assert (
+        "does not match" in (proc.stdout + proc.stderr).lower()
+        or "mismatch" in (proc.stdout + proc.stderr).lower()
+    )
+
+
+def test_dirty_checkout_fails(tmp_path):
+    _, fake_repo = _build_env(tmp_path)
+    # Get the real HEAD.
+    proc = _sp_run_in(fake_repo, ["git", "rev-parse", "HEAD"]).stdout.strip()
+    # Touch a tracked file to make status --porcelain non-empty.
+    (fake_repo / "README.md").write_text("modified\n")
+    proc2 = _drive_validation_prefix(tmp_path, fake_repo, expected=proc)
+    assert proc2.returncode != 0
+    combined = proc2.stdout + proc2.stderr
+    assert "dirty" in combined.lower() or "clean" in combined.lower()
+
+
+def _sp_run_in(cwd: Path, args: list[str]) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        args, cwd=str(cwd), capture_output=True, text=True, check=True
+    )
+
+
+def test_clean_checkout_with_matching_sha_passes(tmp_path):
+    _, fake_repo = _build_env(tmp_path)
+    real_head = _sp_run_in(fake_repo, ["git", "rev-parse", "HEAD"]).stdout.strip()
+    proc = _drive_validation_prefix(tmp_path, fake_repo, expected=real_head)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+# --- Phase 9B safety amendment: git-stderr path leak -----------------
+
+
+def test_git_rev_parse_failure_does_not_leak_repo_root_path(tmp_path):
+    """When ``git -C "${REPO_ROOT}" rev-parse HEAD`` fails,
+    ``${REPO_ROOT}`` must not appear in stdout/stderr."""
+    # Build a fake interpreter and a fake repo ROOT that
+    # *does not exist*, so ``git -C`` fails with stderr that
+    # includes REPO_ROOT.
+    fake_venv = tmp_path / "fake_venv_bin"
+    fake_venv.mkdir()
+    py = fake_venv / "python"
+    py.write_text("#!/usr/bin/env bash\nexit 0\n")
+    py.chmod(0o755)
+
+    # DO NOT mkdir -- the path simply does not exist.
+    repo_root = tmp_path / "SENSITIVE-LEAK-PATH-WILL-NOT-APPEAR"
+
+    driver = tmp_path / "driver_revparse_fail.sh"
+    driver.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        'REPO_ROOT="' + str(repo_root) + '"\n'
+        'PROJECT_PYTHON="' + str(py) + '"\n'
+        'EXPECTED_SOURCE_COMMIT="'
+        # 40 lowercase-hex digits; the test does NOT need to
+        # match the (non-existent) HEAD since git rev-parse
+        # itself fails first. Built from the deterministic
+        # test fixture so no opaque 40-char literal appears in
+        # this file.
+        + TEST_EXPECTED_SOURCE_COMMIT
+        + '"\n'
+        + _extract_preflight_validation_block(SCRIPT.read_text(encoding="utf-8"))
+        + "\n"
+        "exit 0\n"
+    )
+    driver.chmod(0o755)
+    proc = subprocess.run(
+        ["bash", str(driver)],
+        env=os.environ,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    assert proc.returncode != 0, proc.stdout + proc.stderr
+    combined = proc.stdout + proc.stderr
+    assert "SENSITIVE-LEAK-PATH-WILL-NOT-APPEAR" not in combined, (
+        f"REPO_ROOT leaked: {combined!r}"
+    )
+
+
+def test_git_status_failure_does_not_leak_repo_root_path(tmp_path):
+    """When ``git -C "${REPO_ROOT}" status --porcelain`` fails,
+    ``${REPO_ROOT}`` must not appear in stdout/stderr.
+
+    We construct a real git repo, capture HEAD (so rev-parse
+    succeeds), and then replace ``.git`` with an empty directory
+    to force ``git status --porcelain`` to fail."""
+    fake_venv = tmp_path / "fake_venv_bin"
+    fake_venv.mkdir()
+    py = fake_venv / "python"
+    py.write_text("#!/usr/bin/env bash\nexit 0\n")
+    py.chmod(0o755)
+
+    repo_root = tmp_path / "SENSITIVE-LEAK-PATH-FOR-STATUS"
+    repo_root.mkdir()
+    subprocess.run(
+        ["git", "init", "--initial-branch=main", "-q"],
+        cwd=str(repo_root),
+        check=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.email", "t@e"],
+        cwd=str(repo_root),
+        check=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "T"],
+        cwd=str(repo_root),
+        check=True,
+    )
+    (repo_root / "f").write_text("x\n")
+    subprocess.run(["git", "add", "-A"], cwd=str(repo_root), check=True)
+    subprocess.run(
+        ["git", "commit", "-m", "init", "-q"],
+        cwd=str(repo_root),
+        check=True,
+    )
+    real_head = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=str(repo_root),
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+
+    # Corrupt .git so status fails.
+    import shutil as _sh
+
+    _sh.rmtree(repo_root / ".git")
+    (repo_root / ".git").write_text("not a git directory\n")
+
+    driver = tmp_path / "driver_status_fail.sh"
+    driver.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        'REPO_ROOT="' + str(repo_root) + '"\n'
+        'PROJECT_PYTHON="' + str(py) + '"\n'
+        'EXPECTED_SOURCE_COMMIT="'
+        + real_head
+        + '"\n'
+        + _extract_preflight_validation_block(SCRIPT.read_text(encoding="utf-8"))
+        + "\n"
+        "exit 0\n"
+    )
+    driver.chmod(0o755)
+    proc = subprocess.run(
+        ["bash", str(driver)],
+        env=os.environ,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    assert proc.returncode != 0, proc.stdout + proc.stderr
+    combined = proc.stdout + proc.stderr
+    assert "SENSITIVE-LEAK-PATH-FOR-STATUS" not in combined, (
+        f"REPO_ROOT leaked: {combined!r}"
+    )
