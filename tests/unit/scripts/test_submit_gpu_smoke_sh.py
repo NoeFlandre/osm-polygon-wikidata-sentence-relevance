@@ -212,7 +212,10 @@ def _make_persistent_layout(
     log_root: Path | None = None,
 ) -> tuple[Path, Path, Path]:
     """Create canonical absolute persistent directories under a
-    private temp root. Idempotent."""
+    private temp root. Idempotent. Also seeds byte-exact 40-char
+    refs/main files for the SaT model and XLM-R tokenizer so the
+    pre-submission cache-ref validator passes (Phase 9M amendment).
+    """
     base = tmp_path / "persistent"
     base.mkdir(parents=True, exist_ok=True)
     repo_root = repo_root or (base / "repo")
@@ -221,7 +224,34 @@ def _make_persistent_layout(
     repo_root.mkdir(parents=True, exist_ok=True)
     hf_home.mkdir(parents=True, exist_ok=True)
     log_root.mkdir(parents=True, exist_ok=True)
+    _seed_clean_hf_refs(hf_home)
     return repo_root, hf_home, log_root
+
+
+def _seed_clean_hf_refs(hf_home: Path) -> None:
+    """Write byte-exact 40-byte refs/main for the two cached repos."""
+    import os
+
+    pairs = [
+        (
+            "models--segment-any-text--sat-3l-sm",
+            "137da054051ad9f1eac42025f758db4ac9f22535",
+        ),
+        (
+            "models--facebookAI--xlm-roberta-base",
+            "e73636d4f797dec63c3081bb6ed5c7b0bb3f2089",
+        ),
+    ]
+    for slug, sha in pairs:
+        refs_dir = hf_home / "hub" / slug / "refs"
+        refs_dir.mkdir(parents=True, exist_ok=True)
+        path = refs_dir / "main"
+        # Use os.write for byte-exact 40-byte semantics (no newline).
+        fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            os.write(fd, sha.encode("ascii"))
+        finally:
+            os.close(fd)
 
 
 def _ensure_target_wrapper(repo_root: Path, source: Path) -> None:
@@ -253,6 +283,20 @@ def _run_submit(
     """
     fake_bin = _make_fake_oarsub(tmp_path)
     capture = tmp_path / "oarsub_capture"
+    # Always seed the cache-ref validator so the submit script can
+    # source it, even on tests that intentionally omit the wrapper
+    # (the validator check runs before the wrapper-presence check).
+    validator_src = (
+        Path(__file__).resolve().parents[3]
+        / "scripts"
+        / "grid5000"
+        / "_cache_ref_validator.sh"
+    )
+    validator_dst = Path(repo_root) / "scripts" / "grid5000" / "_cache_ref_validator.sh"
+    if validator_src.exists():
+        validator_dst.parent.mkdir(parents=True, exist_ok=True)
+        validator_dst.write_text(validator_src.read_text())
+        validator_dst.chmod(0o755)
     if wrapper_present:
         wrapper = _make_fake_compute_wrapper(tmp_path)
         target_wrapper = (
@@ -453,6 +497,7 @@ def test_no_injection_marker_file_created_for_hostile_values(tmp_path):
     hostile_repo.mkdir(parents=True)
     hf = base / "hf_home"
     hf.mkdir()
+    _seed_clean_hf_refs(hf)
     log = base / "logs"
     log.mkdir()
     proc = _run_submit(
@@ -486,6 +531,7 @@ def test_hostile_values_with_single_quote_and_command_substitution(tmp_path):
     repo.mkdir()
     hf = base / "hf'a$(touch injected_now)b`date`"
     hf.mkdir()
+    _seed_clean_hf_refs(hf)
     log = base / "logs"
     log.mkdir()
     proc = _run_submit(
@@ -630,6 +676,7 @@ def test_missing_wrapper_error_does_not_leak_wrapper_path(tmp_path):
     sensitive_root.mkdir(parents=True)
     hf_home = tmp_path / "persistent" / "hf_home"
     hf_home.mkdir()
+    _seed_clean_hf_refs(hf_home)
     log_root = tmp_path / "persistent" / "logs"
     log_root.mkdir()
     proc = _run_submit(
@@ -658,6 +705,7 @@ def test_non_executable_wrapper_error_does_not_leak_wrapper_path(tmp_path):
     sensitive_root.mkdir(parents=True)
     hf_home = tmp_path / "persistent" / "hf_home"
     hf_home.mkdir()
+    _seed_clean_hf_refs(hf_home)
     log_root = tmp_path / "persistent" / "logs"
     log_root.mkdir()
     proc = _run_submit(
@@ -807,6 +855,18 @@ def test_oarsub_stdout_stderr_not_rewritten(tmp_path):
     wrapper.parent.mkdir(parents=True, exist_ok=True)
     wrapper.write_text("#!/usr/bin/env bash\nexit 0\n")
     wrapper.chmod(0o755)
+    # Copy the cache-ref validator so the submit script can source it.
+    validator_src = (
+        Path(__file__).resolve().parents[3]
+        / "scripts"
+        / "grid5000"
+        / "_cache_ref_validator.sh"
+    )
+    if validator_src.exists():
+        (wrapper.parent / "_cache_ref_validator.sh").write_text(
+            validator_src.read_text()
+        )
+        (wrapper.parent / "_cache_ref_validator.sh").chmod(0o755)
     proc = subprocess.run(
         ["bash", str(SUBMIT_SCRIPT), str(repo), str(hf), str(log), TEST_SOURCE_COMMIT],
         cwd=str(tmp_path),

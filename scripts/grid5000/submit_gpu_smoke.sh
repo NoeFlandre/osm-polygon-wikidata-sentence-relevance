@@ -139,6 +139,28 @@ if [[ ! "${EXPECTED_SOURCE_COMMIT}" =~ ^[0-9a-f]{40}$ ]]; then
     exit 1
 fi
 
+# --- Offline HF cache ref validator (Phase 9M amendment) ------------
+#
+# The compute node runs with HF_HUB_OFFLINE=1 and TRANSFORMERS_OFFLINE=1
+# set by the wrapper, so a broken refs/main file (e.g. trailing newline
+# from `printf '%s\n'`) prevents model construction and aborts the build.
+# Validate byte-exact 40-byte lowercase hex SHAs for both the model and
+# the tokenizer refs/main BEFORE calling oarsub. The validator emits a
+# single machine-parseable refusal line on stderr and exits non-zero.
+# See ``scripts/grid5000/_cache_ref_validator.sh`` and
+# ``docs/guides/grid5000.md`` for the contract.
+
+CACHE_REF_VALIDATOR="${REPO_ROOT}/scripts/grid5000/_cache_ref_validator.sh"
+if [ ! -f "${CACHE_REF_VALIDATOR}" ]; then
+    echo "submit_gpu_smoke: cache-ref validator is missing at ${CACHE_REF_VALIDATOR}" >&2
+    exit 1
+fi
+# shellcheck disable=SC1090
+. "${CACHE_REF_VALIDATOR}"
+check_offline_cache "submit_gpu_smoke" "${HF_HOME}" \
+    "${MODEL_REPO}" "${MODEL_REV}" \
+    "${TOKENIZER_REPO}" "${TOKENIZER_REV}" || exit 1
+
 # --- Compute-node wrapper presence + executable ----------------------
 #
 # The path is held in WRAPPER for the oarsub invocation below but
