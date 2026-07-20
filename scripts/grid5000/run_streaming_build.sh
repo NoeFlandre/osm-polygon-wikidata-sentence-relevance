@@ -27,6 +27,9 @@ if [ ! -x "${PYTHON}" ]; then
 fi
 
 export HF_HOME
+# Input shards and checkpoint commits require Hub access.  Grid'5000
+# sessions may inherit this variable from earlier offline smoke runs.
+unset HF_HUB_OFFLINE
 export TRANSFORMERS_OFFLINE=1
 export PYTHONPATH="${REPO_ROOT}/src:${REPO_ROOT}"
 

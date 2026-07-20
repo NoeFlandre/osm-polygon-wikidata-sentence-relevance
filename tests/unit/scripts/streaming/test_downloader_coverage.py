@@ -336,9 +336,7 @@ def test_phys_resolves_symlink(tmp_path: Path) -> None:
 
 def test_synthesized_url_quotes_slashes(tmp_path: Path) -> None:
     revision = "a" * 40
-    url = _synthesized_url(
-        "owner/repo", revision, "polygons/foo-latest.parquet"
-    )
+    url = _synthesized_url("owner/repo", revision, "polygons/foo-latest.parquet")
     assert "owner/repo" in url
     assert f"/resolve/{revision}/" in url
     assert "polygons/foo-latest.parquet" in url
