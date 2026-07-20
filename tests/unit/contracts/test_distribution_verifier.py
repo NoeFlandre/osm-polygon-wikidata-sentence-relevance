@@ -236,12 +236,15 @@ def _make_fake_sdist(
         "scripts/grid5000/run_gpu_build.sh",
         "scripts/grid5000/run_gpu_build_job.sh",
         "scripts/grid5000/submit_gpu_build.sh",
+        "scripts/grid5000/run_streaming_build.sh",
+        "scripts/grid5000/run_streaming_build_job.sh",
+        "scripts/grid5000/submit_streaming_build.sh",
         "scripts/grid5000/_cache_ref_validator.sh",
         "scripts/grid5000/gpu_preflight.py",
         "scripts/grid5000/_validate_artifact.py",
         "scripts/grid5000/_run_metadata.py",
     ]
-    shell_only = set(public_scripts[:7])
+    shell_only = set(public_scripts[:10])
     modes = shell_script_modes or {}
     with tarfile.open(sdist, "w:gz") as tf:
         # Minimal required sdist layout.
@@ -303,6 +306,9 @@ class TestVerifierRequiresPublicScriptsInSdist:
             "scripts/grid5000/run_gpu_build.sh",
             "scripts/grid5000/run_gpu_build_job.sh",
             "scripts/grid5000/submit_gpu_build.sh",
+            "scripts/grid5000/run_streaming_build.sh",
+            "scripts/grid5000/run_streaming_build_job.sh",
+            "scripts/grid5000/submit_streaming_build.sh",
             "scripts/grid5000/_cache_ref_validator.sh",
             "scripts/grid5000/gpu_preflight.py",
             "scripts/grid5000/_validate_artifact.py",

@@ -127,6 +127,14 @@ _LOWER_HEX_40 = re.compile(r"^[0-9a-f]{40}$")
 _LOWER_HEX_64 = re.compile(r"^[0-9a-f]{64}$")
 
 
+def segmented_schema_sha256() -> str:
+    """Return the canonical SHA-256 fingerprint of the checkpoint schema."""
+
+    return hashlib.sha256(
+        SEGMENTED_SENTENCES_SCHEMA.serialize().to_pybytes()
+    ).hexdigest()
+
+
 # ---------------------------------------------------------------------------
 # Exceptions
 # ---------------------------------------------------------------------------
@@ -1254,6 +1262,8 @@ def publish_shard_checkpoint(
             "source_files": [e.to_dict() for e in verified_manifest],
             "segmentation_report": _segmentation_report_to_dict(report),
             "segmented_table_sha256": sha,
+            "segmented_table_bytes": staging_parquet.stat().st_size,
+            "segmented_schema_sha256": segmented_schema_sha256(),
             "completed_at_unix": int(time.time()),
         }
         meta_bytes = json.dumps(
@@ -1570,6 +1580,7 @@ __all__ = [
     "SHARDS_QUARANTINE_DIRNAME",
     "SHARDS_STAGING_PREFIX",
     "SHARD_METADATA_NAME",
+    "segmented_schema_sha256",
     "SHARD_PARQUET_NAME",
     "SourceFileEntry",
     "WorkDirLock",

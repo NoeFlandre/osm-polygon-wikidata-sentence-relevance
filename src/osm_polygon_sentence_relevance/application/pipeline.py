@@ -10,6 +10,7 @@ import pyarrow as pa
 from osm_polygon_sentence_relevance.application import checkpoint as _checkpoint
 from osm_polygon_sentence_relevance.application.checkpoint import (
     SHARDS_ACTIVE_DIRNAME,
+    CheckpointPublicationError,
     CheckpointValidationError,
     SourceFileEntry,
     WorkDirLock,
@@ -26,7 +27,10 @@ from osm_polygon_sentence_relevance.application.checkpoint import (
     write_run_inventory,
 )
 from osm_polygon_sentence_relevance.contracts.schemas import SEGMENTED_SENTENCES_SCHEMA
-from osm_polygon_sentence_relevance.ingestion.discovery import discover_shards
+from osm_polygon_sentence_relevance.ingestion.discovery import (
+    RegionShardSet,
+    discover_shards,
+)
 from osm_polygon_sentence_relevance.joins import build_region_section_occurrences
 from osm_polygon_sentence_relevance.output.exporter import (
     ExportResult,
@@ -199,6 +203,228 @@ def run_pipeline(
     finally:
         if lock_ctx is not None:
             release_work_dir_lock(lock_ctx)
+
+
+@dataclass(frozen=True, slots=True)
+class ShardCheckpointResult:
+    """Result of processing a single shard through ``process_single_shard``.
+
+    The active checkpoint, when ``published`` is ``True``, is guaranteed
+    to survive strict validation
+    (:func:`osm_polygon_sentence_relevance.application.checkpoint.load_shard_checkpoint`)
+    at any subsequent invocation with the same identity values.
+    """
+
+    shard_key: str
+    active_path: Path | None
+    published: bool
+    reused: bool
+    segmentation_report: SegmentationReport
+    joined_occurrence_count: int
+
+
+def process_single_shard(
+    *,
+    shard: RegionShardSet,
+    input_root: Path,
+    segmenter: SentenceSegmenter,
+    work_dir: Path,
+    source_commit: str,
+    input_dataset_revision: str,
+    pipeline_version: str,
+    model_name: str,
+    batch_size: int,
+) -> ShardCheckpointResult:
+    """Process a single shard and publish a durable per-shard checkpoint.
+
+    This is the constrained-storage complement of
+    :func:`run_pipeline`. Where ``run_pipeline`` discovers all shards,
+    reconciles inventory, and quarantines ``removed`` shards, this
+    facade:
+
+    * never calls ``discover_shards`` on a partial input,
+    * never calls ``reconcile_inventory``,
+    * never quarantines sibling shards,
+    * never runs the segmenter if the active checkpoint is valid,
+    * writes exactly one checkpoint under
+      ``${work_dir}/shards/active/<shard_key>/`` (or reuses an
+      existing valid one),
+    * is safe to invoke repeatedly (idempotent on valid active).
+
+    Invariants:
+
+    * ``source_commit``, ``input_dataset_revision``,
+      ``pipeline_version``, ``model_name``, ``batch_size`` and the
+      physical resolution of ``input_root`` are bound into the
+      checkpoint metadata.
+    * Active checkpoint publication uses the existing
+      :func:`publish_shard_checkpoint` primitive; failure aborts with
+      the active slot untouched.
+    * Active checkpoint validation uses the existing
+      :func:`load_shard_checkpoint` primitive; mismatch quarantines
+      the orphan and re-segments.
+    * The work directory is single-writer; the ``WorkDirLock`` is
+      acquired before any side-effecting I/O.
+
+    Parameters
+    ----------
+    shard : RegionShardSet
+        The single shard to process. Its files must exist under
+        ``input_root``.
+    input_root : Path
+        Canonical input root shared with all callers (used for
+        identity binding).
+    segmenter : SentenceSegmenter
+        Sentence segmenter instance. Not constructed here.
+    work_dir, source_commit, input_dataset_revision, pipeline_version,
+    model_name, batch_size
+        Identity values recorded into the checkpoint metadata and
+        validated on subsequent loads.
+
+    Returns
+    -------
+    ShardCheckpointResult
+        Lightweight record describing the active path, whether the
+        checkpoint was reused (``reused=True``) or freshly published
+        (``published=True``), the segmentation report, and the
+        joined section occurrence count.
+    """
+    if not isinstance(shard, RegionShardSet):
+        raise TypeError("shard must be a RegionShardSet")
+    if not isinstance(segmenter, SentenceSegmenter):
+        raise TypeError("segmenter must implement the SentenceSegmenter protocol")
+    work_path = _checkpoint.validate_work_dir(work_dir)
+    if work_path is None:
+        raise ValueError("process_single_shard requires work_dir")
+    source_commit = _checkpoint.validate_source_commit(source_commit)
+    if (
+        not isinstance(input_dataset_revision, str)
+        or not input_dataset_revision.strip()
+    ):
+        raise ValueError("input_dataset_revision must be a non-blank string")
+    if not isinstance(pipeline_version, str) or not pipeline_version.strip():
+        raise ValueError("pipeline_version must be a non-blank string")
+    if not isinstance(model_name, str) or not model_name.strip():
+        raise ValueError("model_name must be a non-blank string")
+    if (
+        isinstance(batch_size, bool)
+        or not isinstance(batch_size, int)
+        or batch_size <= 0
+    ):
+        raise ValueError("batch_size must be a positive integer")
+
+    in_path = Path(input_root).expanduser().resolve(strict=False)
+    lock_ctx = acquire_work_dir_lock(work_path)
+    try:
+        # Defensive scan of the active directory; abort on any
+        # unexpected entry. Mirrors run_pipeline for safety.
+        scan_active_directory(work_path)
+
+        active_path = work_path / "shards" / SHARDS_ACTIVE_DIRNAME / shard.shard_key
+
+        # Try to reuse an existing valid active checkpoint first.
+        try:
+            (
+                reused_table,
+                reused_report,
+                _,
+            ) = load_shard_checkpoint(
+                work_path,
+                shard.shard_key,
+                input_dataset_revision=input_dataset_revision,
+                pipeline_version=pipeline_version,
+                source_commit=source_commit,
+                model_name=model_name,
+                batch_size=batch_size,
+                input_root=in_path,
+            )
+            cached_total = int(reused_report.input_section_occurrence_count)
+            return ShardCheckpointResult(
+                shard_key=shard.shard_key,
+                active_path=active_path if active_path.exists() else None,
+                published=False,
+                reused=True,
+                segmentation_report=reused_report,
+                joined_occurrence_count=cached_total,
+            )
+        except CheckpointValidationError:
+            # No usable checkpoint.  A present orphan must be
+            # quarantined successfully before recomputation; quarantine
+            # failure is a data-preservation failure and therefore
+            # propagates unchanged.
+            if active_path.exists():
+                quarantine_shard_checkpoint(
+                    work_dir=work_path,
+                    shard_key=shard.shard_key,
+                    reason="process_single_shard: orphan invalid checkpoint",
+                )
+
+        # Validate pre-existing active directory does not block
+        # publication; ``publish_shard_checkpoint`` will refuse to
+        # overwrite a valid checkpoint, but a half-formed directory
+        # (e.g. missing files) must be cleaned before the call.
+        if active_path.exists():
+            # After the quarantine attempt, active_path should be
+            # gone. If it still exists here, refuse to overwrite.
+            raise CheckpointPublicationError(
+                f"cannot publish shard {shard.shard_key!r}: "
+                "active directory is present and not quarantined"
+            )
+
+        # Hash source files once and again right before publishing.
+        initial_manifest = _checkpoint.compute_shard_source_manifest(
+            shard, input_root=in_path
+        )
+
+        joined = build_region_section_occurrences(shard)
+        segmented_res = segment_joined_sections(
+            joined.table, segmenter, batch_size=batch_size
+        )
+
+        verified_manifest = _verify_pre_publish_manifest(
+            shard,
+            initial_manifest=initial_manifest,
+            input_root=in_path,
+        )
+
+        publish_shard_checkpoint(
+            work_dir=work_path,
+            shard=shard,
+            input_root=in_path,
+            table=segmented_res.table,
+            report=segmented_res.report,
+            input_dataset_revision=input_dataset_revision,
+            pipeline_version=pipeline_version,
+            source_commit=source_commit,
+            model_name=model_name,
+            batch_size=batch_size,
+            verified_manifest=verified_manifest,
+        )
+
+        # Re-read the just-published checkpoint with strict validation
+        # to enforce the durability invariant before returning.
+        _, validation_report, _ = load_shard_checkpoint(
+            work_path,
+            shard.shard_key,
+            input_dataset_revision=input_dataset_revision,
+            pipeline_version=pipeline_version,
+            source_commit=source_commit,
+            model_name=model_name,
+            batch_size=batch_size,
+            input_root=in_path,
+            current_manifest=verified_manifest,
+        )
+
+        return ShardCheckpointResult(
+            shard_key=shard.shard_key,
+            active_path=active_path,
+            published=True,
+            reused=False,
+            segmentation_report=validation_report,
+            joined_occurrence_count=joined.report.total_occurrence_count,
+        )
+    finally:
+        release_work_dir_lock(lock_ctx)
 
 
 def _run_pipeline_locked(
@@ -588,4 +814,9 @@ def _write_heartbeat_or_propagate(work_path: Path, **kwargs: Any) -> Path:
     return _checkpoint.write_heartbeat(work_path, **kwargs)
 
 
-__all__ = ["PipelineResult", "run_pipeline"]
+__all__ = [
+    "PipelineResult",
+    "run_pipeline",
+    "process_single_shard",
+    "ShardCheckpointResult",
+]
