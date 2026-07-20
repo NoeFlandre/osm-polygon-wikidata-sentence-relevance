@@ -29,6 +29,8 @@ def test_payload_uses_locked_python_real_inventory_and_explicit_cuda() -> None:
     assert "--device cuda" in text
     assert '--shard "all"' not in text
     assert "unset HF_HUB_OFFLINE" in text
+    assert "unset TRANSFORMERS_OFFLINE" in text
+    assert "export TRANSFORMERS_OFFLINE=1" not in text
 
 
 def test_job_uses_allocation_bound_scratch_and_never_bare_python() -> None:
