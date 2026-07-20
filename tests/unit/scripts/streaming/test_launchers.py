@@ -5,7 +5,6 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[4]
 GRID = ROOT / "scripts" / "grid5000"
 
@@ -29,16 +28,19 @@ def test_payload_uses_locked_python_real_inventory_and_explicit_cuda() -> None:
     assert 'exec "${PYTHON}" "${args[@]}"' in text
     assert "--device cuda" in text
     assert '--shard "all"' not in text
-    assert "HF_HUB_OFFLINE" not in text
+    assert "unset HF_HUB_OFFLINE" in text
 
 
 def test_job_uses_allocation_bound_scratch_and_never_bare_python() -> None:
     text = _text("run_streaming_build_job.sh")
-    assert 'SCRATCH_BASE="${LOCALSCRATCH:-${OAR_JOB_SCRATCH_DIR:-/tmp/oar-${OAR_JOB_ID}}}"' in text
+    assert (
+        'SCRATCH_BASE="${LOCALSCRATCH:-${OAR_JOB_SCRATCH_DIR:-/tmp/oar-${OAR_JOB_ID}}}"'
+        in text
+    )
     assert 'WORK_DIR="${SCRATCH_BASE}/osm_streaming_${RUN_ID}"' in text
     assert 'PYTHON="${REPO_ROOT}/.venv/bin/python"' in text
     assert "python3" not in text
-    assert "HF_HUB_OFFLINE" not in text
+    assert "export HF_HUB_OFFLINE" not in text
 
 
 def test_submitter_submits_one_noninteractive_gpu_job() -> None:
