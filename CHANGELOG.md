@@ -83,6 +83,25 @@ package remains pre-1.0 (currently `0.1.0`).
   CLI default of 128 remains the value for ordinary CLI use;
   the remote launcher does not default). The previous
   hard-coded `--batch-size 128` is removed from the payload.
+- **9M-G: pre-submission cache-ref validator.** Both
+  `submit_gpu_smoke.sh` and `submit_gpu_build.sh` now source
+  `scripts/grid5000/_cache_ref_validator.sh` before `oarsub`,
+  which asserts (1) `refs/main` exists for the two pinned
+  repos, (2) its byte length is exactly 40, (3) it contains
+  no whitespace bytes, and (4) it matches the expected
+  lowercase hex SHA. Any failure emits exactly one
+  machine-parseable refusal line
+  (`<label>: cache_ref_invalid: repo=<id> reason=<r> expected=<sha> actual=<repr>`)
+  on stderr with a non-zero exit, and `oarsub` is never
+  reached. This guards against `huggingface_hub` 1.23.0's
+  behaviour of not stripping a trailing newline from
+  `refs/main` before resolving the snapshot directory
+  (a 41-byte `137da054…\n` ref silently breaks
+  `try_to_load_from_cache(revision="main")` even when the
+  underlying blob is intact). `docs/guides/grid5000.md` has
+  been updated to require `printf '%s'` (never
+  `printf '%s\n'`) when operators populate `${HF_HOME}` from
+  a recovered snapshot.
 
 ### Added
 - Domain-package reorganization of the implementation under `src/`:

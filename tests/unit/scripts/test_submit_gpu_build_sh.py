@@ -237,6 +237,9 @@ def _make_persistent_layout(tmp_path: Path) -> dict[str, Path]:
     NOT created: the submission adapter requires OUTPUT_DIR to be
     fresh (it does not need to exist; the operator creates it on
     the compute node).
+
+    Seeds byte-exact 40-byte refs/main files for the SaT model and
+    XLM-R tokenizer so the pre-submission cache-ref validator passes.
     """
     base = tmp_path / "persistent"
     base.mkdir(parents=True, exist_ok=True)
@@ -248,6 +251,7 @@ def _make_persistent_layout(tmp_path: Path) -> dict[str, Path]:
     output_dir = base / "output"
     for p in (repo_root, hf_home, log_root, input_root, work_dir):
         p.mkdir(parents=True, exist_ok=True)
+    _seed_clean_hf_refs(hf_home)
     return {
         "repo_root": repo_root,
         "hf_home": hf_home,
@@ -256,6 +260,31 @@ def _make_persistent_layout(tmp_path: Path) -> dict[str, Path]:
         "work_dir": work_dir,
         "output_dir": output_dir,
     }
+
+
+def _seed_clean_hf_refs(hf_home: Path) -> None:
+    """Write byte-exact 40-byte refs/main for the two cached repos."""
+    import os
+
+    pairs = [
+        (
+            "models--segment-any-text--sat-3l-sm",
+            "137da054051ad9f1eac42025f758db4ac9f22535",
+        ),
+        (
+            "models--facebookAI--xlm-roberta-base",
+            "e73636d4f797dec63c3081bb6ed5c7b0bb3f2089",
+        ),
+    ]
+    for slug, sha in pairs:
+        refs_dir = hf_home / "hub" / slug / "refs"
+        refs_dir.mkdir(parents=True, exist_ok=True)
+        path = refs_dir / "main"
+        fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            os.write(fd, sha.encode("ascii"))
+        finally:
+            os.close(fd)
 
 
 def _run_submit(
@@ -277,6 +306,19 @@ def _run_submit(
 ) -> subprocess.CompletedProcess:
     fake_bin = _make_fake_oarsub(tmp_path)
     capture = tmp_path / "oarsub_capture"
+    # Always seed the cache-ref validator so the submit script can
+    # source it, even on tests that intentionally omit the wrapper.
+    validator_src = (
+        Path(__file__).resolve().parents[3]
+        / "scripts"
+        / "grid5000"
+        / "_cache_ref_validator.sh"
+    )
+    validator_dst = Path(repo_root) / "scripts" / "grid5000" / "_cache_ref_validator.sh"
+    if validator_src.exists():
+        validator_dst.parent.mkdir(parents=True, exist_ok=True)
+        validator_dst.write_text(validator_src.read_text())
+        validator_dst.chmod(0o755)
     if wrapper_present:
         wrapper = _make_fake_compute_wrapper(tmp_path)
         target = Path(repo_root) / "scripts" / "grid5000" / "run_gpu_build_job.sh"
@@ -868,6 +910,18 @@ class TestExactlyOnceSubmission:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(wrapper.read_text())
         target.chmod(0o755)
+        # Copy the cache-ref validator so the submit script can source it.
+        validator_src = (
+            Path(__file__).resolve().parents[3]
+            / "scripts"
+            / "grid5000"
+            / "_cache_ref_validator.sh"
+        )
+        if validator_src.exists():
+            (target.parent / "_cache_ref_validator.sh").write_text(
+                validator_src.read_text()
+            )
+            (target.parent / "_cache_ref_validator.sh").chmod(0o755)
         proc = subprocess.run(
             [
                 "bash",
@@ -971,6 +1025,11 @@ class TestNineArgSerialization:
             tricky.mkdir(parents=True, exist_ok=False)
         except OSError:
             pytest.skip("filesystem refuses single quote in path")
+        # The custom hf_home override doesn't carry the clean refs
+        # that _make_persistent_layout seeded at the default path;
+        # re-seed them at the override so the pre-submission
+        # cache-ref validator passes (Phase 9M amendment).
+        _seed_clean_hf_refs(tricky)
         proc = _run_submit(
             tmp_path,
             repo_root=layout["repo_root"],
