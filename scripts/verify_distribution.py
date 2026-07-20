@@ -180,6 +180,9 @@ def verify_sdist(sdist: Path) -> None:
         "scripts/grid5000/run_gpu_build.sh",
         "scripts/grid5000/run_gpu_build_job.sh",
         "scripts/grid5000/submit_gpu_build.sh",
+        "scripts/grid5000/run_streaming_build.sh",
+        "scripts/grid5000/run_streaming_build_job.sh",
+        "scripts/grid5000/submit_streaming_build.sh",
         "scripts/grid5000/_cache_ref_validator.sh",
     )
     for public_script in (

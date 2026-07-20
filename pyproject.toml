@@ -76,12 +76,12 @@ osm-polygon-sentence-relevance = "osm_polygon_sentence_relevance.application.cli
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "--cov=osm_polygon_sentence_relevance --cov-branch"
+addopts = "--cov=osm_polygon_sentence_relevance --cov=scripts.streaming --cov-branch"
 
 
 [tool.coverage.run]
 branch = true
-source = ["osm_polygon_sentence_relevance"]
+source = ["osm_polygon_sentence_relevance", "scripts.streaming"]
 omit = [
     "*/tests/*",
     "src/osm_polygon_sentence_relevance/*/__init__.py",
