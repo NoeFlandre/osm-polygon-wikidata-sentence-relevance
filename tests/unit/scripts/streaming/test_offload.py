@@ -592,3 +592,85 @@ def test_discover_run_rejects_corrupt_entry(tmp_path: Path) -> None:
             run_id="run-corrupt",
             local_cache_dir=tmp_path / "cache",
         )
+
+
+# ---------------------------------------------------------------------------
+# RED: discover_run ignores folder entries returned by list_repo_tree
+# when ``expand=True`` (Phase 9O).  The production Hub listing of
+# ``checkpoints/<run_id>/`` returns both the shard folder AND the
+# files inside it; the discovery loop must skip single-segment
+# relative paths and group the rest by shard_key.
+# ---------------------------------------------------------------------------
+
+
+def test_discover_run_skips_folder_entries(tmp_path: Path, monkeypatch) -> None:
+    fake = Path("/tmp/streaming-offload-expand")
+    if fake.exists():
+        import shutil
+
+        shutil.rmtree(fake)
+    fake.mkdir(parents=True)
+    stem = "italy-latest"
+    d = fake / "checkpoints" / "run-expand" / stem
+    meta = _write_checkpoint(d)
+    meta["shard_key"] = stem
+    (d / "metadata.json").write_text(json.dumps(meta))
+
+    class _FolderEntry:
+        def __init__(self, path: str) -> None:
+            self.path = path
+
+    class _FileEntry:
+        def __init__(self, path: str, source: Path) -> None:
+            self.path = path
+            self.size = source.stat().st_size
+            self.lfs = (
+                _FakeLfs(hashlib.sha256(source.read_bytes()).hexdigest())
+                if source.name == "segmented.parquet"
+                else None
+            )
+
+    fake_tree = [
+        # Folder entry: NO "/" after the prefix; previously rejected
+        # by discover_run with "unexpected entry under run ...".
+        _FolderEntry(f"checkpoints/run-expand/{stem}"),
+        _FileEntry(
+            f"checkpoints/run-expand/{stem}/segmented.parquet",
+            fake / "checkpoints/run-expand/italy-latest/segmented.parquet",
+        ),
+        _FileEntry(
+            f"checkpoints/run-expand/{stem}/metadata.json",
+            fake / "checkpoints/run-expand/italy-latest/metadata.json",
+        ),
+    ]
+
+    hub_api = mock.MagicMock()
+    hub_api.list_repo_tree.side_effect = lambda **kw: (
+        list(fake_tree) if kw.get("recursive", True) else []
+    )
+
+    def fake_dl(**kw: object) -> str:
+        local_dir = Path(kw["local_dir"])
+        filename = kw["filename"]
+        target = local_dir / filename
+        target.parent.mkdir(parents=True, exist_ok=True)
+        src = Path("/tmp/streaming-offload-expand") / filename
+        if not src.is_file():
+            raise RuntimeError(f"missing fake remote file: {src}")
+        import shutil
+
+        shutil.copy2(src, target)
+        return str(target)
+
+    monkeypatch.setattr(
+        "scripts.streaming.offload._lazy_hf_hub_download",
+        lambda: fake_dl,
+    )
+
+    handles = discover_run(
+        hub_api=hub_api,
+        repo_id="owner/repo",
+        run_id="run-expand",
+        local_cache_dir=tmp_path / "cache",
+    )
+    assert [h.shard_key for h in handles] == [stem]

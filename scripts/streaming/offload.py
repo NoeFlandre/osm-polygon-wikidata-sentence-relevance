@@ -505,12 +505,17 @@ def discover_run(
         return []
     grouped: dict[str, dict[str, Any]] = {}
     for relative, entry in files.items():
+        # ``_list_files`` uses ``expand=True``, which means folder
+        # entries appear alongside files.  Folder entries have no
+        # ``/`` in their relative path; the discovery invariant is
+        # one folder per shard_key plus the two expected files, so
+        # single-segment relative paths are ignored here.
+        if "/" not in relative:
+            continue
         parts = relative.split("/", 1)
-        if len(parts) != 2:
-            raise CheckpointOffloadError(
-                f"unexpected entry under run {run_id!r}: {relative!r}"
-            )
         grouped.setdefault(parts[0], {})[parts[1]] = entry
+    if not grouped:
+        return []
     return [
         _handle_from_files(
             hub_api=hub_api,

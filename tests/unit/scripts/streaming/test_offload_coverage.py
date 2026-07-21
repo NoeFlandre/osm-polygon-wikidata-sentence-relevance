@@ -349,10 +349,24 @@ def test_discover_run_empty_and_unexpected_entry(tmp_path: Path, monkeypatch) ->
         )
         == []
     )
+    # A single-segment relative path represents a folder entry
+    # (``expand=True``), which discover_run now skips silently.
     monkeypatch.setattr(
         "scripts.streaming.offload._list_files", lambda **_: {"orphan": _Entry()}
     )
-    with pytest.raises(CheckpointOffloadError, match="unexpected entry"):
+    assert (
+        discover_run(
+            hub_api=mock.Mock(), repo_id="o/r", run_id="run", local_cache_dir=tmp_path
+        )
+        == []
+    )
+    # A two-segment relative path with an empty second segment is
+    # structurally malformed and must raise.
+    monkeypatch.setattr(
+        "scripts.streaming.offload._list_files",
+        lambda **_: {"shard/": _Entry()},
+    )
+    with pytest.raises(CheckpointOffloadError):
         discover_run(
             hub_api=mock.Mock(), repo_id="o/r", run_id="run", local_cache_dir=tmp_path
         )
