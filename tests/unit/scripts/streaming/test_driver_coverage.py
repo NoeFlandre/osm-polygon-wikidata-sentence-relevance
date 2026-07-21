@@ -15,6 +15,7 @@ from scripts.streaming.driver import (
     DriverError,
     OarJobIdRequired,
     StreamDriver,
+    list_remote_shard_keys,
     main,
 )
 
@@ -434,3 +435,143 @@ def test_evict_active_removes_dir(monkeypatch, tmp_path: Path) -> None:
 def test_main_unknown_command(capsys) -> None:
     with pytest.raises(SystemExit):
         main(["nope"])
+
+
+def test_remote_inventory_ignores_nested_and_rejects_empty() -> None:
+    hub = mock.Mock()
+    hub.list_repo_tree.return_value = [
+        mock.Mock(path="polygons/nested/a.parquet"),
+        mock.Mock(path="polygons/readme.txt"),
+        mock.Mock(path="elsewhere/a.parquet"),
+    ]
+    with pytest.raises(DriverError, match="no polygon shard"):
+        list_remote_shard_keys(hub_api=hub, repo_id="o/r", revision="r")
+
+
+def test_remote_inventory_is_sorted_and_unique() -> None:
+    hub = mock.Mock()
+    hub.list_repo_tree.return_value = [
+        mock.Mock(path="polygons/b.parquet"),
+        mock.Mock(path="polygons/a.parquet"),
+        mock.Mock(path="polygons/a.parquet"),
+    ]
+    assert list_remote_shard_keys(hub_api=hub, repo_id="o/r", revision="r") == [
+        "a",
+        "b",
+    ]
+
+
+def test_ctor_rejects_missing_allocation_work_dir(monkeypatch, tmp_path: Path) -> None:
+    args = _good_args(tmp_path)
+    allocation = tmp_path / "allocation-12345"
+    allocation.mkdir()
+    candidate = allocation / "missing"
+    args["work_dir"] = candidate
+    monkeypatch.setattr(
+        "scripts.streaming.driver.check_data_root",
+        mock.Mock(
+            side_effect=DataRootRejected(
+                reason="TMP_FORBIDDEN", role="work", path=str(candidate)
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        "scripts.streaming.driver.discover_oar_scratch_dir", lambda **_: allocation
+    )
+    with pytest.raises(DriverError, match="already be a directory"):
+        StreamDriver(**args)
+
+
+def test_process_shard_wraps_remote_validation_failure(tmp_path: Path) -> None:
+    driver = StreamDriver(**_good_args(tmp_path))
+    with (
+        mock.patch(
+            "scripts.streaming.driver.inspect_remote_checkpoint",
+            side_effect=driver_mod.CheckpointOffloadError("corrupt"),
+        ),
+        pytest.raises(DriverError, match="remote checkpoint validation") as error,
+    ):
+        driver.process_shard("a-latest", segmenter=mock.Mock())
+    assert isinstance(error.value.__cause__, driver_mod.CheckpointOffloadError)
+
+
+def test_process_shard_reuses_remote_and_evicts_local(tmp_path: Path) -> None:
+    driver = StreamDriver(**_good_args(tmp_path))
+    handle = mock.Mock(shard_key="a-latest")
+    with (
+        mock.patch(
+            "scripts.streaming.driver.inspect_remote_checkpoint",
+            return_value=handle,
+        ),
+        mock.patch.object(driver, "_evict_local_shard_state") as evict,
+    ):
+        assert driver.process_shard("a-latest", segmenter=mock.Mock()) is handle
+    evict.assert_called_once_with("a-latest")
+
+
+def test_download_shard_wraps_optional_probe_failure(tmp_path: Path) -> None:
+    args = _good_args(tmp_path)
+    args["hub_api"].file_exists.side_effect = OSError("network")
+    driver = StreamDriver(**args)
+    with pytest.raises(DriverError, match="optional file exists") as error:
+        driver._download_shard(
+            shard_key="a-latest", inbox=tmp_path / "shards" / "inbox" / "a-latest"
+        )
+    assert isinstance(error.value.__cause__, OSError)
+
+
+def test_download_shard_rejects_optional_pair_mismatch(tmp_path: Path) -> None:
+    args = _good_args(tmp_path)
+    args["hub_api"].file_exists.side_effect = [True, False]
+    driver = StreamDriver(**args)
+    with pytest.raises(DriverError, match="both exist or both be absent"):
+        driver._download_shard(
+            shard_key="a-latest", inbox=tmp_path / "shards" / "inbox" / "a-latest"
+        )
+
+
+def test_evict_local_state_removes_both_directories(tmp_path: Path) -> None:
+    driver = StreamDriver(**_good_args(tmp_path))
+    inbox = tmp_path / "shards" / "inbox" / "a-latest"
+    active = tmp_path / "shards" / "active" / "a-latest"
+    inbox.mkdir(parents=True)
+    active.mkdir(parents=True)
+    driver._evict_local_shard_state("a-latest")
+    assert not inbox.exists()
+    assert not active.exists()
+
+
+def test_write_state_removes_failed_temporary_file(tmp_path: Path) -> None:
+    driver = StreamDriver(**_good_args(tmp_path))
+    with (
+        mock.patch("scripts.streaming.driver.os.replace", side_effect=OSError("fail")),
+        pytest.raises(OSError, match="fail"),
+    ):
+        driver._write_state(updated=True)
+    assert not list(tmp_path.glob(".state.json.tmp-*"))
+
+
+def test_main_rejects_non_positive_max_shards(tmp_path: Path) -> None:
+    with pytest.raises(SystemExit):
+        main(
+            [
+                "stream-build",
+                "--confirm-offload",
+                "--max-shards",
+                "0",
+                "--run-id",
+                "r",
+                "--staging-revision",
+                "r",
+                "--repo-id",
+                "o/r",
+                "--upstream-repo-id",
+                "u/r",
+                "--resolved-revision",
+                "a" * 40,
+                "--source-commit",
+                "b" * 40,
+                "--work-dir",
+                str(tmp_path),
+            ]
+        )

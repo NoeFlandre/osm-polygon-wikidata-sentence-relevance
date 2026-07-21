@@ -41,14 +41,21 @@ class so the validator can wrap them with the original cause preserved.
 
 from __future__ import annotations
 
+import os
 import re
+import sqlite3
+import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from types import MappingProxyType
 from typing import Any
 from urllib.parse import quote
 
 import pyarrow as pa
+import pyarrow.parquet as pq
+
+from osm_polygon_sentence_relevance.contracts.schemas import OUTPUT_SENTENCE_SCHEMA
 
 # Schema version of the versioned statistics object stored in the
 # manifest. Phase 8C is the initial release; this constant starts at 1.
@@ -329,6 +336,189 @@ def compute_statistics(
         input_dataset_id=_resolve_input_dataset_id(table, input_dataset_id),
         parquet_sha256=parquet_sha256,
     )
+
+
+def compute_parquet_statistics(
+    parquet_path: str | Path,
+    *,
+    input_dataset_revision: str,
+    pipeline_version: str,
+    parquet_sha256: str,
+    input_dataset_id: str | None,
+    scratch_dir: str | Path,
+    batch_size: int = 65_536,
+) -> DatasetStatistics:
+    """Derive exact statistics from Parquet without loading it into memory.
+
+    Record batches remain bounded. Distinct identities are held in a
+    temporary on-disk SQLite database, and strict global ordering plus
+    provenance equality are verified during the same scan.
+    """
+
+    path = Path(parquet_path)
+    scratch = Path(scratch_dir)
+    scratch.mkdir(parents=True, exist_ok=True)
+    if (
+        isinstance(batch_size, bool)
+        or not isinstance(batch_size, int)
+        or batch_size <= 0
+    ):
+        raise ValueError("batch_size must be a positive integer")
+    if (
+        not isinstance(input_dataset_revision, str)
+        or not input_dataset_revision.strip()
+    ):
+        raise ValueError("input_dataset_revision must be a non-blank string")
+    if not isinstance(pipeline_version, str) or not pipeline_version.strip():
+        raise ValueError("pipeline_version must be a non-blank string")
+
+    descriptor, database_name = tempfile.mkstemp(
+        prefix="dataset-statistics-", suffix=".sqlite3", dir=scratch
+    )
+    os.close(descriptor)
+    database = Path(database_name)
+
+    parquet = pq.ParquetFile(path)
+    if not parquet.schema_arrow.equals(OUTPUT_SENTENCE_SCHEMA):
+        raise ValueError("Parquet schema does not match OUTPUT_SENTENCE_SCHEMA")
+    metadata = parquet.schema_arrow.metadata or {}
+    try:
+        stored_revision = metadata[b"input_dataset_revision"].decode("utf-8")
+        stored_version = metadata[b"pipeline_version"].decode("utf-8")
+    except KeyError as error:
+        raise ValueError("Parquet schema metadata is incomplete") from error
+    except UnicodeDecodeError as error:
+        raise ValueError("Parquet provenance metadata is not valid UTF-8") from error
+    if stored_revision != input_dataset_revision:
+        raise ValueError("Parquet metadata input revision mismatch")
+    if stored_version != pipeline_version:
+        raise ValueError("Parquet metadata pipeline version mismatch")
+    metadata_dataset_id = _resolve_input_dataset_id(
+        pa.Table.from_batches([], schema=parquet.schema_arrow), input_dataset_id
+    )
+
+    columns = (
+        "sentence_id",
+        "polygon_id",
+        "wikidata",
+        "source",
+        "site",
+        "language",
+        "document_id",
+        "region",
+        "lat",
+        "lon",
+        "input_dataset_revision",
+        "pipeline_version",
+    )
+    source_counts: dict[str, int] = {}
+    language_counts: dict[str, int] = {}
+    region_counts: dict[str, int] = {}
+    row_count = 0
+    coordinates = 0
+    previous_key: tuple[str, str, str] | None = None
+
+    connection = sqlite3.connect(database)
+    try:
+        connection.executescript(
+            """
+            PRAGMA journal_mode=OFF;
+            PRAGMA synchronous=OFF;
+            PRAGMA temp_store=FILE;
+            CREATE TABLE sentence_ids (value TEXT PRIMARY KEY) WITHOUT ROWID;
+            CREATE TABLE polygons (value TEXT PRIMARY KEY) WITHOUT ROWID;
+            CREATE TABLE wikidata (value TEXT PRIMARY KEY) WITHOUT ROWID;
+            CREATE TABLE documents (
+                source TEXT NOT NULL,
+                site TEXT NOT NULL,
+                language TEXT NOT NULL,
+                document_id TEXT NOT NULL,
+                PRIMARY KEY (source, site, language, document_id)
+            ) WITHOUT ROWID;
+            """
+        )
+        for batch in parquet.iter_batches(batch_size=batch_size, columns=list(columns)):
+            values = batch.to_pydict()
+            sentence_ids: list[tuple[str]] = []
+            polygons: list[tuple[str]] = []
+            wikidata: list[tuple[str]] = []
+            documents: list[tuple[str, str, str, str]] = []
+            for index in range(batch.num_rows):
+                sentence_id = values["sentence_id"][index]
+                polygon_id = values["polygon_id"][index]
+                language = values["language"][index]
+                key = (polygon_id, language, sentence_id)
+                if previous_key is not None and key <= previous_key:
+                    raise ValueError("Parquet rows are not strictly globally sorted")
+                previous_key = key
+                if values["input_dataset_revision"][index] != input_dataset_revision:
+                    raise ValueError("Parquet row input revision mismatch")
+                if values["pipeline_version"][index] != pipeline_version:
+                    raise ValueError("Parquet row pipeline version mismatch")
+
+                source = values["source"][index]
+                site = values["site"][index]
+                document_id = values["document_id"][index]
+                region = values["region"][index]
+                source_counts[source] = source_counts.get(source, 0) + 1
+                language_counts[language] = language_counts.get(language, 0) + 1
+                region_counts[region] = region_counts.get(region, 0) + 1
+                if (
+                    values["lat"][index] is not None
+                    and values["lon"][index] is not None
+                ):
+                    coordinates += 1
+                sentence_ids.append((sentence_id,))
+                polygons.append((polygon_id,))
+                wikidata.append((values["wikidata"][index],))
+                documents.append((source, site, language, document_id))
+            connection.executemany(
+                "INSERT OR IGNORE INTO sentence_ids VALUES (?)", sentence_ids
+            )
+            connection.executemany(
+                "INSERT OR IGNORE INTO polygons VALUES (?)", polygons
+            )
+            connection.executemany(
+                "INSERT OR IGNORE INTO wikidata VALUES (?)", wikidata
+            )
+            connection.executemany(
+                "INSERT OR IGNORE INTO documents VALUES (?, ?, ?, ?)", documents
+            )
+            connection.commit()
+            row_count += batch.num_rows
+
+        def count(table: str) -> int:
+            allowed = {"sentence_ids", "polygons", "wikidata", "documents"}
+            if table not in allowed:  # pragma: no cover - internal invariant
+                raise AssertionError("unexpected statistics table")
+            result = connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()
+            assert result is not None
+            return int(result[0])
+
+        unique_sentence_ids = count("sentence_ids")
+        if unique_sentence_ids != row_count:
+            raise ValueError("Parquet contains duplicate sentence_id values")
+        return DatasetStatistics(
+            version=STATISTICS_VERSION,
+            row_count=row_count,
+            unique_sentence_ids=unique_sentence_ids,
+            unique_polygons=count("polygons"),
+            unique_wikidata_entities=count("wikidata"),
+            unique_documents=count("documents"),
+            source_counts=_sorted_dict(source_counts),
+            language_counts=_sorted_dict(language_counts),
+            region_counts=_sorted_dict(region_counts),
+            rows_with_coordinates=coordinates,
+            rows_without_coordinates=row_count - coordinates,
+            input_dataset_revision=input_dataset_revision,
+            pipeline_version=pipeline_version,
+            parquet_sha256=parquet_sha256,
+            input_dataset_id=metadata_dataset_id,
+        )
+    finally:
+        connection.close()
+        if database.exists():
+            database.unlink()
 
 
 def statistics_to_dict(stats: DatasetStatistics) -> dict[str, Any]:

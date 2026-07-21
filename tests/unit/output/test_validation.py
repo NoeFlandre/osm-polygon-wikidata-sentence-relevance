@@ -25,6 +25,9 @@ from osm_polygon_sentence_relevance.errors import ExportError
 from osm_polygon_sentence_relevance.finalization import (
     finalize_sentence_dataset,
 )
+from osm_polygon_sentence_relevance.output.dataset_card import (
+    compute_parquet_statistics,
+)
 from osm_polygon_sentence_relevance.schemas import SEGMENTED_SENTENCES_SCHEMA
 from tests.helpers import make_segmented_row
 
@@ -413,6 +416,109 @@ class TestParquetMetadataContract:
                 validate_export_directory(export_dir)
             assert "pipeline_version" in str(exc.value)
 
+
+class TestBoundedParquetStatistics:
+    def _write(self, tmp_path: Path, table: pa.Table) -> Path:
+        path = tmp_path / "sentences.parquet"
+        pq.write_table(table, path)
+        return path
+
+    def test_matches_in_memory_statistics(self, tmp_path: Path) -> None:
+        from osm_polygon_sentence_relevance.output.dataset_card import (
+            compute_statistics,
+        )
+
+        table = _build_output_table(n_rows=3)
+        path = self._write(tmp_path, table)
+        digest = _checksum(path)
+        expected = compute_statistics(
+            table,
+            input_dataset_revision="rev-7b",
+            pipeline_version="ver-7b",
+            parquet_sha256=digest,
+        )
+        actual = compute_parquet_statistics(
+            path,
+            input_dataset_revision="rev-7b",
+            pipeline_version="ver-7b",
+            parquet_sha256=digest,
+            input_dataset_id=None,
+            scratch_dir=tmp_path / "scratch",
+            batch_size=1,
+        )
+        assert actual == expected
+        assert list((tmp_path / "scratch").glob("*.sqlite3")) == []
+
+    @pytest.mark.parametrize("batch_size", [0, -1, True, 1.5])
+    def test_rejects_invalid_batch_size(
+        self, tmp_path: Path, batch_size: object
+    ) -> None:
+        path = self._write(tmp_path, _build_output_table())
+        with pytest.raises(ValueError, match="batch_size"):
+            compute_parquet_statistics(
+                path,
+                input_dataset_revision="rev-7b",
+                pipeline_version="ver-7b",
+                parquet_sha256=_checksum(path),
+                input_dataset_id=None,
+                scratch_dir=tmp_path / "scratch",
+                batch_size=batch_size,  # type: ignore[arg-type]
+            )
+
+    @pytest.mark.parametrize(
+        ("revision", "version", "message"),
+        [("wrong", "ver-7b", "revision"), ("rev-7b", "wrong", "version")],
+    )
+    def test_rejects_metadata_identity_mismatch(
+        self, tmp_path: Path, revision: str, version: str, message: str
+    ) -> None:
+        path = self._write(tmp_path, _build_output_table())
+        with pytest.raises(ValueError, match=message):
+            compute_parquet_statistics(
+                path,
+                input_dataset_revision=revision,
+                pipeline_version=version,
+                parquet_sha256=_checksum(path),
+                input_dataset_id=None,
+                scratch_dir=tmp_path / "scratch",
+            )
+
+    def test_rejects_duplicate_sentence_id(self, tmp_path: Path) -> None:
+        table = _build_output_table(n_rows=2)
+        duplicate = table.set_column(
+            table.schema.get_field_index("sentence_id"),
+            table.schema.field("sentence_id"),
+            pa.array(["same", "same"], type=pa.string()),
+        )
+        duplicate = duplicate.set_column(
+            duplicate.schema.get_field_index("polygon_id"),
+            duplicate.schema.field("polygon_id"),
+            pa.array(["a", "b"], type=pa.string()),
+        )
+        path = self._write(tmp_path, duplicate)
+        with pytest.raises(ValueError, match="duplicate sentence_id"):
+            compute_parquet_statistics(
+                path,
+                input_dataset_revision="rev-7b",
+                pipeline_version="ver-7b",
+                parquet_sha256=_checksum(path),
+                input_dataset_id=None,
+                scratch_dir=tmp_path / "scratch",
+            )
+
+    def test_rejects_unsorted_rows(self, tmp_path: Path) -> None:
+        table = _build_output_table(n_rows=2).take(pa.array([1, 0]))
+        path = self._write(tmp_path, table)
+        with pytest.raises(ValueError, match="sorted"):
+            compute_parquet_statistics(
+                path,
+                input_dataset_revision="rev-7b",
+                pipeline_version="ver-7b",
+                parquet_sha256=_checksum(path),
+                input_dataset_id=None,
+                scratch_dir=tmp_path / "scratch",
+            )
+
     def test_parquet_revision_differs_from_manifest_rejected(self):
         from osm_polygon_sentence_relevance.output import validate_export_directory
 
@@ -650,3 +756,168 @@ class TestManifestRevisionVersionWhitespace:
             with pytest.raises(ExportError) as exc:
                 validate_export_directory(export_dir)
             assert "pipeline_version" in str(exc.value)
+
+
+# ===================================================================
+# Coverage backfill (Phase 9N): narrow defensive-branch tests that
+# are easier to express at module scope than inside the existing
+# nested test classes. Each test asserts one branch the previous
+# suite did not exercise.
+# ===================================================================
+
+
+class TestCoverageBackfill:
+    """Targeted tests for branches the existing suite does not yet exercise.
+
+    These exist only to keep the full repository coverage gate at or
+    above 95%. They are deliberately narrow: each test asserts one
+    defensive branch in the validator or the card/manifest layer.
+    """
+
+    def test_manifest_unreadable_oserror_wrapped(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from osm_polygon_sentence_relevance.output import validate_export_directory
+
+        export_dir = _make_valid_export(tmp_path)
+        manifest_path = export_dir / "manifest.json"
+        original_read_text = Path.read_text
+
+        def trip(self: Path, *args: object, **kwargs: object) -> str:
+            if self == manifest_path:
+                raise OSError("simulated read failure")
+            return original_read_text(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "read_text", trip)
+        with pytest.raises(ExportError, match="not readable"):
+            validate_export_directory(export_dir)
+
+    def test_manifest_is_not_json_object(self, tmp_path: Path) -> None:
+        from osm_polygon_sentence_relevance.output import validate_export_directory
+
+        export_dir = _make_valid_export(tmp_path)
+        (export_dir / "manifest.json").write_text("[1, 2, 3]\n", encoding="utf-8")
+        with pytest.raises(ExportError, match="JSON object"):
+            validate_export_directory(export_dir)
+
+    def test_manifest_sha256_not_a_string(self, tmp_path: Path) -> None:
+        from osm_polygon_sentence_relevance.output import validate_export_directory
+
+        export_dir = _make_valid_export(tmp_path)
+        _rewrite_manifest(export_dir, sha256=12345)
+        with pytest.raises(ExportError, match="sha256"):
+            validate_export_directory(export_dir)
+
+    def test_manifest_top_level_row_count_drift_detected(self, tmp_path: Path) -> None:
+        from osm_polygon_sentence_relevance.output import validate_export_directory
+
+        export_dir = _make_valid_export(tmp_path)
+        _rewrite_manifest(export_dir, row_count=0)
+        with pytest.raises(ExportError, match="row_count"):
+            validate_export_directory(export_dir)
+
+    def test_manifest_input_dataset_id_blank_string(self, tmp_path: Path) -> None:
+        from osm_polygon_sentence_relevance.output import validate_export_directory
+
+        export_dir = _make_valid_export(tmp_path)
+        _rewrite_manifest(export_dir, input_dataset_id="   ")
+        with pytest.raises(ExportError, match="input_dataset_id"):
+            validate_export_directory(export_dir)
+
+    def test_manifest_input_dataset_id_with_surrounding_whitespace(
+        self, tmp_path: Path
+    ) -> None:
+        from osm_polygon_sentence_relevance.output import validate_export_directory
+
+        export_dir = _make_valid_export(tmp_path)
+        _rewrite_manifest(export_dir, input_dataset_id="  owner/dataset  ")
+        with pytest.raises(ExportError, match="input_dataset_id"):
+            validate_export_directory(export_dir)
+
+    def test_card_file_unreadable_wrapped(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from osm_polygon_sentence_relevance.output import validate_export_directory
+
+        export_dir = _make_valid_export(tmp_path)
+        card_path = export_dir / "README.md"
+        original_read_text = Path.read_text
+
+        def trip(self: Path, *args: object, **kwargs: object) -> str:
+            if self == card_path:
+                raise OSError("simulated card read failure")
+            return original_read_text(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "read_text", trip)
+        with pytest.raises(ExportError, match="Dataset card"):
+            validate_export_directory(export_dir)
+
+
+# ===================================================================
+# Coverage backfill (Phase 9N, second pass): the few remaining
+# defensive branches after the first backfill pass.
+# ===================================================================
+
+
+class TestCoverageBackfillSecondPass:
+    """Round out the validator coverage gate by exercising the remaining
+    defensive branches: parquet-read OSError wrapping, ``pq.ParquetFile``
+    construction failure, manifest row_count bool-rejection, and the
+    bounded-statistics failure path inside ``validate_export_directory``.
+    """
+
+    def test_manifest_row_count_bool_rejected(self, tmp_path: Path) -> None:
+        from osm_polygon_sentence_relevance.output import validate_export_directory
+
+        export_dir = _make_valid_export(tmp_path)
+        _rewrite_manifest(export_dir, row_count=True)
+        with pytest.raises(ExportError, match="row_count"):
+            validate_export_directory(export_dir)
+
+    def test_parquet_file_open_failure_wrapped(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from osm_polygon_sentence_relevance.output import validate_export_directory
+        from osm_polygon_sentence_relevance.output import validation as validation_mod
+
+        export_dir = _make_valid_export(tmp_path)
+
+        class _BoomMeta:
+            metadata = type(
+                "m",
+                (),
+                {"num_rows": 2},
+            )()
+
+            def __eq__(self, _other: object) -> bool:
+                raise RuntimeError("simulated schema comparison failure")
+
+        class _BoomParquetFile:
+            schema_arrow = object()
+
+            @property
+            def metadata(self) -> object:  # pragma: no cover - never reached
+                return None
+
+        monkeypatch.setattr(
+            validation_mod.pq, "ParquetFile", lambda *a, **k: _BoomParquetFile()
+        )
+        with pytest.raises(ExportError, match="could not be read"):
+            validate_export_directory(export_dir)
+
+    def test_parquet_read_iteration_failure_wrapped(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from osm_polygon_sentence_relevance.output import validate_export_directory
+        from osm_polygon_sentence_relevance.output import validation as validation_mod
+
+        export_dir = _make_valid_export(tmp_path)
+
+        # Force ``compute_parquet_statistics`` to raise a non-ExportError
+        # exception. The validator must wrap it.
+        def boom(**_kw: object) -> object:
+            raise RuntimeError("simulated bounded-statistics failure")
+
+        monkeypatch.setattr(validation_mod, "compute_parquet_statistics", boom)
+        with pytest.raises(ExportError, match="Could not validate"):
+            validate_export_directory(export_dir)

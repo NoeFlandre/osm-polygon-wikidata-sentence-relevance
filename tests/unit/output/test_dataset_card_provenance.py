@@ -974,3 +974,80 @@ class TestSourceProvenanceCoverage:
         )
         # Passing ``None`` as the explicit override reads from metadata.
         assert _resolve_input_dataset_id(table, None) == "Owner/Repo"
+
+
+class TestCoverageBackfillDatasetCard:
+    """Targeted branch coverage for the dataset_card module.
+
+    These exist to keep the full repository coverage gate at or above
+    95%. Each test exercises one defensive or rendering branch in the
+    new code without altering any existing contract.
+    """
+
+    def test_dataset_statistics_is_unhashable(self) -> None:
+        from osm_polygon_sentence_relevance.output.dataset_card import (
+            DatasetStatistics,
+        )
+
+        stats = DatasetStatistics(
+            version=1,
+            row_count=0,
+            unique_sentence_ids=0,
+            unique_polygons=0,
+            unique_wikidata_entities=0,
+            unique_documents=0,
+            source_counts={},
+            language_counts={},
+            region_counts={},
+            rows_with_coordinates=0,
+            rows_without_coordinates=0,
+            input_dataset_revision="r",
+            pipeline_version="v",
+            parquet_sha256="0" * 64,
+        )
+        with pytest.raises(TypeError, match="not hashable"):
+            hash(stats)
+
+    def test_resolve_input_dataset_id_surrounding_whitespace_rejected(
+        self,
+    ) -> None:
+        from osm_polygon_sentence_relevance.output.dataset_card import (
+            _resolve_input_dataset_id,
+        )
+
+        table = pa.table(
+            {"polygon_id": ["a"]},
+            metadata={b"input_dataset_id": b"  owner/repo  "},
+        )
+        with pytest.raises(ValueError, match="surrounding whitespace"):
+            _resolve_input_dataset_id(table, None)
+
+    def test_resolve_input_dataset_id_explicit_mismatch(self) -> None:
+        from osm_polygon_sentence_relevance.output.dataset_card import (
+            _resolve_input_dataset_id,
+        )
+
+        table = pa.table({"polygon_id": ["a"]}, metadata={b"input_dataset_id": b"a/b"})
+        with pytest.raises(ValueError, match="disagrees"):
+            _resolve_input_dataset_id(table, "x/y")
+
+    def test_resolve_input_dataset_id_invalid_utf8(self) -> None:
+        from osm_polygon_sentence_relevance.output.dataset_card import (
+            _resolve_input_dataset_id,
+        )
+
+        table = pa.table(
+            {"polygon_id": ["a"]},
+            metadata={b"input_dataset_id": b"\xff\xfe\x00"},
+        )
+        with pytest.raises(ValueError, match="not valid UTF-8"):
+            _resolve_input_dataset_id(table, None)
+
+    def test_resolve_input_dataset_id_blank_metadata(self) -> None:
+        from osm_polygon_sentence_relevance.output.dataset_card import (
+            _resolve_input_dataset_id,
+        )
+
+        table = pa.table({"polygon_id": ["a"]}, metadata={b"input_dataset_id": b"   "})
+        with pytest.raises(ValueError, match="cannot be blank"):
+            _resolve_input_dataset_id(table, None)
