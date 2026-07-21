@@ -19,8 +19,8 @@ pre-1.0 (alpha).
   [Data contract](reference/data-contract.md)
 - **I want the why behind the package layout** →
   [ADR 0001: Domain package layout](architecture/decisions/0001-domain-package-layout.md)
-- **I want to run a SaT GPU smoke test on Grid'5000** →
-  [Grid'5000 CUDA smoke](guides/grid5000.md)
+- **I want to run the production GPU workflow on Grid'5000** →
+  [Grid'5000 production builds](guides/grid5000.md)
 
 ## Repository layout
 
@@ -40,6 +40,6 @@ One-commit publishing of a validated local export to an existing Hugging
 Face dataset exists, both programmatically in
 `osm_polygon_sentence_relevance.publishing` and via the build CLI's
 optional `--publish-dataset-id` flag — no token parameter is accepted.
-Hugging Face repository creation, sentence classification or labelling,
-concurrency, resumable or incremental builds are not implemented. See the
+Hugging Face repository creation, sentence classification or labelling, and
+parallel shard processing are not implemented. See the
 [architecture overview](architecture/overview.md) for invariants.

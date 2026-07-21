@@ -119,17 +119,9 @@ CPU. Explicit `cuda`/`mps` fail with exit code `1` when the requested
 backend is unavailable; the CLI never silently downgrades. Hardware
 selection happens after acquisition, only when the model is built, and
 it does not alter output schema, IDs, hashes, or dataset-card
-statistics. **One GPU only; multi-GPU is not implemented in this
-phase.** Production Grid'5000 runs should use `--device cuda`:
-
-```bash
-uv run osm-polygon-sentence-relevance \
-  --input-dataset-id NoeFlandre/osm-polygon-wikidata-only \
-  --output-dir ./out \
-  --input-dataset-revision main \
-  --pipeline-version 0.1.0 \
-  --device cuda
-```
+statistics. **One GPU only; multi-GPU is not implemented.** Production
+Grid'5000 runs should use the bounded streaming workflow documented in
+[`docs/guides/grid5000.md`](docs/guides/grid5000.md).
 
 ### Local source provenance
 
