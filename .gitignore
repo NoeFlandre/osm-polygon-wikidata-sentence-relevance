@@ -21,6 +21,7 @@ data/
 *.db
 
 # Tool caches
+.worktrees/
 .mypy_cache/
 .pytest_cache/
 .ruff_cache/
@@ -42,4 +43,3 @@ htmlcov/
 # these redirected files must not appear as untracked entries.
 OAR.*.stdout
 OAR.*.stderr
-
