@@ -21,10 +21,10 @@ import pyarrow.parquet as pq
 import pytest
 
 from osm_polygon_sentence_relevance.contracts.schemas import OUTPUT_SENTENCE_SCHEMA
-from osm_polygon_sentence_relevance.output import profile as profile_mod
+from osm_polygon_sentence_relevance.output import plots as plots_mod
+from osm_polygon_sentence_relevance.output.plots import _load_afghanistan_outline
 from osm_polygon_sentence_relevance.output.profile import (
     ProfileError,
-    _load_afghanistan_outline,
     build_dataset_profile,
     render_geographic_coverage_png,
     render_language_distribution_png,
@@ -100,8 +100,8 @@ def _install_test_outline(
     """
     target.write_text(body)
     actual = hashlib.sha256(target.read_bytes()).hexdigest().lower()
-    monkeypatch.setattr(profile_mod, "_NATURAL_EARTH_PATH", target)
-    monkeypatch.setattr(profile_mod, "_NATURAL_EARTH_EXPECTED_SHA256", actual)
+    monkeypatch.setattr(plots_mod, "_NATURAL_EARTH_PATH", target)
+    monkeypatch.setattr(plots_mod, "_NATURAL_EARTH_EXPECTED_SHA256", actual)
 
 
 class TestLoadAfghanistanOutlineErrors:
@@ -111,7 +111,7 @@ class TestLoadAfghanistanOutlineErrors:
         # Point the loader at a temporary path with a different SHA.
         bogus = tmp_path / "bogus.geojson"
         bogus.write_text(json.dumps({"type": "FeatureCollection", "features": []}))
-        monkeypatch.setattr(profile_mod, "_NATURAL_EARTH_PATH", bogus)
+        monkeypatch.setattr(plots_mod, "_NATURAL_EARTH_PATH", bogus)
         with pytest.raises(ProfileError, match="does not match"):
             _load_afghanistan_outline()
 
@@ -119,7 +119,7 @@ class TestLoadAfghanistanOutlineErrors:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(
-            profile_mod, "_NATURAL_EARTH_PATH", tmp_path / "absent.geojson"
+            plots_mod, "_NATURAL_EARTH_PATH", tmp_path / "absent.geojson"
         )
         with pytest.raises(ProfileError, match="is missing"):
             _load_afghanistan_outline()

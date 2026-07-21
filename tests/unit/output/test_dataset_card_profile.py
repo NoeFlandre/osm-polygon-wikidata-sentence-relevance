@@ -165,7 +165,7 @@ class TestSchemaHasMapTypes:
         assert schema_has_map_types(bogus) is True
 
     def test_preview_section_empty_region(self) -> None:
-        from osm_polygon_sentence_relevance.output.dataset_card import (
+        from osm_polygon_sentence_relevance.output._card.rendering import (
             _profile_preview_section,
         )
         from osm_polygon_sentence_relevance.output.profile import (
@@ -204,7 +204,7 @@ class TestSchemaHasMapTypes:
         assert _profile_preview_section(profile) == ""
 
     def test_preview_section_with_latest_suffix(self) -> None:
-        from osm_polygon_sentence_relevance.output.dataset_card import (
+        from osm_polygon_sentence_relevance.output._card.rendering import (
             _profile_preview_section,
         )
         from osm_polygon_sentence_relevance.output.profile import (
@@ -432,7 +432,7 @@ class TestRenderDatasetCardFromProfile:
         to the raw key (defensive fallback)."""
         from dataclasses import replace
 
-        from osm_polygon_sentence_relevance.output.dataset_card import (
+        from osm_polygon_sentence_relevance.output._card.rendering import (
             _profile_preview_section,
         )
 

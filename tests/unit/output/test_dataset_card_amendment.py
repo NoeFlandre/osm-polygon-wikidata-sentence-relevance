@@ -669,7 +669,7 @@ class TestCardRenderingHardening:
 
 class TestStrictModuleBranches:
     def test_yaml_quote_escapes_all_control_chars(self):
-        from osm_polygon_sentence_relevance.output.dataset_card import (
+        from osm_polygon_sentence_relevance.output._card.rendering import (
             _yaml_quote_scalar,
         )
 
@@ -686,7 +686,7 @@ class TestStrictModuleBranches:
         assert "\\0" in quoted
 
     def test_yaml_quote_uses_double_quotes(self):
-        from osm_polygon_sentence_relevance.output.dataset_card import (
+        from osm_polygon_sentence_relevance.output._card.rendering import (
             _yaml_quote_scalar,
         )
 
@@ -697,7 +697,7 @@ class TestStrictModuleBranches:
         assert quoted.endswith('"')
 
     def test_escape_md_cell_escapes_ampersand(self):
-        from osm_polygon_sentence_relevance.output.dataset_card import (
+        from osm_polygon_sentence_relevance.output._card.rendering import (
             _escape_md_cell,
         )
 
