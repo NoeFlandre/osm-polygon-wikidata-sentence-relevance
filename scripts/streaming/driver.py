@@ -37,6 +37,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from osm_polygon_sentence_relevance.application.checkpoint import (
+    load_shard_checkpoint,
+)
+from osm_polygon_sentence_relevance.application.pipeline import (
+    process_single_shard,
+)
+from osm_polygon_sentence_relevance.ingestion.discovery import (
+    discover_shards,
+)
+from osm_polygon_sentence_relevance.sentences.segmentation import SentenceSegmenter
 from scripts.streaming.data_root import (
     DataRootRejected,
     check_data_root,
@@ -49,17 +59,6 @@ from scripts.streaming.offload import (
     OffloadHandle,
     inspect_remote_checkpoint,
 )
-
-from osm_polygon_sentence_relevance.application.checkpoint import (
-    load_shard_checkpoint,
-)
-from osm_polygon_sentence_relevance.application.pipeline import (
-    process_single_shard,
-)
-from osm_polygon_sentence_relevance.ingestion.discovery import (
-    discover_shards,
-)
-from osm_polygon_sentence_relevance.sentences.segmentation import SentenceSegmenter
 
 log = logging.getLogger(__name__)
 

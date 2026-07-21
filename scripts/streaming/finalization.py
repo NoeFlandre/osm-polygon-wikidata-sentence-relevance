@@ -23,12 +23,6 @@ from typing import Any
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-from scripts.streaming.driver import list_remote_shard_keys
-from scripts.streaming.offload import (
-    OffloadHandle,
-    discover_run,
-    materialize_checkpoint,
-)
 
 from osm_polygon_sentence_relevance.contracts.schemas import OUTPUT_SENTENCE_SCHEMA
 from osm_polygon_sentence_relevance.output.atomic import (
@@ -48,6 +42,12 @@ from osm_polygon_sentence_relevance.output.manifest import (
 from osm_polygon_sentence_relevance.sentences.finalization import (
     FinalizationReport,
     finalize_sentence_dataset,
+)
+from scripts.streaming.driver import list_remote_shard_keys
+from scripts.streaming.offload import (
+    OffloadHandle,
+    discover_run,
+    materialize_checkpoint,
 )
 
 

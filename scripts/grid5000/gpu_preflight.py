@@ -48,16 +48,6 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 
-class _TorchLike(Protocol):
-    """Minimal structural view of the bits of Torch we use."""
-
-    __version__: str
-
-    class cuda:
-        @staticmethod
-        def is_available() -> bool: ...
-
-
 class PreflightEnv(Protocol):
     """Injectable environment/platform/torch facade for tests."""
 
