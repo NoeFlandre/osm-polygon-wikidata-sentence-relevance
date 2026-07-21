@@ -8,7 +8,7 @@ from osm_polygon_sentence_relevance.errors import ExportError
 from tests.helpers import make_fake_pipeline_result
 
 # ===================================================================
-# Test Suite for Local Build CLI (Phase 6A)
+# Test Suite for Local Build CLI (the implementation)
 # ===================================================================
 
 
@@ -266,7 +266,7 @@ class TestCLI:
             summary["segmentation_report"]["wikipedia_sentence_occurrence_count"] == 5
         )
         assert summary["finalization_report"]["output_sentence_count"] == 6
-        # Card path is part of the deterministic summary (Phase 8C
+        # Card path is part of the deterministic summary (the implementation
         # source-provenance completion).
         assert summary["card_path"] == "/tmp/out/README.md"
 

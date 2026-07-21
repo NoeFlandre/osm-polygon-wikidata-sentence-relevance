@@ -40,7 +40,7 @@ def rows_to_table(rows: list[dict]) -> pa.Table:
 
 
 # ===================================================================
-# Test Suite for Phase 5A Exporter
+# Test Suite for the implementation Exporter
 # ===================================================================
 
 

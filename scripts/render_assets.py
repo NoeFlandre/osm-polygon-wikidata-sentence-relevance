@@ -1,4 +1,4 @@
-"""Publication script for the Afghanistan phase-9P export.
+"""Render deterministic publication assets from a finalized export.
 
 Reads the existing /tmp/afghanistan-main/sentences.parquet (which
 still uses the legacy map<string,string> form for ``osm_tags``),

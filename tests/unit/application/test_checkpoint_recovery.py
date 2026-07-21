@@ -1,4 +1,4 @@
-"""Phase 9L-A Amendment — second iteration.
+"""the implementation Hardening — second iteration.
 
 These tests assert the next round of required correctness properties:
 

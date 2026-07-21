@@ -1,4 +1,4 @@
-"""Tests for the Phase 3C intermediate segmented-sentence Arrow schema."""
+"""Tests for the the implementation intermediate segmented-sentence Arrow schema."""
 
 from __future__ import annotations
 

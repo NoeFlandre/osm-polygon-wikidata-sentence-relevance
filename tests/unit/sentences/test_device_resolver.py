@@ -1,4 +1,4 @@
-"""Tests for the SaT device resolver (Phase 9A).
+"""Tests for the SaT device resolver (the implementation).
 
 The resolver must:
 

@@ -1,7 +1,7 @@
 """Targeted coverage of pre-existing CLI argument-validation branches.
 
 These branches in ``application/cli.py`` have been reachable for many
-phases but no test exercised them directly. The Phase 9L-A Amendment
+phases but no test exercised them directly. The the implementation Hardening
 does not change their behaviour; this module exists solely to keep
 total line coverage above the project threshold.
 """

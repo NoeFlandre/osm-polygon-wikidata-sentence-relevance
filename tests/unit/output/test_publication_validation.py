@@ -1,14 +1,14 @@
 """Tests for the publication-level validator.
 
 The publication validator runs after the existing
-``validate_export_directory`` to enforce the Phase 9P extensions:
+``validate_export_directory`` to enforce the the implementation extensions:
 
 * the canonical schema contains no Arrow ``map<...>`` fields (HF
   Viewer compatibility);
 * the on-disk PNG assets exist and match the manifest SHA-256;
 * the README equals ``render_dataset_card_from_profile(profile)``;
 * the manifest is at ``manifest_version == 2`` and contains the
-  required Phase 9P fields;
+  required the implementation fields;
 * the manifest example-row field matches the actual first Parquet
   row;
 * the ``statistics`` accounting identities hold for all breakdown

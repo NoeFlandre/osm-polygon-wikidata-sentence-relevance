@@ -1,4 +1,4 @@
-"""Tests for the Phase 3B sentence-segmenter interface and batch validation."""
+"""Tests for the the implementation sentence-segmenter interface and batch validation."""
 
 from __future__ import annotations
 

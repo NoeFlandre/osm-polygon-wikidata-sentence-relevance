@@ -801,7 +801,7 @@ def render_dataset_card_from_profile(
 ) -> str:
     """Render the dataset card from an immutable ``DatasetProfile``.
 
-    This renderer is the canonical post-Phase 9P format. It uses
+    This renderer is the canonical profile-driven format. It uses
     profile-derived fields (so the card and manifest cannot drift) and
     embeds two PNG assets, a full real example row, and the schema
     field documentation. All quantitative figures are derived from the

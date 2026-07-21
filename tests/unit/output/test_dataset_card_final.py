@@ -1,4 +1,4 @@
-"""Phase 8C Final Correctness Amendment tests.
+"""the implementation Final Correctness Hardening tests.
 
 Focused structural contracts only; no exact-prose pinning. Covers:
 
@@ -8,7 +8,7 @@ Focused structural contracts only; no exact-prose pinning. Covers:
 - Dynamic card text (revision, pipeline version) is escaped so a value
   containing backticks, backslashes, or newlines cannot corrupt the
   rendered Markdown;
-- Stable statistics version 1 from the start of Phase 8C;
+- Stable statistics version 1 from the start of the implementation;
 - Factual wording preservation.
 """
 
@@ -514,7 +514,7 @@ class TestRevisionAndVersionEscaping:
 
 
 # ---------------------------------------------------------------------------
-# Initial statistics version is 1 (Phase 8C is not yet released)
+# Initial statistics version is 1 (the implementation is not yet released)
 # ---------------------------------------------------------------------------
 
 
@@ -559,7 +559,7 @@ class TestFactualWordingPreserved:
         # in the rendered card still match.
         card = " ".join(render_dataset_card(stats).lower().split())
         # The legacy "in hub mode" wording was replaced by the Hub/local
-        # branch introduced in Phase 8C source-provenance completion.
+        # branch introduced in the implementation source-provenance completion.
         # For local input (no ``input_dataset_id``), the card explicitly
         # states that no Hub commit SHA is implied.
         assert "no hub commit sha is implied" in card

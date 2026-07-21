@@ -1,4 +1,4 @@
-"""Unit tests for the bounded one-shard OAR finalization adapter (Phase 9O).
+"""Unit tests for the bounded one-shard OAR finalization adapter (the implementation).
 
 The submission adapter ``scripts/grid5000/submit_streaming_finalization.sh``
 runs on the Grid'5000 frontend and validates its positional arguments

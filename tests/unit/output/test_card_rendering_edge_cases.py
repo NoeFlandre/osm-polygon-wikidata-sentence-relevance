@@ -1,4 +1,4 @@
-"""Phase 8C accuracy/robustness regression tests.
+"""the implementation accuracy/robustness regression tests.
 
 Focused contracts only; no exact-prose pinning. Covers:
 
@@ -139,7 +139,7 @@ class TestCardFactualClaims:
     def test_card_omits_land_use_future_work_phrase(self):
         """The card no longer mentions future downstream land-use work.
 
-        Phase 9P removed the original sentence (which talked about
+        the implementation removed the original sentence (which talked about
         future work for land-use relevance labels, polygon-description
         classifications, etc.) at the user's request; the test pins
         the omission so a regression cannot quietly re-introduce
@@ -300,7 +300,7 @@ def _valid_stats_payload(**overrides) -> dict:
         "pipeline_version": "v",
         "parquet_sha256": "0" * 64,
         # ``input_dataset_id`` is a required v1 statistics field. The
-        # amendment tests focus on other fields; the default ``None``
+        # hardening tests focus on other fields; the default ``None``
         # covers the local-mode serialization.
         "input_dataset_id": None,
     }

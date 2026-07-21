@@ -1,4 +1,4 @@
-"""Public-import smoke tests for the publishing package (Phase 7C).
+"""Public-import smoke tests for the publishing package (the implementation).
 
 Asserts that:
 - The base package and the ``publishing`` package import cleanly

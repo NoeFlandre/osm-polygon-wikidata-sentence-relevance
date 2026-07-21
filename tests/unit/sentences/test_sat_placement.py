@@ -1,4 +1,4 @@
-"""Regression tests for the wtpsplit placement boundary (Phase 9A amendment; Phase 9K placement-shape correction).
+"""Regression tests for the wtpsplit placement boundary (the implementation hardening; the implementation placement-shape correction).
 
 The real wtpsplit 2.2.1 wraps a Hugging Face token-classification model in
 a custom ``PyTorchWrapper`` whose ``__getattr__`` delegates to the
@@ -23,7 +23,7 @@ The contract is purely "complete ``torch.nn.Module`` at ``wrapper.model``";
 the names of the backbone (``roberta`` / ``bert`` / ``xlm_roberta`` / …)
 and of the classification head (``classifier`` / ``score`` / ``head`` /
 …) are owned by the encoder family and are NOT preconditions. A naïve
-check for ``.model`` on the inner classifier (Phase 9A) wrongly rejected
+check for ``.model`` on the inner classifier (the implementation) wrongly rejected
 the real ``SubwordXLMForTokenClassification`` whose backbone is named
 ``.roberta``.
 

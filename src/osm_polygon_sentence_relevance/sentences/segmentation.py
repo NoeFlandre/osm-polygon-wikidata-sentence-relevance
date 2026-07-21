@@ -1,4 +1,4 @@
-"""Sentence-segmenter interface and validated batch boundary (Phase 3B).
+"""Sentence-segmenter interface and validated batch boundary.
 
 This module defines the segmentation contract used by later orchestration.
 It does NOT provide a concrete model adapter (e.g. wtpsplit), nor does it

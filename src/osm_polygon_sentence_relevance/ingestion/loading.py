@@ -1,7 +1,7 @@
 """Schema-validated local Parquet loading.
 
 Reads a single Parquet file, validates its physical schema against the
-Phase 1 contract, and optionally projects to a subset of columns.
+input contract, and optionally projects to a subset of columns.
 Contains no join logic.
 """
 

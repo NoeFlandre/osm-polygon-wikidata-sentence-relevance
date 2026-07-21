@@ -1,4 +1,4 @@
-"""Hub-mode input tests for the local build CLI (Phase 6C)."""
+"""Hub-mode input tests for the local build CLI (the implementation)."""
 
 import json
 from pathlib import Path

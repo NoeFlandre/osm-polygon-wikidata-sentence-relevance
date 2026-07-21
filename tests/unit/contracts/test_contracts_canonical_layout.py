@@ -1,4 +1,4 @@
-"""Phase 4 characterization: canonical ``contracts`` layout and identity.
+"""the implementation characterization: canonical ``contracts`` layout and identity.
 
 These tests pin the *new* canonical module structure introduced by Q4:
 

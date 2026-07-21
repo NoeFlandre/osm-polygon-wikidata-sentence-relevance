@@ -1,4 +1,4 @@
-"""CLI optional publishing tests (Phase 7D).
+"""CLI optional publishing tests (the implementation).
 
 These exercise the optional ``--publish-*`` flags on the build CLI using
 injected pipeline and publishing functions. No network calls are made.

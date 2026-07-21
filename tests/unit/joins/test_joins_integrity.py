@@ -1,4 +1,4 @@
-"""Tests for Phase 2 amendments (TDD)."""
+"""Tests for the implementation hardenings (TDD)."""
 
 from __future__ import annotations
 

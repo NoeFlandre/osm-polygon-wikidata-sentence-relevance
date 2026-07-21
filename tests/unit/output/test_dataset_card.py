@@ -1,4 +1,4 @@
-"""Tests for the deterministic dataset-card generation (Phase 8C).
+"""Tests for the deterministic dataset-card generation (the implementation).
 
 These tests assert stable contracts of the dataset-card module:
 

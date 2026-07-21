@@ -66,7 +66,7 @@ OUTPUT_SENTENCE_SCHEMA = pa.schema(
     ]
 )
 
-# Intermediate schema — Phase 2 joined sections (not the final output).
+# Intermediate schema — joined sections (not the final output).
 JOINED_SECTIONS_SCHEMA = pa.schema(
     [
         pa.field("polygon_id", pa.string(), nullable=False),
@@ -96,7 +96,7 @@ JOINED_SECTIONS_SCHEMA = pa.schema(
     ]
 )
 
-# Intermediate schema — Phase 3C segmented sentences.
+# Intermediate schema — segmented sentences.
 SEGMENTED_SENTENCES_SCHEMA = pa.schema(
     [
         pa.field("polygon_id", pa.string(), nullable=False),
