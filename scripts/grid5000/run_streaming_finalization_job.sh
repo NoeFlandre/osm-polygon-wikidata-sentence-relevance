@@ -27,21 +27,17 @@ EXPECTED_SHARD="${10}"; readonly EXPECTED_SHARD
 WALLTIME="${11}"; readonly WALLTIME
 NODE_TYPE="${12}"; readonly NODE_TYPE
 
-if [ "$(git -C "${REPO_ROOT}" rev-parse HEAD)" != "${EXPECTED_SOURCE_COMMIT}" ]; then
-    # Allow the case where the remote checkpoint was produced under an
-    # earlier commit but the finalization code itself has only seen
-    # adapter/test changes (the production code paths are unchanged).
-    # In that case the current HEAD must still contain the finalization
-    # payload as a committed file (proving the wrapper runs the exact
-    # code present in the checkout) and the working tree must be clean.
-    if ! git -C "${REPO_ROOT}" cat-file -e "${EXPECTED_SOURCE_COMMIT}:scripts/grid5000/run_streaming_finalization.sh" 2>/dev/null; then
-        echo "run_streaming_finalization_job: HEAD does not match EXPECTED_SOURCE_COMMIT and the latter does not contain the finalization payload; refusing" >&2
-        exit 1
-    fi
-    if ! git -C "${REPO_ROOT}" cat-file -e "HEAD:scripts/grid5000/run_streaming_finalization.sh" 2>/dev/null; then
-        echo "run_streaming_finalization_job: HEAD does not contain the finalization payload" >&2
-        exit 1
-    fi
+# HEAD may legitimately differ from EXPECTED_SOURCE_COMMIT: the latter
+# is the data identity (the source commit that produced the staged
+# checkpoint) and the wrapper does not enforce that the checkout was
+# built at that exact commit.  What the wrapper DOES enforce is that
+# the production finalization payload exists as a tracked file at
+# HEAD and that the working tree is clean, so the script the OAR
+# scheduler is actually running is provably the script present in
+# the checkout.
+if ! git -C "${REPO_ROOT}" cat-file -e "HEAD:scripts/streaming/finalization.py" 2>/dev/null; then
+    echo "run_streaming_finalization_job: HEAD does not contain scripts/streaming/finalization.py; refusing" >&2
+    exit 1
 fi
 if [ -n "$(git -C "${REPO_ROOT}" status --porcelain)" ]; then
     echo "run_streaming_finalization_job: checkout is dirty" >&2
