@@ -106,5 +106,10 @@ if [ "${finalize_rc}" -eq 0 ]; then
 fi
 
 printf '%s\n' "${finalize_rc}" >"${JOB_LOG_DIR}/finalize.exit_code"
-chmod 0600 "${JOB_LOG_DIR}"/*
+# Tighten perms on the wrapper's own logs only; the persist helper
+# already sets the right perms on its target tree.
+chmod 0600 \
+    "${JOB_LOG_DIR}/finalize.exit_code" \
+    "${JOB_LOG_DIR}/finalize.stdout.log" \
+    "${JOB_LOG_DIR}/finalize.stderr.log"
 exit "${finalize_rc}"
