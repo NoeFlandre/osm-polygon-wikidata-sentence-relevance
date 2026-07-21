@@ -2,6 +2,14 @@
 
 Immutable contracts used by the join, segmentation, and finalization
 stages. Do not reorder or change field types.
+
+``OUTPUT_SENTENCE_SCHEMA.osm_tags`` is encoded as
+``list<struct<key:string, value:string>>`` because the Hugging Face
+``datasets`` library cannot ingest ``map<string, string>``.  The
+intermediate ``SEGMENTED_SENTENCES_SCHEMA.osm_tags`` keeps the
+``map`` form for the segmentation boundary; the conversion happens at
+finalization time via
+:func:`osm_polygon_sentence_relevance.sentences.finalization.convert_osm_tags_to_list_of_struct`.
 """
 
 from __future__ import annotations
@@ -38,7 +46,18 @@ OUTPUT_SENTENCE_SCHEMA = pa.schema(
         pa.field("duplicate_sources", pa.list_(pa.string()), nullable=False),
         pa.field("polygon_name", pa.string(), nullable=True),
         pa.field("osm_primary_tag", pa.string(), nullable=True),
-        pa.field("osm_tags", pa.map_(pa.string(), pa.string()), nullable=False),
+        pa.field(
+            "osm_tags",
+            pa.list_(
+                pa.struct(
+                    [
+                        pa.field("key", pa.string(), nullable=False),
+                        pa.field("value", pa.string(), nullable=False),
+                    ]
+                )
+            ),
+            nullable=False,
+        ),
         pa.field("region", pa.string(), nullable=False),
         pa.field("lat", pa.float64(), nullable=True),
         pa.field("lon", pa.float64(), nullable=True),

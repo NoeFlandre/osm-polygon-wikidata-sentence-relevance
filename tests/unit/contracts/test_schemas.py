@@ -244,9 +244,21 @@ class TestOutputSchema:
         field = OUTPUT_SENTENCE_SCHEMA.field("section_path")
         assert field.type == pa.list_(pa.string())
 
-    def test_osm_tags_is_map_string_string(self):
+    def test_osm_tags_is_list_of_struct_key_value(self):
+        # Viewer-compatibility: ``map<string,string>`` is rejected by
+        # the Hugging Face ``datasets`` library. The canonical schema
+        # encodes OSM tags as a list of ``{key, value}`` structs.
         field = OUTPUT_SENTENCE_SCHEMA.field("osm_tags")
-        assert field.type == pa.map_(pa.string(), pa.string())
+        expected = pa.list_(
+            pa.struct(
+                [
+                    pa.field("key", pa.string(), nullable=False),
+                    pa.field("value", pa.string(), nullable=False),
+                ]
+            )
+        )
+        assert field.type == expected
+        assert field.nullable is False
 
     def test_duplicate_sources_is_list_string(self):
         field = OUTPUT_SENTENCE_SCHEMA.field("duplicate_sources")
