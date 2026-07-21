@@ -1,4 +1,4 @@
-"""Tests for ``SaTSentenceSegmenter`` device selection (Phase 9A).
+"""Tests for ``SaTSentenceSegmenter`` device selection (the implementation).
 
 The segmenter must:
 

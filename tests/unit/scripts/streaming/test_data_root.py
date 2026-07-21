@@ -1,4 +1,4 @@
-"""RED tests for Phase 9P data-root guard.
+"""RED tests for the implementation data-root guard.
 
 `scripts.streaming.data_root.check_data_root(path, *, role, min_free_bytes)`
 must reject any path that physically resolves to:

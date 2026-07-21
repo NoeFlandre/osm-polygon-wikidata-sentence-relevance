@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Grid'5000 CUDA pre-flight check (Phase 9B + Phase 9H).
+"""Grid'5000 CUDA preflight check.
 
 This script runs *inside* an allocated Grid'5000 compute node. It is a
 narrow invariant gate that proves the runtime can actually use a CUDA
 GPU before any SaT model is constructed. It is intentionally tiny and
 has no dependency on the project package.
 
-Design constraints (Phase 9B + Phase 9H):
+Design constraints:
 
 - Linux only (Grid'5000 compute nodes are Linux).
 - Requires a non-blank ``OAR_JOB_ID`` (we are inside an OAR
@@ -28,7 +28,7 @@ Design constraints (Phase 9B + Phase 9H):
   - ``torch_cuda_runtime_version``
   - ``visible_cuda_device_count``
   - ``device_0_name``
-- The result schema is unchanged from Phase 9B: no new fields.
+- The result schema is stable: no additional fields are emitted.
 - Never mutates ``os.environ``.
 - Never prints environment variables wholesale, tokens, credentials,
   cache contents, or usernames.
@@ -104,7 +104,7 @@ class _RealPreflightEnv:
 class PreflightResult:
     """Structured, JSON-serialisable preflight report.
 
-    The schema is unchanged from Phase 9B. The six documented keys
+    The schema is stable. The six documented keys
     are the only fields ever emitted.
     """
 

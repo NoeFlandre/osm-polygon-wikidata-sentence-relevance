@@ -1,4 +1,4 @@
-"""Tests for deterministic preprocessing utilities (Phase 3A).
+"""Tests for deterministic preprocessing utilities (the implementation).
 
 Covers section-path parsing, OSM-tag parsing, and sentence normalization.
 """

@@ -89,7 +89,7 @@ Context policy:
 - `next_sentence` of row *i* is `sentence_text_normalized` of the row
   immediately below *i*, or `null` for the last row.
 
-This is **not** the same as the Phase 2 join sort
+This is **not** the same as the join-stage sort
 `(polygon_id, source, language, document_id, section_index, section_id)`,
 and it is **not** the same as the dedup-group key.
 

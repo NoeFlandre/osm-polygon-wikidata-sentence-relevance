@@ -10,7 +10,7 @@ All quantitative top-level fields (``row_count``, ``sha256``,
 instance stored in the manifest's versioned ``statistics`` object. The
 validator reconciles them on load and rejects drift between them.
 
-Phase 9P adds profile-derived fields (``segmentation_model``,
+The current schema includes profile-derived fields (``segmentation_model``,
 ``segmentation_revision``, ``source_commit``, asset SHA-256s, and the
 full profile JSON) so the validator can reject drift between the
 export directory and the published assets.
@@ -34,7 +34,7 @@ from osm_polygon_sentence_relevance.sentences.finalization import (
 )
 
 # Schema version of the versioned manifest statistics object stored
-# on disk.  Phase 9P bumps this to 2 because the profile-shaped fields
+# on disk.  Version 2 includes because the profile-shaped fields
 # (``assets``, ``segmentation_model``, etc.) are now required by the
 # validator.  Validators and the rendering paths pin against this.
 MANIFEST_VERSION = 2

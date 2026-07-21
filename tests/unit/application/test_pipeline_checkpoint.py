@@ -1,4 +1,4 @@
-"""Phase 9L-A Amendment tests — quarantine-in-place + source-file binding.
+"""the implementation Hardening tests — quarantine-in-place + source-file binding.
 
 The pipeline accepts an optional ``work_dir`` that persists per-shard
 checkpoints and a factual progress heartbeat. Invariants:
@@ -1081,7 +1081,7 @@ class TestPipelinePreflightPathOverlap:
             _run_with_work_dir(root, out_dir, work_dir)
 
     def test_publish_race_aborts_without_auto_retry(self, tmp_path):
-        """Under amendment 2, a publication failure (here, an
+        """Under hardening 2, a publication failure (here, an
         externally materialized active directory) is fatal: the
         pipeline does NOT quarantine-and-retry. The run aborts with
         the racing active bytes preserved in place.

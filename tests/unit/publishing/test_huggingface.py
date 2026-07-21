@@ -1,4 +1,4 @@
-"""Tests for the programmatic Hugging Face export publishing (Phase 7C).
+"""Tests for the programmatic Hugging Face export publishing (the implementation).
 
 These tests use fully-injected Hub API and commit-operation factory
 fixtures to perform zero network calls. Validation and argument rules

@@ -1,12 +1,12 @@
-"""Unit tests for the Grid'5000 CUDA preflight (Phase 9B + Phase 9H).
+"""Unit tests for the Grid'5000 CUDA preflight (the implementation).
 
-Phase 9H contract:
+the implementation contract:
   * CUDA_VISIBLE_DEVICES is informational only. The preflight does
     NOT require, read, or assert on it; the authoritative runtime
     proof of GPU scoping is ``torch.cuda.is_available() is True``
     AND ``torch.cuda.device_count() == 1``.
   * The preflight does not mutate ``os.environ``.
-  * The result schema is unchanged from Phase 9B (no new field).
+  * The result schema is unchanged from the implementation (no new field).
   * Required conditions: Linux, non-blank OAR_JOB_ID, Torch import,
     ``torch.cuda.is_available() is True``, exactly one device, and
     ``torch.cuda.get_device_name(0)`` succeeds.
@@ -109,7 +109,7 @@ def test_rejects_non_linux():
 
 
 def test_rejects_missing_oar_job_id():
-    # Phase 9H: CUDA_VISIBLE_DEVICES is NOT set here. Preflight must
+    # the implementation: CUDA_VISIBLE_DEVICES is NOT set here. Preflight must
     # succeed past its absence and fail on OAR_JOB_ID instead.
     env = _env()
     with pytest.raises(pf.PreflightError, match="OAR_JOB_ID"):
@@ -174,7 +174,7 @@ def test_rejects_more_than_one_device():
         pf.run_preflight(env, torch_mod=_FakeTorchTwo())
 
 
-# --- Phase 9H: CUDA_VISIBLE_DEVICES is informational only -------------
+# --- the implementation: CUDA_VISIBLE_DEVICES is informational only -------------
 
 
 @pytest.mark.parametrize(
@@ -259,8 +259,8 @@ def test_torch_cuda_runtime_version_present():
 
 
 def test_result_schema_is_unchanged():
-    """Phase 9H: the JSON schema MUST NOT change. The set of
-    documented keys is the same six as Phase 9B."""
+    """the implementation: the JSON schema MUST NOT change. The set of
+    documented keys is the same six as the implementation."""
     env = _env(environ={"OAR_JOB_ID": "OAR-456"})
     result = pf.run_preflight(env, torch_mod=_FakeTorch())
     payload = json.loads(result.to_json())

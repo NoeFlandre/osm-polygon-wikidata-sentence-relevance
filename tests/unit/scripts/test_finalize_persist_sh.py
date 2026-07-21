@@ -1,4 +1,4 @@
-"""Unit tests for the persistent-storage copy helper (Phase 9O amendment).
+"""Unit tests for the persistent-storage copy helper (the implementation hardening).
 
 Contract (the public surface of
 ``scripts/grid5000/_finalize_persist.sh``):

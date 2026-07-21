@@ -1,4 +1,4 @@
-"""Read-only validation of an exported dataset directory (Phase 7B).
+"""Read-only validation of an exported dataset directory (the implementation).
 
 These tests assert the public ``validate_export_directory`` contract:
 an already-exported directory must be internally consistent (Parquet
@@ -759,7 +759,7 @@ class TestManifestRevisionVersionWhitespace:
 
 
 # ===================================================================
-# Coverage backfill (Phase 9N): narrow defensive-branch tests that
+# Coverage backfill (the implementation): narrow defensive-branch tests that
 # are easier to express at module scope than inside the existing
 # nested test classes. Each test asserts one branch the previous
 # suite did not exercise.
@@ -854,7 +854,7 @@ class TestCoverageBackfill:
 
 
 # ===================================================================
-# Coverage backfill (Phase 9N, second pass): the few remaining
+# Coverage backfill (the implementation, second pass): the few remaining
 # defensive branches after the first backfill pass.
 # ===================================================================
 

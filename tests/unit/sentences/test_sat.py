@@ -1,4 +1,4 @@
-"""Tests for the optional multilingual SaT model adapter (Phase 3I)."""
+"""Tests for the optional multilingual SaT model adapter (the implementation)."""
 
 from __future__ import annotations
 

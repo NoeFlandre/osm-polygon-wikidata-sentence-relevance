@@ -596,7 +596,7 @@ def test_discover_run_rejects_corrupt_entry(tmp_path: Path) -> None:
 
 # ---------------------------------------------------------------------------
 # RED: discover_run ignores folder entries returned by list_repo_tree
-# when ``expand=True`` (Phase 9O).  The production Hub listing of
+# when ``expand=True`` (the implementation).  The production Hub listing of
 # ``checkpoints/<run_id>/`` returns both the shard folder AND the
 # files inside it; the discovery loop must skip single-segment
 # relative paths and group the rest by shard_key.

@@ -1,4 +1,4 @@
-"""Deterministic preprocessing utilities (Phase 3A).
+"""Deterministic preprocessing utilities.
 
 These helpers parse and normalize raw string values that arrive from the
 input dataset before any later-phase work (segmentation, modelling, etc.).

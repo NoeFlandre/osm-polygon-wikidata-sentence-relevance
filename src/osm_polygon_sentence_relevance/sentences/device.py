@@ -1,4 +1,4 @@
-"""Device resolver for SaT inference (Phase 9A).
+"""Device resolver for SaT inference.
 
 The resolver is pure logic over a small capability snapshot. It does not
 import Torch and does not perform any model construction or movement. The

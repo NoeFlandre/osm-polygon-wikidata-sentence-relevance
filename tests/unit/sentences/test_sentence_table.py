@@ -1,4 +1,4 @@
-"""Tests for Phase 3G/3H joined-sections validation and transformation."""
+"""Tests for the implementation joined-sections validation and transformation."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Placement adapter for wtpsplit 2.2.1 (Phase 9A amendment; Phase 9K placement-shape correction).
+"""Placement adapter for the pinned wtpsplit 2.2.1 classifier.
 
 This module isolates *every* wtpsplit-specific concern behind a small,
 narrowly-versioned surface:

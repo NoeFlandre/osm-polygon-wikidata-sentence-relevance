@@ -627,7 +627,7 @@ class TestFinalization:
             segment_joined_sections,
         )
 
-        # 1. Phase 2 joined table: two rows
+        # 1. the implementation joined table: two rows
         row1 = make_joined_row(
             polygon_id="poly-1",
             source="wikipedia",
@@ -655,14 +655,14 @@ class TestFinalization:
 
         segmenter = FakeSegmenter()
 
-        # 3. Phase 3 segmented table
+        # 3. the implementation segmented table
         segmented_res = segment_joined_sections(joined_table, segmenter, batch_size=1)
         segmented_table = segmented_res.table
 
         # Verify segmented table has 4 rows
         assert segmented_table.num_rows == 4
 
-        # 4. Phase 4 final table
+        # 4. the implementation final table
         finalized_res = finalize_sentence_dataset(
             segmented_table,
             input_dataset_revision="main_rev",

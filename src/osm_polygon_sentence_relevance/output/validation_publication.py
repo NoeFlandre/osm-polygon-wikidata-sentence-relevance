@@ -1,7 +1,7 @@
-"""Publication-level validation for the post-Phase-9P export layout.
+"""Publication-level validation for the public export layout.
 
 The publication validator runs alongside the existing
-``validate_export_directory`` to enforce the extra Phase 9P
+``validate_export_directory`` to enforce the additional publication
 contracts:
 
 * ``OUTPUT_SENTENCE_SCHEMA`` contains no Arrow ``map<...>`` field
@@ -53,7 +53,7 @@ def _derive_asset_base_url(manifest: Mapping[str, Any]) -> str | None:
     """Return the asset base URL the publication script would have used.
 
     The script derives the URL from the ``dataset_repo_id`` argument
-    (defaulting to the canonical Phase 9P repo) so the on-disk README
+    (defaulting to the canonical output repository) so the on-disk README
     uses absolute ``huggingface.co/.../assets`` image URLs.  The
     validator must reproduce the same choice to deterministically
     re-render the card.
@@ -69,7 +69,7 @@ _MANIFEST_NAME = "manifest.json"
 _CARD_NAME = "README.md"
 _ASSETS_DIR_NAME = "assets"
 
-# Canonical contract for a published Phase 9P directory. The set of
+# Canonical contract for a published directory. The set of
 # files that must appear in the directory at exactly these relative
 # paths and no other files (apart from internal scratch/cache the
 # publication pipeline strips before validation runs). This is the
@@ -222,7 +222,7 @@ def validate_publication_directory(
     source_commit: str | None = None,
     scratch_dir: str | Path | None = None,
 ) -> ValidatedPublication:
-    """Validate a Phase 9P publication directory.
+    """Validate a publication directory.
 
     Parameters
     ----------

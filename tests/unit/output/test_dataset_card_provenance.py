@@ -1,4 +1,4 @@
-"""Source-provenance propagation tests for Phase 8C completion.
+"""Source-provenance propagation tests for the implementation completion.
 
 These tests assert the dataset-card / finalization chain end-to-end:
 
@@ -668,7 +668,7 @@ class TestValidatorDatasetIdConsistency:
 
 
 class TestExporterDatasetIdStrictNormalization:
-    """Phase 8C Export-Provenance Consistency Micro-Amendment.
+    """the implementation Export-Provenance Consistency hardening.
 
     The exporter must apply the same strict dataset-ID contract as the
     finalizer, validator, and ``_resolve_input_dataset_id``:

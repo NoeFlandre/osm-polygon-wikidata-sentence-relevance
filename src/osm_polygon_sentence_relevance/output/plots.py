@@ -7,13 +7,7 @@ import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-import matplotlib
-
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-import numpy as np
 import pyarrow.parquet as pq
-from matplotlib.figure import Figure
 
 from osm_polygon_sentence_relevance.contracts.errors import ExportError
 
@@ -68,6 +62,18 @@ _LANG_BACKGROUND_COLOR = "#ffffff"
 
 class ProfileError(ExportError):
     """Raised when profile construction fails."""
+
+
+def _load_plotting() -> tuple[Any, Any, type[Any]]:
+    """Load optional plotting dependencies only when rendering assets."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import numpy as np
+    from matplotlib.figure import Figure
+
+    return plt, np, Figure
 
 
 def collect_polygon_centroids(
@@ -178,6 +184,7 @@ def _build_signature_png(
     pixel callbacks do not crash.  The returned PNG is a blank
     white image of the requested dimensions.
     """
+    plt, _, _ = _load_plotting()
     fig, ax = plt.subplots(
         figsize=(width / 100, height / 100), dpi=100
     )  # pragma: no cover
@@ -189,7 +196,7 @@ def _build_signature_png(
     return buf
 
 
-def _figure_to_png_bytes(fig: Figure) -> bytes:
+def _figure_to_png_bytes(fig: Any) -> bytes:
     """Render *fig* to PNG bytes via matplotlib's Agg backend.
 
     Determinism is ensured by:
@@ -222,9 +229,10 @@ def _figure_to_png_bytes(fig: Figure) -> bytes:
 
 def _seed_matplotlib_for_determinism() -> None:
     """Pin the matplotlib RNG state so identical inputs yield identical bytes."""
+    plt, np, _ = _load_plotting()
     np.random.seed(0x5A_52_4D_4F)  # 'ZRMO'
-    matplotlib.rcParams["font.family"] = "DejaVu Sans"
-    matplotlib.rcParams["text.usetex"] = False
+    plt.rcParams["font.family"] = "DejaVu Sans"
+    plt.rcParams["text.usetex"] = False
 
 
 def _load_afghanistan_outline() -> tuple[list[tuple[float, float]], dict[str, str]]:
@@ -319,6 +327,7 @@ def render_geographic_coverage_png(
         renderer never invents values.
     """
     _seed_matplotlib_for_determinism()
+    plt, np, Figure = _load_plotting()
     polygon_lonlat, outline_properties = _load_afghanistan_outline()
     if polygon_lonlat:
         outline_lons = [p[0] for p in polygon_lonlat]
@@ -455,6 +464,7 @@ def render_language_distribution_png(profile: DatasetProfile) -> bytes:
       can drift between renders.
     """
     _seed_matplotlib_for_determinism()
+    plt, np, Figure = _load_plotting()
     if not profile.language_counts:
         # Empty profile: render a blank canvas at the contract
         # dimensions with an explanatory caption.

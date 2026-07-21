@@ -58,21 +58,21 @@ class IncompatibleTypesError(SchemaContractError):
 
 
 # ---------------------------------------------------------------------------
-# Preprocessing errors (Phase 3)
+# Preprocessing errors
 # ---------------------------------------------------------------------------
 class PreprocessingError(Exception):
     """Raised when deterministic preprocessing of raw values fails."""
 
 
 # ---------------------------------------------------------------------------
-# Segmentation errors (Phase 3)
+# Segmentation errors
 # ---------------------------------------------------------------------------
 class SegmentationError(Exception):
     """Raised when sentence segmentation fails or violates its contract."""
 
 
 # ---------------------------------------------------------------------------
-# Shard-discovery errors (Phase 2)
+# Shard-discovery errors
 # ---------------------------------------------------------------------------
 class ShardDiscoveryError(Exception):
     """Raised when local shard discovery encounters an invalid layout."""
@@ -84,7 +84,7 @@ class ShardDiscoveryError(Exception):
 
 
 # ---------------------------------------------------------------------------
-# Join-integrity errors (Phase 2)
+# Join-integrity errors
 # ---------------------------------------------------------------------------
 class JoinIntegrityError(Exception):
     """Raised when join-key integrity checks fail."""
@@ -110,35 +110,35 @@ class JoinIntegrityError(Exception):
 
 
 # ---------------------------------------------------------------------------
-# Finalization errors (Phase 4)
+# Finalization errors
 # ---------------------------------------------------------------------------
 class FinalizationError(ValueError):
     """Raised when sentence finalization fails or violates its contract."""
 
 
 # ---------------------------------------------------------------------------
-# Export errors (Phase 5A)
+# Export errors
 # ---------------------------------------------------------------------------
 class ExportError(ValueError):
     """Raised when local dataset export fails."""
 
 
 # ---------------------------------------------------------------------------
-# Acquisition errors (Phase 6B)
+# Acquisition errors
 # ---------------------------------------------------------------------------
 class AcquisitionError(ValueError):
     """Raised when Hugging Face dataset acquisition fails."""
 
 
 # ---------------------------------------------------------------------------
-# Publishing errors (Phase 7C)
+# Publishing errors
 # ---------------------------------------------------------------------------
 class PublicationError(ValueError):
     """Raised when Hugging Face dataset publishing fails."""
 
 
 # ---------------------------------------------------------------------------
-# Checkpoint errors (Phase 9L-A)
+# Checkpoint errors
 # ---------------------------------------------------------------------------
 class CheckpointError(ValueError):
     """Raised when the optional persistent checkpoint layer rejects or fails."""

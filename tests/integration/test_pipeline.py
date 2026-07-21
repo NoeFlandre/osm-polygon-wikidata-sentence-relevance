@@ -208,7 +208,7 @@ class MockSegmenter:
 
 
 # ===================================================================
-# Test Suite for Pipeline Orchestration (Phase 5B)
+# Test Suite for Pipeline Orchestration (the implementation)
 # ===================================================================
 
 

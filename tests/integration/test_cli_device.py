@@ -1,4 +1,4 @@
-"""Tests for the CLI ``--device`` option and ``--input-source-dataset-id`` (Phase 9A).
+"""Tests for the CLI ``--device`` option and ``--input-source-dataset-id`` (the implementation).
 
 Hardware independence: every device-availability assertion is driven by
 an injected capability snapshot, not by the host's actual CUDA/MPS

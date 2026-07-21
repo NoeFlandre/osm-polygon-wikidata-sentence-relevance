@@ -1,9 +1,8 @@
-"""Deterministic dataset-card generation (Phase 8C, amended).
+"""Deterministic dataset-card statistics.
 
 This module turns a finalized output table into a small, fully-derived set
-of immutable statistics and renders them into a Hugging Face-compatible
-``README.md`` dataset card. It contains no network calls and never mutates
-the filesystem; the exporter owns all writes.
+of immutable statistics. It contains no network calls and never mutates the
+filesystem; the exporter owns all writes.
 
 Design
 ------
@@ -57,7 +56,7 @@ import pyarrow.parquet as pq
 from osm_polygon_sentence_relevance.contracts.schemas import OUTPUT_SENTENCE_SCHEMA
 
 # Schema version of the versioned statistics object stored in the
-# manifest. Phase 8C is the initial release; this constant starts at 1.
+# manifest. This initial schema version starts at 1.
 # Bump only when the set of required fields or their invariants change
 # incompatibly; the validator pins against this constant.
 STATISTICS_VERSION = 1

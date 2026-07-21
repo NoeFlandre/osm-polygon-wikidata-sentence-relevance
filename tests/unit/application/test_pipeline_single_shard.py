@@ -1,4 +1,4 @@
-"""Phase 9P-1 — RED characterisation of `run_pipeline` across sequential
+"""the implementation — RED characterisation of `run_pipeline` across sequential
 shard staging. Documents the existing inventory reconciliation
 behaviour when only one shard of multiple is staged at a time.
 

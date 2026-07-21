@@ -1,4 +1,4 @@
-"""Unit tests for the bounded exception-chain renderer (Phase 9M-A).
+"""Unit tests for the bounded exception-chain renderer (the implementation).
 
 Public contract:
 

@@ -1,4 +1,4 @@
-"""Optional multilingual SaT (Sentence-and-Tagging) model adapter (Phase 3I).
+"""Optional multilingual SaT (Sentence-and-Tagging) model adapter.
 
 This module provides :class:`SaTSentenceSegmenter`, a concrete
 :class:`~osm_polygon_sentence_relevance.segmentation.SentenceSegmenter` backed
@@ -13,7 +13,7 @@ the first non-empty call, so importing this module or running with plain
 and cached by the underlying library at first use; none are stored in this
 repository.
 
-Device handling (Phase 9A): the segmenter accepts a ``device`` argument
+Device handling: the segmenter accepts a ``device`` argument
 (``"auto"``, ``"cpu"``, ``"cuda"``, ``"mps"``) and a ``caps`` capability
 object. The device is resolved exactly once, immediately before the model
 is constructed; the resolved value is then passed unchanged into the

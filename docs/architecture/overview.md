@@ -169,7 +169,7 @@ deduplication, in three explicit steps:
 After context assignment, deduplication then re-groups the same rows by
 `(polygon_id, language, sentence_text_normalized)` and selects a canonical
 occurrence per group (see `data-contract.md`). Context and deduplication
-are not the same grouping, and the Phase 2 join sort is not the same sort
+are not the same grouping, and the join-stage sort is not the same sort
 as the context sort.
 
 ## Finalization and atomic export boundaries

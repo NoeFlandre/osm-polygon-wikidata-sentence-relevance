@@ -1,8 +1,8 @@
-"""Strict publication-contract tests for Phase 9P corrective release.
+"""Strict publication-contract tests for the implementation corrective release.
 
 These tests pin the exact layout that a published dataset directory
 must satisfy on Hugging Face `main`. The previous publication
-regression (Phase 9P final commit ``2e8d68d9``) deleted
+regression (the implementation final commit ``2e8d68d9``) deleted
 ``sentences.parquet`` from `main`; the publication contract must
 make that kind of omission impossible to ship.
 

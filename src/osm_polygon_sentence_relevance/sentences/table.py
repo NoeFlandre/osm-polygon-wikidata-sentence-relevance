@@ -1,12 +1,12 @@
-"""Validation and transformation of Phase 2 joined-section tables (Phase 3G/H).
+"""Validation and transformation of joined-section tables.
 
-Phase 3G provides :func:`validate_joined_sections_table`, a pure structural
-check. Phase 3H adds :func:`segment_joined_sections`, which validates a joined
-table, then expands each retained sentence into one output row conforming to
-``SEGMENTED_SENTENCES_SCHEMA`` using an injected :class:`SentenceSegmenter`.
+This module provides :func:`validate_joined_sections_table`, a pure structural
+check. :func:`segment_joined_sections` validates a joined table, then expands
+each retained sentence into one output row conforming to
+``SEGMENTED_SENTENCES_SCHEMA`` through an injected segmenter.
 
 Neither function transforms, reorders, or mutates the caller's table, and no
-model adapter or Phase 4 logic is present here.
+model adapter or finalization logic is present here.
 """
 
 from __future__ import annotations

@@ -62,7 +62,7 @@ class TestSegmentationExtra:
         )
 
     def test_segmentation_declares_wtpsplit(self):
-        # wtpsplit is pinned to exactly 2.2.1 (Phase 9A amendment) —
+        # wtpsplit is pinned to exactly 2.2.1 (the implementation hardening) —
         # the placement adapter is intentionally version-specific and
         # refuses any other version at runtime.
         assert "wtpsplit==2.2.1" in self._extra("segmentation"), (
