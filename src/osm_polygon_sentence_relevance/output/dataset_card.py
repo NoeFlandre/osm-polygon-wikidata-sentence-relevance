@@ -735,6 +735,94 @@ def _yaml_quote_scalar(value: str) -> str:
     return f'"{safe}"'
 
 
+def _yaml_features_block(stats: DatasetStatistics) -> str:
+    """Render the ``dataset_info.features`` block for the YAML front matter.
+
+    The schema is declared in deterministic order so two ``DatasetStatistics``
+    inputs with the same logical content produce byte-identical YAML.
+    ``osm_tags`` is declared as a ``Sequence`` of ``{key, value}`` structs
+    because the Hugging Face Dataset Viewer cannot process the parquet
+    ``map<string, string>`` type; the parquet file is encoded to use the
+    same logical representation so the declared features match the actual
+    bytes.
+    """
+    feature_lines = [
+        "  - name: sentence_id",
+        "    dtype: string",
+        "  - name: polygon_id",
+        "    dtype: string",
+        "  - name: wikidata",
+        "    dtype: string",
+        "  - name: document_id",
+        "    dtype: string",
+        "  - name: article_id",
+        "    dtype: string",
+        "  - name: source",
+        "    dtype: string",
+        "  - name: language",
+        "    dtype: string",
+        "  - name: site",
+        "    dtype: string",
+        "  - name: page_title",
+        "    dtype: string",
+        "  - name: section_id",
+        "    dtype: string",
+        "  - name: section_index",
+        "    dtype: int64",
+        "  - name: section_path",
+        "    sequence: string",
+        "  - name: sentence_index",
+        "    dtype: int64",
+        "  - name: sentence_text_raw",
+        "    dtype: string",
+        "  - name: sentence_text_normalized",
+        "    dtype: string",
+        "  - name: previous_sentence",
+        "    dtype: string",
+        "  - name: next_sentence",
+        "    dtype: string",
+        "  - name: url",
+        "    dtype: string",
+        "  - name: page_id",
+        "    dtype: int64",
+        "  - name: revision_id",
+        "    dtype: int64",
+        "  - name: revision_timestamp",
+        "    dtype: string",
+        "  - name: document_content_hash",
+        "    dtype: string",
+        "  - name: section_content_hash",
+        "    dtype: string",
+        "  - name: sentence_content_hash",
+        "    dtype: string",
+        "  - name: duplicate_occurrence_count",
+        "    dtype: int64",
+        "  - name: duplicate_sources",
+        "    sequence: string",
+        "  - name: polygon_name",
+        "    dtype: string",
+        "  - name: osm_primary_tag",
+        "    dtype: string",
+        "  - name: osm_tags",
+        "    sequence:",
+        "    - name: key",
+        "      dtype: string",
+        "    - name: value",
+        "      dtype: string",
+        "  - name: region",
+        "    dtype: string",
+        "  - name: lat",
+        "    dtype: float64",
+        "  - name: lon",
+        "    dtype: float64",
+        "  - name: input_dataset_revision",
+        "    dtype: string",
+        "  - name: pipeline_version",
+        "    dtype: string",
+    ]
+    return "\n".join(feature_lines)
+
+
 def _yaml_front_matter(stats: DatasetStatistics) -> str:
     """Render valid Hugging Face dataset-card YAML front matter.
 
@@ -744,7 +832,12 @@ def _yaml_front_matter(stats: DatasetStatistics) -> str:
     the list is empty. Strings that contain ``:``, ``|``, ``"``, ``\\``,
     or leading/trailing whitespace are emitted as double-quoted scalars to
     keep the rendering parseable and deterministic without a YAML
-    dependency.
+    dependency.  Includes a ``dataset_info`` block (with ``splits`` before
+    ``features``) so the Hugging Face Dataset Viewer can interpret
+    ``osm_tags`` as a ``Sequence`` of ``{key, value}`` structs (the
+    parquet ``map`` type is not supported by ``datasets``).  ``splits``
+    appears before ``features`` so the Hub's strict YAML parser does not
+    reject a sibling-key dedent after a deeply-nested feature item.
     """
     if stats.language_counts:
         languages_block = "\n".join(
@@ -753,11 +846,21 @@ def _yaml_front_matter(stats: DatasetStatistics) -> str:
         language_section = f"language:\n{languages_block}"
     else:
         language_section = "language: []"
+    features_block = _yaml_features_block(stats)
+    splits_block = (
+        f"  splits:\n"
+        f"  - name: train\n"
+        f"    num_examples: {stats.row_count}\n"
+        f"  features:\n"
+        f"{features_block}"
+    )
     lines = [
         "---",
         "license: other",
         "pretty_name: OSM Polygon Wikidata Sentence Relevance",
         language_section,
+        "dataset_info:",
+        splits_block,
         "---",
     ]
     return "\n".join(lines)

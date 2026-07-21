@@ -96,7 +96,11 @@ def _parse_simple_yaml_front_matter(block: str) -> dict | None:
     ``key: scalar`` (the value is everything after the colon up to EOL,
     stripped), block sequences ``- value`` at column 0 (the only kind of
     sequence we emit), and the flow-style empty list ``[]``. Strings
-    quoted with double quotes have their literal preserved.
+    quoted with double quotes have their literal preserved.  Nested
+    mapping blocks (e.g. ``dataset_info:`` followed by indented content)
+    are detected and recorded as a list of stripped lines so the top-level
+    ``language:`` block sequence remains accessible; this is a
+    restricted grammar sufficient for the test contract.
     """
     out: dict = {}
     lines = block.split("\n")
@@ -118,11 +122,13 @@ def _parse_simple_yaml_front_matter(block: str) -> dict | None:
                 out[key.strip()] = raw
                 i += 1
                 continue
-            # ``key:`` with no inline value. Collect a block sequence on
-            # the immediately following lines. Indentation is one or more
-            # spaces, then ``- value`` (we also accept column-0 ``- value``
-            # since that's exactly what the renderer emits).
+            # ``key:`` with no inline value.  The next non-empty line may
+            # either start with ``-`` (block sequence) or be indented
+            # (nested mapping block, e.g. ``dataset_info:``).  Collect a
+            # block sequence on the immediately following lines, or
+            # capture a nested mapping as a list of stripped lines.
             block_items: list = []
+            nested_lines: list = []
             j = i + 1
             while j < len(lines):
                 seq = lines[j]
@@ -134,12 +140,19 @@ def _parse_simple_yaml_front_matter(block: str) -> dict | None:
                     block_items.append(content)
                     j += 1
                     continue
+                # An indented (non ``-``) line is a nested mapping block.
+                if seq.startswith((" ", "\t")) and seq.strip():
+                    nested_lines.append(seq.strip())
+                    j += 1
+                    continue
                 # Any other non-empty line ends the block sequence.
                 if seq.strip():
                     break
                 j += 1
             if block_items:
                 out[key.strip()] = block_items
+            elif nested_lines:
+                out[key.strip()] = nested_lines
             else:
                 out[key.strip()] = []
             i = j
