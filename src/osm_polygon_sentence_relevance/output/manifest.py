@@ -17,10 +17,42 @@ import json
 from pathlib import Path
 
 from osm_polygon_sentence_relevance.output.dataset_card import (
+    DatasetStatistics,
     compute_statistics,
     statistics_to_dict,
 )
-from osm_polygon_sentence_relevance.sentences.finalization import FinalizedDataset
+from osm_polygon_sentence_relevance.sentences.finalization import (
+    FinalizationReport,
+    FinalizedDataset,
+)
+
+
+def build_manifest_data_from_statistics(
+    statistics: DatasetStatistics,
+    report: FinalizationReport,
+) -> dict:
+    """Build a manifest from already-computed factual statistics.
+
+    This is the bounded-memory counterpart to :func:`build_manifest_data`.
+    Both paths share this single serializer so top-level counts and the
+    versioned statistics object cannot drift.
+    """
+
+    serialized = statistics_to_dict(statistics)
+    return {
+        "row_count": serialized["row_count"],
+        "input_occurrence_count": report.input_sentence_occurrence_count,
+        "duplicates_removed": report.duplicate_occurrence_count_removed,
+        "cross_source_duplicate_groups": report.cross_source_duplicate_group_count,
+        "counts_by_source": serialized["source_counts"],
+        "counts_by_language": serialized["language_counts"],
+        "counts_by_region": serialized["region_counts"],
+        "input_dataset_revision": serialized["input_dataset_revision"],
+        "pipeline_version": serialized["pipeline_version"],
+        "input_dataset_id": serialized["input_dataset_id"],
+        "sha256": serialized["parquet_sha256"],
+        "statistics": serialized,
+    }
 
 
 def build_manifest_data(
@@ -39,36 +71,14 @@ def build_manifest_data(
     the metadata-derived value (or ``None`` if no metadata key was
     written) is used.
     """
-    report = dataset.report
-    statistics = statistics_to_dict(
-        compute_statistics(
-            dataset.table,
-            input_dataset_revision=input_dataset_revision or "",
-            pipeline_version=pipeline_version or "",
-            parquet_sha256=sha256_hex,
-            input_dataset_id=input_dataset_id,
-        )
+    statistics = compute_statistics(
+        dataset.table,
+        input_dataset_revision=input_dataset_revision or "",
+        pipeline_version=pipeline_version or "",
+        parquet_sha256=sha256_hex,
+        input_dataset_id=input_dataset_id,
     )
-    return {
-        "row_count": statistics["row_count"],
-        "input_occurrence_count": (
-            report.input_sentence_occurrence_count if report else 0
-        ),
-        "duplicates_removed": (
-            report.duplicate_occurrence_count_removed if report else 0
-        ),
-        "cross_source_duplicate_groups": (
-            report.cross_source_duplicate_group_count if report else 0
-        ),
-        "counts_by_source": statistics["source_counts"],
-        "counts_by_language": statistics["language_counts"],
-        "counts_by_region": statistics["region_counts"],
-        "input_dataset_revision": statistics["input_dataset_revision"],
-        "pipeline_version": statistics["pipeline_version"],
-        "input_dataset_id": statistics["input_dataset_id"],
-        "sha256": statistics["parquet_sha256"],
-        "statistics": statistics,
-    }
+    return build_manifest_data_from_statistics(statistics, dataset.report)
 
 
 def write_manifest(path: str | Path, manifest_data: dict) -> None:

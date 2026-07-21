@@ -329,8 +329,9 @@ class TestInvalidPublishingArguments:
 
         monkeypatch.setattr(
             "osm_polygon_sentence_relevance.application.cli.run_pipeline",
-            lambda *a, **k: pipeline_calls.append((a, k))
-            or make_fake_pipeline_result(),
+            lambda *a, **k: (
+                pipeline_calls.append((a, k)) or make_fake_pipeline_result()
+            ),
         )
 
         code = main(

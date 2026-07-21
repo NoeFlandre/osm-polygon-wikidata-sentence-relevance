@@ -61,16 +61,12 @@ def test_constructed_revisions_are_exactly_40_chars_and_match_expected() -> None
     truncation/concatenation error in the test fixtures themselves.
     The expected values are themselves split so no 40-hex literal
     appears in this test source."""
-    sat_expected = (
-        "137da05405" + "1ad9f1eac4" + "2025f758db" + "4ac9f22535"
-    )
-    xlm_expected = (
-        "e73636d4f7" + "97dec63c30" + "81bb6ed5c7" + "b0bb3f2089"
-    )
+    sat_expected = "137da05405" + "1ad9f1eac4" + "2025f758db" + "4ac9f22535"
+    xlm_expected = "e73636d4f7" + "97dec63c30" + "81bb6ed5c7" + "b0bb3f2089"
     assert len(SAT_REV) == 40
-    assert SAT_REV == sat_expected
+    assert sat_expected == SAT_REV
     assert len(XLM_REV) == 40
-    assert XLM_REV == xlm_expected
+    assert xlm_expected == XLM_REV
 
 
 def _make_hf_home_with_refs(

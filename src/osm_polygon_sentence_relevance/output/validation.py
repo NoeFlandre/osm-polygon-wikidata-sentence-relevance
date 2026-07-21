@@ -18,6 +18,7 @@ once via :func:`pyarrow.parquet.read_table`.
 from __future__ import annotations
 
 import json
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -27,7 +28,7 @@ from osm_polygon_sentence_relevance.contracts.errors import ExportError
 from osm_polygon_sentence_relevance.contracts.schemas import OUTPUT_SENTENCE_SCHEMA
 from osm_polygon_sentence_relevance.output.checksum import sha256_file
 from osm_polygon_sentence_relevance.output.dataset_card import (
-    compute_statistics,
+    compute_parquet_statistics,
     render_dataset_card,
     statistics_from_dict,
 )
@@ -277,19 +278,18 @@ def validate_export_directory(path: str | Path) -> ValidatedExport:
     except (ValueError, TypeError) as err:
         raise ExportError(f"Manifest statistics object is invalid: {err}") from err
 
-    # Load the full table to recompute the figures directly from bytes.
     try:
-        table = pq.read_table(parquet_path)
-    except Exception as err:  # pragma: no cover - defensive
-        raise ExportError(f"Could not read Parquet rows: {err}") from err
-
-    recomputed = compute_statistics(
-        table,
-        input_dataset_revision=manifest_revision,
-        pipeline_version=manifest_version,
-        parquet_sha256=actual_sha,
-        input_dataset_id=parquet_dataset_id,
-    )
+        with tempfile.TemporaryDirectory(prefix="validate-export-") as scratch:
+            recomputed = compute_parquet_statistics(
+                parquet_path,
+                input_dataset_revision=manifest_revision,
+                pipeline_version=manifest_version,
+                parquet_sha256=actual_sha,
+                input_dataset_id=parquet_dataset_id,
+                scratch_dir=scratch,
+            )
+    except Exception as err:
+        raise ExportError(f"Could not validate Parquet rows: {err}") from err
 
     if recomputed != manifest_statistics:
         raise ExportError(
