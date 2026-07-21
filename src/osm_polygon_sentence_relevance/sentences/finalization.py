@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -13,6 +14,61 @@ from osm_polygon_sentence_relevance.contracts.schemas import (
     OUTPUT_SENTENCE_SCHEMA,
     SEGMENTED_SENTENCES_SCHEMA,
 )
+
+
+def convert_osm_tags_to_list_of_struct(
+    value: Mapping[str, str] | pa.MapArray | list[tuple[str, str]],
+) -> list[dict[str, str]]:
+    """Convert a segmented-time ``osm_tags`` value to Viewer-compatible form.
+
+    Parameters
+    ----------
+    value : Mapping[str, str] or pa.MapArray or list[tuple[str, str]]
+        The source tags.  Recognized forms: a Python ``Mapping``, a
+        ``pa.MapArray`` (one map cell expanded by PyArrow), or a
+        ``list[tuple[str, str]]`` produced by ``pa.MapArray.to_pylist()``
+        for a single cell.  An empty input yields an empty list.
+
+    Returns
+    -------
+    list[dict[str, str]]
+        A list of ``{"key": str, "value": str}`` dicts sorted by key
+        (deterministic byte order).  All non-string keys / values are
+        rejected with :class:`FinalizationError`.
+    """
+    if isinstance(value, pa.MapArray):
+        keys = value.keys.to_pylist()
+        vals = value.items.to_pylist()
+        pairs = list(zip(keys, vals, strict=False))
+        if not pairs:
+            return []
+    elif isinstance(value, Mapping):
+        pairs = list(value.items())
+        if not pairs:
+            return []
+    elif isinstance(value, list):
+        if not value:
+            return []
+        if all(isinstance(x, tuple) and len(x) == 2 for x in value):
+            pairs = [(k, v) for k, v in value]
+        else:
+            raise FinalizationError(
+                "osm_tags list form must contain (key, value) tuples"
+            )
+    else:
+        raise FinalizationError(
+            "osm_tags must be a Mapping[str, str], pa.MapArray, or list of "
+            "(key, value) tuples"
+        )
+
+    for k, v in pairs:
+        if not isinstance(k, str):
+            raise FinalizationError("osm_tags keys must be strings")
+        if not isinstance(v, str):
+            raise FinalizationError("osm_tags values must be strings")
+
+    pairs.sort(key=lambda kv: kv[0])
+    return [{"key": k, "value": v} for k, v in pairs]
 
 
 @dataclass(frozen=True, slots=True)
@@ -307,7 +363,7 @@ def finalize_sentence_dataset(
             "duplicate_sources": dup_sources,
             "polygon_name": canonical["polygon_name"],
             "osm_primary_tag": canonical["osm_primary_tag"],
-            "osm_tags": canonical["osm_tags"],
+            "osm_tags": convert_osm_tags_to_list_of_struct(canonical["osm_tags"]),
             "region": canonical["region"],
             "lat": canonical["lat"],
             "lon": canonical["lon"],
