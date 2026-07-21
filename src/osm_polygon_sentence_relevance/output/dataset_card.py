@@ -950,6 +950,48 @@ def _source_provenance_section(stats: DatasetStatistics) -> str:
     )
 
 
+def _single_region_preview_section(stats: DatasetStatistics) -> str:
+    """Render a prominent "Dataset scope" section when exactly one region
+    is in the export.
+
+    Returns ``""`` when ``region_counts`` has zero or multiple keys so
+    multi-region and empty exports do not advertise a misleading
+    preview scope.  All figures are derived from ``stats``; the region
+    display name is the title-cased form of the single region key.
+    """
+    if len(stats.region_counts) != 1:
+        return ""
+    region_key, region_rows = next(iter(stats.region_counts.items()))
+    display_name = region_key.title()
+    sha = stats.parquet_sha256
+    revision = _escape_md_inline(stats.input_dataset_revision)
+    sha_inline = _escape_md_inline(sha)
+    return f"""\
+## Dataset scope
+
+This published artifact is the **{display_name}-only preview** of the
+OSM Polygon Wikidata Sentence Relevance dataset. It contains
+{stats.row_count} deduplicated sentence rows extracted from
+{stats.unique_polygons} unique OSM polygons in the
+{_escape_md_inline(region_key)} shard, covering
+{stats.unique_wikidata_entities} Wikidata entities and
+{stats.unique_documents} unique documents. The full multi-region
+dataset is published incrementally; the current artifact covers a
+single region only and is intended as a canary/validation snapshot
+of the production export pipeline.
+
+- **Region:** {display_name}
+- **Region key in this preview:** `{_escape_md_inline(region_key)}`
+- **Region rows:** {region_rows}
+- **Preview rows:** {stats.row_count}
+- **Preview polygons:** {stats.unique_polygons}
+- **Preview Wikidata entities:** {stats.unique_wikidata_entities}
+- **Preview documents:** {stats.unique_documents}
+- **Recorded input revision:** `{revision}`
+- **Preview Parquet SHA-256:** `{sha_inline}`
+"""
+
+
 def render_dataset_card(stats: DatasetStatistics) -> str:
     """Render the deterministic Hugging Face dataset card.
 
@@ -964,6 +1006,7 @@ def render_dataset_card(stats: DatasetStatistics) -> str:
     source_section = _counts_table("Source coverage", stats.source_counts)
     language_section = _counts_table("Language coverage", stats.language_counts)
     region_section = _counts_table("Region coverage", stats.region_counts)
+    preview_section = _single_region_preview_section(stats)
 
     return f"""\
 {_yaml_front_matter(stats)}
@@ -984,7 +1027,7 @@ only. Land-use relevance labels, polygon-description classifications,
 relevance scores, and similarity-pair annotations are future downstream
 work and are absent from this dataset.
 
-## Dataset summary
+{preview_section}## Dataset summary
 
 - **Total sentence rows:** {stats.row_count}
 - **Unique sentence IDs:** {stats.unique_sentence_ids}
