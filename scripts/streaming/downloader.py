@@ -20,6 +20,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -72,7 +73,7 @@ def _sha256_file(path: Path) -> str:
     return h.hexdigest().lower()
 
 
-def _import_huggingface_hub():
+def _import_huggingface_hub() -> tuple[Any, Callable[..., Any]]:
     """Lazy ``huggingface_hub`` import so importing this module does
     not pollute ``sys.modules`` for tests that assert the package
     loads without optional dependencies."""

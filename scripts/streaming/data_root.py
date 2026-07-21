@@ -280,8 +280,6 @@ def safe_cleanup_scratch(path: Path, *, prefix_requirement: str = "osm_") -> Non
     4. Path must contain OAR_JOB_ID if running inside an OAR job.
     5. Path basename or parent must start with prefix_requirement.
     """
-    if not isinstance(path, Path):
-        path = Path(path)
     if not path.exists() and not path.is_symlink():
         return
 

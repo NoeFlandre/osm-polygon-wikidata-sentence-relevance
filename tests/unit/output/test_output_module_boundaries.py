@@ -20,8 +20,7 @@ def test_profile_keeps_plot_compatibility_exports() -> None:
     from osm_polygon_sentence_relevance.output import plots, profile
 
     assert (
-        profile.render_geographic_coverage_png
-        is plots.render_geographic_coverage_png
+        profile.render_geographic_coverage_png is plots.render_geographic_coverage_png
     )
     assert (
         profile.render_language_distribution_png

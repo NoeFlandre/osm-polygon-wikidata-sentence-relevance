@@ -14,7 +14,7 @@ import hashlib
 import json
 import os
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -57,7 +57,7 @@ class OffloadHandle:
     local_metadata_path: Path | None = None
 
 
-def _lazy_hf_hub_download():
+def _lazy_hf_hub_download() -> Callable[..., str]:
     try:
         from huggingface_hub import hf_hub_download
     except ImportError as exc:  # pragma: no cover
