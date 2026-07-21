@@ -369,7 +369,7 @@ class TestCheckpointPublicationAtomic:
         assert (first / "metadata.json").exists()
 
     def test_publish_preserves_staging_on_write_failure(self, tmp_path, monkeypatch):
-        from osm_polygon_sentence_relevance.application import checkpoint as ckpt
+        from osm_polygon_sentence_relevance.application._checkpoint import storage
 
         root = tmp_path / "in"
         work_dir = tmp_path / "work"
@@ -381,7 +381,7 @@ class TestCheckpointPublicationAtomic:
         def boom(*_a, **_kw):
             raise RuntimeError("simulated parquet write failure")
 
-        monkeypatch.setattr(ckpt, "_atomic_write_parquet", boom)
+        monkeypatch.setattr(storage, "_atomic_write_parquet", boom)
 
         with pytest.raises(RuntimeError, match="simulated"):
             publish_shard_checkpoint(

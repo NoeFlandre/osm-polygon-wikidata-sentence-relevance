@@ -350,6 +350,7 @@ class TestNoPublicationAutoRetry:
         persists as evidence.
         """
         from osm_polygon_sentence_relevance.application import checkpoint as ckpt
+        from osm_polygon_sentence_relevance.application._checkpoint import storage
         from osm_polygon_sentence_relevance.application.checkpoint import (
             publish_shard_checkpoint,
         )
@@ -364,8 +365,8 @@ class TestNoPublicationAutoRetry:
         def boom(*_a, **_kw):
             raise RuntimeError("simulated write failure")
 
-        original = ckpt._atomic_write_parquet
-        ckpt._atomic_write_parquet = boom  # type: ignore[assignment]
+        original = storage._atomic_write_parquet
+        storage._atomic_write_parquet = boom
         try:
             with pytest.raises(RuntimeError):
                 publish_shard_checkpoint(
@@ -382,7 +383,7 @@ class TestNoPublicationAutoRetry:
                     verified_manifest=manifest,
                 )
         finally:
-            ckpt._atomic_write_parquet = original  # type: ignore[assignment]
+            storage._atomic_write_parquet = original
 
         staging_root = work_dir / "shards"
         stagings = list(staging_root.glob(".staging.reg-a.*"))
@@ -506,21 +507,29 @@ class TestSourceManifestComputedOnce:
         work_dir.mkdir()
         _write_region(root, "reg-a")
 
-        # Track calls to compute_shard_source_manifest via the module
-        # the pipeline ultimately imports from.
+        from osm_polygon_sentence_relevance.application._checkpoint import (
+            inventory,
+            storage,
+        )
+
+        # Inventory construction and pre-publication verification own
+        # independent bindings to the same source-manifest function.
         calls = {"n": 0}
-        original = _ckpt_mod.compute_shard_source_manifest
+        inventory_original = inventory.compute_shard_source_manifest
+        storage_original = storage.compute_shard_source_manifest
 
         def counting(*args, **kwargs):
             calls["n"] += 1
-            return original(*args, **kwargs)
+            return inventory_original(*args, **kwargs)
 
-        _ckpt_mod.compute_shard_source_manifest = counting  # type: ignore[assignment]
+        inventory.compute_shard_source_manifest = counting
+        storage.compute_shard_source_manifest = counting
 
         try:
             _run(root, out_dir, work_dir, segmenter=MockSegmenter())
         finally:
-            _ckpt_mod.compute_shard_source_manifest = original  # type: ignore[assignment]
+            inventory.compute_shard_source_manifest = inventory_original
+            storage.compute_shard_source_manifest = storage_original
 
         # ``reg-a``: 1 call at inventory build + 1 pre-publish re-hash = 2
         assert calls["n"] == 2
@@ -1464,27 +1473,23 @@ class TestStrictMetadataValidation:
         original exception. The unlink is best-effort and swallows
         ``OSError``; the original failure is what surfaces.
         """
-        from osm_polygon_sentence_relevance.application.checkpoint import (
-            _atomic_write_bytes,
-        )
+        from osm_polygon_sentence_relevance.application._checkpoint import io
 
         target = tmp_path / "out.bin"
 
         def fail_replace(*_a, **_kw):
             raise OSError(errno.EACCES, "permission denied")
 
-        monkeypatch.setattr(os, "replace", fail_replace)
+        monkeypatch.setattr(io.os, "replace", fail_replace)
         with pytest.raises(OSError, match="permission denied"):
-            _atomic_write_bytes(target, b"hello")
+            io._atomic_write_bytes(target, b"hello")
         # No leftover temp file in target.parent.
         leftover = list(target.parent.glob(f".{target.name}.*.tmp"))
         assert leftover == []
 
     def test_atomic_write_parquet_failure_unlinks_temp(self, tmp_path, monkeypatch):
         """Same as the bytes variant but for the Parquet writer."""
-        from osm_polygon_sentence_relevance.application.checkpoint import (
-            _atomic_write_parquet,
-        )
+        from osm_polygon_sentence_relevance.application._checkpoint import io
         from osm_polygon_sentence_relevance.contracts.schemas import (
             SEGMENTED_SENTENCES_SCHEMA,
         )
@@ -1494,9 +1499,9 @@ class TestStrictMetadataValidation:
         def fail_replace(*_a, **_kw):
             raise OSError(errno.EACCES, "permission denied")
 
-        monkeypatch.setattr(os, "replace", fail_replace)
+        monkeypatch.setattr(io.os, "replace", fail_replace)
         with pytest.raises(OSError, match="permission denied"):
-            _atomic_write_parquet(SEGMENTED_SENTENCES_SCHEMA.empty_table(), target)
+            io._atomic_write_parquet(SEGMENTED_SENTENCES_SCHEMA.empty_table(), target)
 
     def test_validate_source_files_entry_missing_key(self, tmp_path):
         from osm_polygon_sentence_relevance.application.checkpoint import (
@@ -2568,7 +2573,9 @@ class TestStagedCheckpointValidationBeforePublish:
     def test_staged_wrong_schema_parquet_aborts_publication(
         self, tmp_path, monkeypatch
     ):
-        from osm_polygon_sentence_relevance.application import checkpoint as ckpt
+        from osm_polygon_sentence_relevance.application._checkpoint import (
+            storage as ckpt,
+        )
         from osm_polygon_sentence_relevance.application.checkpoint import (
             publish_shard_checkpoint,
         )
@@ -2602,7 +2609,9 @@ class TestStagedCheckpointValidationBeforePublish:
     def test_staged_corrupt_parquet_bytes_aborts_publication(
         self, tmp_path, monkeypatch
     ):
-        from osm_polygon_sentence_relevance.application import checkpoint as ckpt
+        from osm_polygon_sentence_relevance.application._checkpoint import (
+            storage as ckpt,
+        )
         from osm_polygon_sentence_relevance.application.checkpoint import (
             publish_shard_checkpoint,
         )
@@ -2635,7 +2644,9 @@ class TestStagedCheckpointValidationBeforePublish:
         assert not (work_dir / "shards" / "active" / "reg-a").exists()
 
     def test_staged_extra_entry_aborts_publication(self, tmp_path, monkeypatch):
-        from osm_polygon_sentence_relevance.application import checkpoint as ckpt
+        from osm_polygon_sentence_relevance.application._checkpoint import (
+            storage as ckpt,
+        )
         from osm_polygon_sentence_relevance.application.checkpoint import (
             publish_shard_checkpoint,
         )
@@ -2668,7 +2679,9 @@ class TestStagedCheckpointValidationBeforePublish:
         assert not (work_dir / "shards" / "active" / "reg-a").exists()
 
     def test_staged_parquet_symlink_aborts_publication(self, tmp_path, monkeypatch):
-        from osm_polygon_sentence_relevance.application import checkpoint as ckpt
+        from osm_polygon_sentence_relevance.application._checkpoint import (
+            storage as ckpt,
+        )
         from osm_polygon_sentence_relevance.application.checkpoint import (
             publish_shard_checkpoint,
         )
@@ -2704,7 +2717,9 @@ class TestStagedCheckpointValidationBeforePublish:
         assert not (work_dir / "shards" / "active" / "reg-a").exists()
 
     def test_staged_wrong_mode_aborts_publication(self, tmp_path, monkeypatch):
-        from osm_polygon_sentence_relevance.application import checkpoint as ckpt
+        from osm_polygon_sentence_relevance.application._checkpoint import (
+            storage as ckpt,
+        )
         from osm_polygon_sentence_relevance.application.checkpoint import (
             publish_shard_checkpoint,
         )
