@@ -9,7 +9,6 @@ byte-identical renders and asset hashes.
 from __future__ import annotations
 
 import hashlib
-import io
 import json
 from pathlib import Path
 
@@ -17,14 +16,11 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from osm_polygon_sentence_relevance.output.dataset_card import (
-    DatasetStatistics,
-)
 from osm_polygon_sentence_relevance.output.profile import (
+    PNG_SIGNATURE,
     AssetInfo,
     DatasetProfile,
     ProfileError,
-    PNG_SIGNATURE,
     build_dataset_profile,
     render_example_row_json,
     render_geographic_coverage_png,
@@ -75,7 +71,7 @@ def _make_afghanistan_parquet(path: Path) -> tuple[str, int]:
                 "page_id": idx + 1,
                 "revision_id": idx + 1,
                 "revision_timestamp": _dt.datetime(
-                    2024, 1, 1, 0, 0, 0, tzinfo=_dt.timezone.utc
+                    2024, 1, 1, 0, 0, 0, tzinfo=_dt.UTC
                 ).isoformat(),
                 "document_content_hash": hashlib.sha256(
                     f"doc{idx // 4}".encode()
@@ -111,7 +107,7 @@ def _make_afghanistan_parquet(path: Path) -> tuple[str, int]:
     return sha, len(rows)
 
 
-@pytest.fixture()
+@pytest.fixture
 def afghanistan_parquet(tmp_path: Path) -> tuple[Path, str, int]:
     p = tmp_path / "sentences.parquet"
     sha, count = _make_afghanistan_parquet(p)
@@ -150,8 +146,10 @@ class TestBuildDatasetProfile:
             source_commit="HEAD",
             scratch_dir=tmp_path,
         )
-        assert profile.lat_min is not None and profile.lat_max is not None
-        assert profile.lon_min is not None and profile.lon_max is not None
+        assert profile.lat_min is not None
+        assert profile.lat_max is not None
+        assert profile.lon_min is not None
+        assert profile.lon_max is not None
         assert profile.lat_min < profile.lat_max
         assert profile.lon_min < profile.lon_max
 
@@ -194,7 +192,7 @@ class TestProfileExamples:
 
         er = ExampleRow(fields={"sentence_id": "abc", "text": "def"})
         assert er["sentence_id"] == "abc"
-        assert "text" in er.keys()
+        assert "text" in er
 
     def test_profile_is_frozen_and_hashable_like(
         self, afghanistan_parquet: tuple[Path, str, int], tmp_path: Path
@@ -295,7 +293,7 @@ class TestLanguageDistributionPNG:
             source_commit="HEAD",
             scratch_dir=tmp_path,
         )
-        png_bytes = render_language_distribution_png(profile)
+        render_language_distribution_png(profile)
         total_in_png = sum(profile.language_counts.values())
         assert total_in_png == count
 
@@ -318,16 +316,7 @@ class TestProfileCardIntegration:
         assert parsed["sentence_id"] == profile.example_row["sentence_id"]
 
 
-class TestProfileExamples:
-    def test_example_row_dict_access(self) -> None:
-        from osm_polygon_sentence_relevance.output.profile import (
-            ExampleRow,
-        )
-
-        er = ExampleRow(fields={"sentence_id": "abc", "text": "def"})
-        assert er["sentence_id"] == "abc"
-        assert "text" in er.keys()
-
+class TestAssetInfo:
     def test_asset_info_stable(self) -> None:
         ai = AssetInfo(
             name="geographic_coverage.png",
@@ -360,7 +349,6 @@ class TestBuildDatasetProfileErrors:
     def test_missing_parquet_raises(self, tmp_path: Path) -> None:
         from osm_polygon_sentence_relevance.output.profile import (
             build_dataset_profile,
-            ProfileError,
         )
 
         with pytest.raises(ProfileError):
@@ -378,7 +366,6 @@ class TestBuildDatasetProfileErrors:
     ) -> None:
         from osm_polygon_sentence_relevance.output.profile import (
             build_dataset_profile,
-            ProfileError,
         )
 
         parquet_path, sha, _count = afghanistan_parquet
@@ -397,7 +384,6 @@ class TestBuildDatasetProfileErrors:
     ) -> None:
         from osm_polygon_sentence_relevance.output.profile import (
             build_dataset_profile,
-            ProfileError,
         )
 
         parquet_path, sha, _count = afghanistan_parquet
@@ -416,7 +402,6 @@ class TestBuildDatasetProfileErrors:
     ) -> None:
         from osm_polygon_sentence_relevance.output.profile import (
             build_dataset_profile,
-            ProfileError,
         )
 
         parquet_path, sha, _count = afghanistan_parquet
@@ -470,8 +455,8 @@ class TestRenderEdgeCases:
 
     def test_empty_language_counts_branch(self) -> None:
         from osm_polygon_sentence_relevance.output.profile import (
-            render_language_distribution_png,
             PNG_SIGNATURE,
+            render_language_distribution_png,
         )
 
         png = render_language_distribution_png(self._empty_profile())
@@ -479,8 +464,8 @@ class TestRenderEdgeCases:
 
     def test_geographic_png_handles_no_coords(self) -> None:
         from osm_polygon_sentence_relevance.output.profile import (
-            render_geographic_coverage_png,
             PNG_SIGNATURE,
+            render_geographic_coverage_png,
         )
 
         png = render_geographic_coverage_png(
@@ -495,7 +480,6 @@ class TestProfileValidationErrors:
     ) -> None:
         from osm_polygon_sentence_relevance.output.profile import (
             build_dataset_profile,
-            ProfileError,
         )
 
         parquet_path, sha, _count = afghanistan_parquet
@@ -514,7 +498,6 @@ class TestProfileValidationErrors:
     ) -> None:
         from osm_polygon_sentence_relevance.output.profile import (
             build_dataset_profile,
-            ProfileError,
         )
 
         parquet_path, sha, _count = afghanistan_parquet
@@ -533,7 +516,6 @@ class TestProfileValidationErrors:
     ) -> None:
         from osm_polygon_sentence_relevance.output.profile import (
             build_dataset_profile,
-            ProfileError,
         )
 
         parquet_path, sha, _count = afghanistan_parquet
@@ -553,7 +535,6 @@ class TestProfileParseMetaErrors:
     def test_parse_meta_rejects_blank(self) -> None:
         from osm_polygon_sentence_relevance.output.profile import (
             _parse_meta,
-            ProfileError,
         )
 
         with pytest.raises(ProfileError):
@@ -562,7 +543,6 @@ class TestProfileParseMetaErrors:
     def test_parse_meta_rejects_non_utf8(self) -> None:
         from osm_polygon_sentence_relevance.output.profile import (
             _parse_meta,
-            ProfileError,
         )
 
         with pytest.raises(ProfileError):
@@ -619,15 +599,14 @@ class TestProfileFirstBatchErrors:
     def test_build_profile_on_empty_parquet_rejected(
         self, tmp_path: Path
     ) -> None:
-        from osm_polygon_sentence_relevance.output.profile import (
-            build_dataset_profile,
-            ProfileError,
-        )
+        import pyarrow.parquet as pq
+
         from osm_polygon_sentence_relevance.contracts.schemas import (
             OUTPUT_SENTENCE_SCHEMA,
         )
-        import pyarrow as pa
-        import pyarrow.parquet as pq
+        from osm_polygon_sentence_relevance.output.profile import (
+            build_dataset_profile,
+        )
 
         empty = OUTPUT_SENTENCE_SCHEMA.empty_table().replace_schema_metadata(
             {

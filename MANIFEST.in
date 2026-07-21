@@ -34,3 +34,8 @@ recursive-exclude * *.onnx
 recursive-exclude * *.safetensors
 recursive-exclude * *.bin
 global-exclude .DS_Store
+
+# Vendored Natural Earth outline (single-country subset) ships
+# inside the package so publication does not require network access.
+include src/osm_polygon_sentence_relevance/output/_vendor/natural_earth/afghanistan_outline.geojson
+include src/osm_polygon_sentence_relevance/output/_vendor/natural_earth/README.md

@@ -22,7 +22,6 @@ import argparse
 import datetime as _dt
 import hashlib
 import json
-import os
 import shutil
 import sys
 import tempfile
@@ -44,7 +43,6 @@ from osm_polygon_sentence_relevance.output.manifest import (
 from osm_polygon_sentence_relevance.output.profile import (
     AssetInfo,
     DatasetProfile,
-    ExampleRow,
     build_dataset_profile,
     render_geographic_coverage_png,
     render_language_distribution_png,
@@ -126,12 +124,22 @@ def _build_publication(
 
 def _build_manifest_payload(
     profile: DatasetProfile,
+    *,
+    dataset_repo_id: str | None = None,
 ) -> dict:
     """Build the manifest dict without merging another stats pass.
 
     The profile is the single source of truth for every quantitative
     field; ``merge_profile_into_manifest`` overlays the per-asset
     SHA-256s, the segmentation metadata, and the example row.
+
+    Parameters
+    ----------
+    dataset_repo_id
+        Optional ``org/name`` of the Hugging Face dataset repo the
+        publication targets.  Recorded in the manifest so the
+        validator can reproduce the on-disk README's ``huggingface.co``
+        asset URLs.
     """
     base = {
         "manifest_version": MANIFEST_VERSION,
@@ -167,7 +175,8 @@ def _build_manifest_payload(
     return merge_profile_into_manifest(
         base,
         profile,
-        generated_at=_dt.datetime.now(_dt.timezone.utc).isoformat(),
+        generated_at=_dt.datetime.now(_dt.UTC).isoformat(),
+        dataset_repo_id=dataset_repo_id,
     )
 
 
@@ -177,6 +186,9 @@ def _publish_directory(
     segmentation_model: str,
     segmentation_revision: str,
     source_commit: str,
+    *,
+    asset_base_url: str | None = None,
+    dataset_repo_id: str | None = None,
 ) -> tuple[Path, str, str]:
     """Build the publication directory at *output_dir*.
 
@@ -214,10 +226,32 @@ def _publish_directory(
     (assets_dir / "geographic_coverage.png").write_bytes(geo_bytes)
     (assets_dir / "language_distribution.png").write_bytes(lang_bytes)
 
-    manifest = _build_manifest_payload(profile)
+    # Clean up the staging directory used for the parquet conversion.
+    # The publication directory must contain *only* the canonical
+    # five-file contract artefacts so the validator and the
+    # Hugging Face Dataset Viewer can ingest the upload.
+    staging_dir = output_dir / ".staging"
+    if staging_dir.exists():
+        shutil.rmtree(staging_dir)
+
+    # Default asset_base_url: the Hugging Face CDN URL relative to the
+    # public repo.  This makes the README render the PNGs on any
+    # dataset-card renderer (some viewers do not rewrite relative
+    # ``assets/`` paths reliably).
+    if asset_base_url is None and dataset_repo_id is not None:
+        asset_base_url = (
+            f"https://huggingface.co/datasets/{dataset_repo_id}"
+            "/resolve/main/assets"
+        )
+
+    manifest = _build_manifest_payload(
+        profile, dataset_repo_id=dataset_repo_id
+    )
     write_manifest(output_dir / "manifest.json", manifest)
     (output_dir / "README.md").write_text(
-        render_dataset_card_from_profile(profile),
+        render_dataset_card_from_profile(
+            profile, asset_base_url=asset_base_url
+        ),
         encoding="utf-8",
     )
 
@@ -252,6 +286,16 @@ def main(argv: list[str]) -> int:
         type=str,
         required=True,
     )
+    parser.add_argument(
+        "--dataset-repo-id",
+        type=str,
+        default="NoeFlandre/osm-polygon-wikidata-sentence-relevance",
+    )
+    parser.add_argument(
+        "--asset-base-url",
+        type=str,
+        default=None,
+    )
     args = parser.parse_args(argv)
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -266,6 +310,8 @@ def main(argv: list[str]) -> int:
         args.segmentation_model,
         args.segmentation_revision,
         args.source_commit,
+        asset_base_url=args.asset_base_url,
+        dataset_repo_id=args.dataset_repo_id,
     )
     print(
         json.dumps(

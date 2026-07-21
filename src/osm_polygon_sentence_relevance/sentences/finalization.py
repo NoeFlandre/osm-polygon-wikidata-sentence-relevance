@@ -4,7 +4,7 @@ import hashlib
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 import pyarrow as pa
 
@@ -49,11 +49,29 @@ def convert_osm_tags_to_list_of_struct(
     elif isinstance(value, list):
         if not value:
             return []
+        # Accept three equivalent list shapes:
+        #
+        # 1. ``[(key, value), ...]`` tuples
+        # 2. ``[{"key": ..., "value": ...}, ...]`` dicts (the canonical
+        #    Viewer-compatible struct form, which the parquet writer
+        #    round-trips through PyArrow as a list of plain dicts)
+        # 3. A list of ``pa.StructScalar``-like values with ``key`` /
+        #    ``value`` attributes (rare but encountered when the
+        #    column comes from an Arrow RecordBatch)
         if all(isinstance(x, tuple) and len(x) == 2 for x in value):
             pairs = [(k, v) for k, v in value]
+        elif all(
+            isinstance(x, Mapping) and "key" in x and "value" in x
+            for x in value
+        ):
+            pairs = [
+                (cast(Mapping[str, str], x)["key"], cast(Mapping[str, str], x)["value"])
+                for x in value
+            ]
         else:
             raise FinalizationError(
-                "osm_tags list form must contain (key, value) tuples"
+                "osm_tags list form must contain (key, value) tuples "
+                "or {'key': ..., 'value': ...} dicts"
             )
     else:
         raise FinalizationError(

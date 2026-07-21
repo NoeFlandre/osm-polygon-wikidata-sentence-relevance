@@ -1475,16 +1475,16 @@ def _profile_yaml(stats: DatasetStatistics, profile: Any) -> str:
         "license: other",
         "pretty_name: OSM Polygon Wikidata Sentence Relevance",
         language_section,
-        f"dataset_info:",
-        f"  features:",
-        f"  - name: osm_tags",
-        f"    sequence:",
-        f"    - name: key",
-        f"      dtype: string",
-        f"    - name: value",
-        f"      dtype: string",
-        f"  splits:",
-        f"  - name: train",
+        "dataset_info:",
+        "  features:",
+        "  - name: osm_tags",
+        "    sequence:",
+        "    - name: key",
+        "      dtype: string",
+        "    - name: value",
+        "      dtype: string",
+        "  splits:",
+        "  - name: train",
         f"    num_examples: {stats.row_count}",
         "---",
     ]
@@ -1546,7 +1546,11 @@ def _profile_preview_section(profile: Any) -> str:
     )
 
 
-def render_dataset_card_from_profile(profile: Any) -> str:
+def render_dataset_card_from_profile(
+    profile: Any,
+    *,
+    asset_base_url: str | None = None,
+) -> str:
     """Render the dataset card from an immutable ``DatasetProfile``.
 
     This renderer is the canonical post-Phase 9P format. It uses
@@ -1579,16 +1583,30 @@ def render_dataset_card_from_profile(profile: Any) -> str:
     coords = profile.rows_with_coordinates
     total = profile.rows_with_coordinates + profile.rows_without_coordinates
 
-    # Asset embeds
+    # Asset embeds. The Hugging Face Hub resolves a relative
+    # ``assets/foo.png`` link against the README's location and
+    # serves the bytes through its CDN; some renderers, however, do
+    # not rewrite that path. To keep the README self-contained and
+    # renderable everywhere, the embedded Markdown uses an explicit
+    # URL (relative by default; the caller may override with
+    # ``asset_base_url``) so the image loads regardless of which
+    # path resolver the viewer applies.
     geo = profile.assets.get("geographic_coverage.png")
     lang_png = profile.assets.get("language_distribution.png")
+
+    def _img(alt: str, name: str) -> str:
+        if asset_base_url is None:
+            return f"![{alt}](assets/{name})"
+        base = asset_base_url.rstrip("/")
+        return f"![{alt}]({base}/{name})"
+
     geo_md = (
-        f"![Geographic coverage](assets/geographic_coverage.png)"
+        _img("Geographic coverage", "geographic_coverage.png")
         if geo is not None
         else "_(Geographic coverage asset unavailable.)_"
     )
     lang_md = (
-        f"![Language distribution](assets/language_distribution.png)"
+        _img("Language distribution", "language_distribution.png")
         if lang_png is not None
         else "_(Language distribution asset unavailable.)_"
     )
