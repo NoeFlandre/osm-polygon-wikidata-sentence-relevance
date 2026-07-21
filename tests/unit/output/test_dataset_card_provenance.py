@@ -409,14 +409,14 @@ class TestUrlAndLabelEscaping:
     """
 
     def test_dataset_id_url_component_preserves_owner_repo_separator(self):
-        from osm_polygon_sentence_relevance.output.dataset_card import (
+        from osm_polygon_sentence_relevance.output._card.rendering import (
             _quote_url_component_dataset_id,
         )
 
         assert _quote_url_component_dataset_id("Owner/Repo") == "Owner/Repo"
 
     def test_dataset_id_url_component_percent_encodes_unicode(self):
-        from osm_polygon_sentence_relevance.output.dataset_card import (
+        from osm_polygon_sentence_relevance.output._card.rendering import (
             _quote_url_component_dataset_id,
         )
 
@@ -441,7 +441,7 @@ class TestUrlAndLabelEscaping:
         """The revision path component MUST encode ``/`` because the
         Hub's tree URL only allows one segment after ``tree/``.
         """
-        from osm_polygon_sentence_relevance.output.dataset_card import (
+        from osm_polygon_sentence_relevance.output._card.rendering import (
             _quote_url_component_revision,
         )
 
@@ -463,7 +463,7 @@ class TestUrlAndLabelEscaping:
         an adversarial dataset identifier cannot terminate the link.
         ``_escape_md_inline`` is the wrong escape here.
         """
-        from osm_polygon_sentence_relevance.output.dataset_card import (
+        from osm_polygon_sentence_relevance.output._card.rendering import (
             _escape_md_link_label,
         )
 
@@ -927,7 +927,7 @@ class TestSourceProvenanceCoverage:
         assert "/tree/" not in card
 
     def test_resolve_input_dataset_id_disagrees_with_explicit_raises(self):
-        from osm_polygon_sentence_relevance.output.dataset_card import (
+        from osm_polygon_sentence_relevance.output._card.statistics import (
             _resolve_input_dataset_id,
         )
 
@@ -943,7 +943,7 @@ class TestSourceProvenanceCoverage:
         ``FinalizationError``); the helper does not silently normalize
         to ``None``.
         """
-        from osm_polygon_sentence_relevance.output.dataset_card import (
+        from osm_polygon_sentence_relevance.output._card.statistics import (
             _resolve_input_dataset_id,
         )
 
@@ -954,7 +954,7 @@ class TestSourceProvenanceCoverage:
             _resolve_input_dataset_id(blank_table, None)
 
     def test_resolve_input_dataset_id_invalid_utf8_in_metadata(self):
-        from osm_polygon_sentence_relevance.output.dataset_card import (
+        from osm_polygon_sentence_relevance.output._card.statistics import (
             _resolve_input_dataset_id,
         )
 
@@ -965,7 +965,7 @@ class TestSourceProvenanceCoverage:
             _resolve_input_dataset_id(bad_table, None)
 
     def test_resolve_input_dataset_id_returns_value_from_metadata(self):
-        from osm_polygon_sentence_relevance.output.dataset_card import (
+        from osm_polygon_sentence_relevance.output._card.statistics import (
             _resolve_input_dataset_id,
         )
 
@@ -1011,7 +1011,7 @@ class TestCoverageBackfillDatasetCard:
     def test_resolve_input_dataset_id_surrounding_whitespace_rejected(
         self,
     ) -> None:
-        from osm_polygon_sentence_relevance.output.dataset_card import (
+        from osm_polygon_sentence_relevance.output._card.statistics import (
             _resolve_input_dataset_id,
         )
 
@@ -1023,7 +1023,7 @@ class TestCoverageBackfillDatasetCard:
             _resolve_input_dataset_id(table, None)
 
     def test_resolve_input_dataset_id_explicit_mismatch(self) -> None:
-        from osm_polygon_sentence_relevance.output.dataset_card import (
+        from osm_polygon_sentence_relevance.output._card.statistics import (
             _resolve_input_dataset_id,
         )
 
@@ -1032,7 +1032,7 @@ class TestCoverageBackfillDatasetCard:
             _resolve_input_dataset_id(table, "x/y")
 
     def test_resolve_input_dataset_id_invalid_utf8(self) -> None:
-        from osm_polygon_sentence_relevance.output.dataset_card import (
+        from osm_polygon_sentence_relevance.output._card.statistics import (
             _resolve_input_dataset_id,
         )
 
@@ -1044,7 +1044,7 @@ class TestCoverageBackfillDatasetCard:
             _resolve_input_dataset_id(table, None)
 
     def test_resolve_input_dataset_id_blank_metadata(self) -> None:
-        from osm_polygon_sentence_relevance.output.dataset_card import (
+        from osm_polygon_sentence_relevance.output._card.statistics import (
             _resolve_input_dataset_id,
         )
 
