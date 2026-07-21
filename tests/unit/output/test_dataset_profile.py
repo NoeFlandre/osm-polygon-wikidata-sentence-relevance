@@ -487,3 +487,63 @@ class TestRenderEdgeCases:
             self._empty_profile(), parquet_path="/dev/null"
         )
         assert png.startswith(PNG_SIGNATURE)
+
+
+class TestProfileValidationErrors:
+    def test_blank_segmentation_revision_raises(
+        self, afghanistan_parquet: tuple[Path, str, int], tmp_path: Path
+    ) -> None:
+        from osm_polygon_sentence_relevance.output.profile import (
+            build_dataset_profile,
+            ProfileError,
+        )
+
+        parquet_path, sha, _count = afghanistan_parquet
+        with pytest.raises(ProfileError):
+            build_dataset_profile(
+                parquet_path=parquet_path,
+                parquet_sha256=sha,
+                segmentation_model="m",
+                segmentation_revision="   ",
+                source_commit="c",
+                scratch_dir=tmp_path,
+            )
+
+    def test_blank_source_commit_raises(
+        self, afghanistan_parquet: tuple[Path, str, int], tmp_path: Path
+    ) -> None:
+        from osm_polygon_sentence_relevance.output.profile import (
+            build_dataset_profile,
+            ProfileError,
+        )
+
+        parquet_path, sha, _count = afghanistan_parquet
+        with pytest.raises(ProfileError):
+            build_dataset_profile(
+                parquet_path=parquet_path,
+                parquet_sha256=sha,
+                segmentation_model="m",
+                segmentation_revision="r",
+                source_commit="   ",
+                scratch_dir=tmp_path,
+            )
+
+    def test_blank_dataset_id_raises(
+        self, afghanistan_parquet: tuple[Path, str, int], tmp_path: Path
+    ) -> None:
+        from osm_polygon_sentence_relevance.output.profile import (
+            build_dataset_profile,
+            ProfileError,
+        )
+
+        parquet_path, sha, _count = afghanistan_parquet
+        with pytest.raises(ProfileError):
+            build_dataset_profile(
+                parquet_path=parquet_path,
+                parquet_sha256=sha,
+                segmentation_model="m",
+                segmentation_revision="r",
+                source_commit="c",
+                scratch_dir=tmp_path,
+                input_dataset_id="   ",
+            )
