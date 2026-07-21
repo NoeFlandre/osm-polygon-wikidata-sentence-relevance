@@ -1051,3 +1051,100 @@ class TestCoverageBackfillDatasetCard:
         table = pa.table({"polygon_id": ["a"]}, metadata={b"input_dataset_id": b"   "})
         with pytest.raises(ValueError, match="cannot be blank"):
             _resolve_input_dataset_id(table, None)
+
+
+class TestDatasetCardPreviewScopeSection:
+    """The card must prominently label the current published artifact as a
+    single-region preview when exactly one region is in scope.  The
+    section wording and figures must be derived from ``DatasetStatistics``
+    (no hand-maintained numbers).
+
+    Contract:
+
+    * If ``region_counts`` has exactly one key, the card includes a
+      ``## Dataset scope`` section that prominently states the
+      ``{region}-only preview`` and uses statistics-derived figures.
+    * If ``region_counts`` has zero or multiple keys, the section is
+      omitted.
+    * The preview paragraph appears above the existing
+      ``## Dataset summary`` section.
+    """
+
+    @staticmethod
+    def _stats(region_counts: dict[str, int], **overrides: object):
+        from osm_polygon_sentence_relevance.output.dataset_card import (
+            STATISTICS_VERSION,
+            DatasetStatistics,
+        )
+
+        defaults: dict[str, object] = {
+            "version": STATISTICS_VERSION,
+            "row_count": 50736,
+            "unique_sentence_ids": 50736,
+            "unique_polygons": 161,
+            "unique_wikidata_entities": 154,
+            "unique_documents": 1680,
+            "source_counts": {"wikipedia": 50420, "wikivoyage": 316},
+            "language_counts": {"en": 5805},
+            "region_counts": region_counts,
+            "rows_with_coordinates": 50736,
+            "rows_without_coordinates": 0,
+            "input_dataset_revision": "84b3ca0ff33a3d3fba44c093eb4ac49ee0b5ef90",
+            "pipeline_version": "0.1.0",
+            "input_dataset_id": "NoeFlandre/osm-polygon-wikidata-only",
+            "parquet_sha256": "0" * 64,
+        }
+        defaults.update(overrides)
+        return DatasetStatistics(**defaults)  # type: ignore[arg-type]
+
+    def test_single_region_card_labels_afghanistan_only_preview(self) -> None:
+        stats = self._stats({"afghanistan": 50736})
+        card = render_dataset_card(stats)
+        assert "## Dataset scope" in card
+        assert "Afghanistan-only preview" in card
+        # The region name appears factually inside the preview section.
+        assert "afghanistan" in card.lower()
+
+    def test_preview_section_appears_before_dataset_summary(self) -> None:
+        stats = self._stats({"afghanistan": 50736})
+        card = render_dataset_card(stats)
+        scope_index = card.index("## Dataset scope")
+        summary_index = card.index("## Dataset summary")
+        assert scope_index < summary_index
+
+    def test_preview_section_uses_statistics_derived_figures(self) -> None:
+        stats = self._stats(
+            {"afghanistan": 50736},
+            row_count=50736,
+            unique_polygons=161,
+            unique_wikidata_entities=154,
+            unique_documents=1680,
+        )
+        card = render_dataset_card(stats)
+        # The statistics-derived figures must appear inside the preview
+        # section.  We assert them as substrings of the rendered card.
+        assert "50736" in card
+        assert "161" in card
+        assert "154" in card
+        assert "1680" in card
+
+    def test_multi_region_card_omits_preview_section(self) -> None:
+        stats = self._stats({"afghanistan": 50736, "albania": 12345})
+        card = render_dataset_card(stats)
+        assert "## Dataset scope" not in card
+        assert "Afghanistan-only preview" not in card
+
+    def test_empty_region_counts_omit_preview_section(self) -> None:
+        stats = self._stats({})
+        card = render_dataset_card(stats)
+        assert "## Dataset scope" not in card
+        assert "only preview" not in card
+
+    def test_preview_section_states_figures_match_parquet_sha(self) -> None:
+        """The preview section must reference the Parquet SHA-256 so
+        operators can verify the published bytes match the figures.
+        """
+        sha = "d4dbba3692759ec621dda68b1fbf1e182c2b8a1541c52cf59c694f4c1ac9c720"
+        stats = self._stats({"afghanistan": 50736}, parquet_sha256=sha)
+        card = render_dataset_card(stats)
+        assert sha in card
