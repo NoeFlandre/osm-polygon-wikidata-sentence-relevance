@@ -13,7 +13,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import pyarrow as pa
-import pytest
 
 from osm_polygon_sentence_relevance.contracts.schemas import (
     OUTPUT_SENTENCE_SCHEMA,
@@ -34,8 +33,8 @@ from osm_polygon_sentence_relevance.output.profile import (
 
 def _build_minimal_profile(tmp_path: Path) -> DatasetProfile:
     """Build a small parquet + profile for renderer tests."""
-    import hashlib
     import datetime as _dt
+    import hashlib
 
     rows = []
     for idx in range(6):
@@ -64,7 +63,7 @@ def _build_minimal_profile(tmp_path: Path) -> DatasetProfile:
                 "page_id": idx + 1,
                 "revision_id": idx + 1,
                 "revision_timestamp": _dt.datetime(
-                    2024, 1, 1, 0, 0, 0, tzinfo=_dt.timezone.utc
+                    2024, 1, 1, 0, 0, 0, tzinfo=_dt.UTC
                 ).isoformat(),
                 "document_content_hash": hashlib.sha256(
                     f"doc{idx}".encode()
@@ -176,12 +175,11 @@ class TestSchemaHasMapTypes:
         assert schema_has_map_types(bogus) is True
 
     def test_preview_section_empty_region(self) -> None:
-        from osm_polygon_sentence_relevance.output.profile import (
-            DatasetProfile,
-            ExampleRow,
-        )
         from osm_polygon_sentence_relevance.output.dataset_card import (
             _profile_preview_section,
+        )
+        from osm_polygon_sentence_relevance.output.profile import (
+            DatasetProfile,
         )
 
         profile = DatasetProfile(
@@ -216,12 +214,11 @@ class TestSchemaHasMapTypes:
         assert _profile_preview_section(profile) == ""
 
     def test_preview_section_with_latest_suffix(self) -> None:
-        from osm_polygon_sentence_relevance.output.profile import (
-            DatasetProfile,
-            ExampleRow,
-        )
         from osm_polygon_sentence_relevance.output.dataset_card import (
             _profile_preview_section,
+        )
+        from osm_polygon_sentence_relevance.output.profile import (
+            DatasetProfile,
         )
 
         profile = DatasetProfile(
@@ -291,6 +288,23 @@ class TestRenderDatasetCardFromProfile:
         card = render_dataset_card_from_profile(_with_assets(profile))
         assert "assets/geographic_coverage.png" in card
         assert "assets/language_distribution.png" in card
+
+    def test_embeds_png_assets_with_absolute_url(
+        self, tmp_path: Path
+    ) -> None:
+        from dataclasses import replace
+
+        profile = _build_minimal_profile(tmp_path)
+        # When ``asset_base_url`` is given the markdown must use the
+        # absolute URL so renderers that don't rewrite relative paths
+        # can still load the PNG.
+        profile = replace(profile, row_count=profile.row_count)
+        card = render_dataset_card_from_profile(
+            _with_assets(profile),
+            asset_base_url="https://example.com/assets",
+        )
+        assert "https://example.com/assets/geographic_coverage.png" in card
+        assert "https://example.com/assets/language_distribution.png" in card
 
     def test_embeds_example_row(self, tmp_path: Path) -> None:
         profile = _build_minimal_profile(tmp_path)

@@ -101,6 +101,7 @@ def merge_profile_into_manifest(
     *,
     assets: list[dict[str, Any]] | None = None,
     generated_at: str | None = None,
+    dataset_repo_id: str | None = None,
 ) -> dict[str, Any]:
     """Overlay profile-derived fields onto an existing manifest dict.
 
@@ -126,6 +127,11 @@ def merge_profile_into_manifest(
     generated_at
         Optional ISO-8601 timestamp recorded in the manifest for
         auditing.  When omitted, no ``generated_at`` field is added.
+    dataset_repo_id
+        Optional ``org/name`` of the Hugging Face dataset repo the
+        publication targets.  Recorded verbatim in the manifest so
+        the validator can deterministically re-derive the
+        ``huggingface.co`` asset URL used in the README.
     """
     merged = dict(manifest_data)
     merged["manifest_version"] = MANIFEST_VERSION
@@ -154,6 +160,8 @@ def merge_profile_into_manifest(
     merged["sentence_length_min"] = profile.sentence_length_min
     merged["sentence_length_mean"] = profile.sentence_length_mean
     merged["sentence_length_max"] = profile.sentence_length_max
+    if dataset_repo_id is not None:
+        merged["dataset_repo_id"] = dataset_repo_id
     # Example row in schema-column order for stable comparison.
     from osm_polygon_sentence_relevance.contracts.schemas import (
         OUTPUT_SENTENCE_SCHEMA,

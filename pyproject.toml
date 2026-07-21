@@ -50,6 +50,13 @@ segmentation = [
 ]
 hub = [
     "huggingface_hub>=0.20.0",
+    # Profile-rendering dependencies. matplotlib is pinned to a modern
+    # 3.8+ baseline for the Agg backend used in tests; numpy is
+    # matplotlib's deterministic-seed backbone; pillow handles the
+    # PNG verification path in tests.
+    "matplotlib>=3.8",
+    "numpy>=1.26",
+    "pillow>=10.0",
 ]
 
 [dependency-groups]

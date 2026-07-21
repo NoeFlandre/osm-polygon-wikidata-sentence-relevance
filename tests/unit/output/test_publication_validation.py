@@ -21,7 +21,6 @@ from __future__ import annotations
 import datetime as _dt
 import hashlib
 import json
-from collections.abc import Mapping
 from pathlib import Path
 
 import pyarrow as pa
@@ -40,7 +39,6 @@ from osm_polygon_sentence_relevance.output.manifest import (
 from osm_polygon_sentence_relevance.output.profile import (
     AssetInfo,
     DatasetProfile,
-    ExampleRow,
     build_dataset_profile,
 )
 
@@ -81,7 +79,7 @@ def _build_minimal_export(
                 "page_id": idx + 1,
                 "revision_id": idx + 1,
                 "revision_timestamp": _dt.datetime(
-                    2024, 1, 1, 0, 0, 0, tzinfo=_dt.timezone.utc
+                    2024, 1, 1, 0, 0, 0, tzinfo=_dt.UTC
                 ).isoformat(),
                 "document_content_hash": hashlib.sha256(
                     f"doc{idx}".encode()
@@ -356,8 +354,8 @@ class TestValidatorsUtilities:
 
     def test_asset_helpers(self, tmp_path: Path) -> None:
         from osm_polygon_sentence_relevance.output.validation_publication import (
-            load_asset_inventory,
             compute_asset_sha,
+            load_asset_inventory,
         )
 
         export_dir, profile, geo, lang = _build_minimal_export(tmp_path)
@@ -572,10 +570,11 @@ class TestValidatePublicationSHAEdgeCases:
     def test_computed_sha_uses_correct_function(self, tmp_path: Path) -> None:
         # Make sure the validator's compute_asset_sha path matches
         # what the manifest will store.
+        import hashlib
+
         from osm_polygon_sentence_relevance.output.validation_publication import (
             compute_asset_sha,
         )
-        import hashlib
 
         payload = b"\x89PNG\r\n\x1a\n" + b"binary-data"
         f = tmp_path / "blob.bin"
@@ -592,8 +591,8 @@ class TestValidatePublicationSHAEdgeCases:
 
         empty = tmp_path / "empty.parquet"
         # Write a 0-row table conforming to the schema.
-        import pyarrow as pa
         import pyarrow.parquet as pq
+
         from osm_polygon_sentence_relevance.contracts.schemas import (
             OUTPUT_SENTENCE_SCHEMA,
         )
@@ -630,12 +629,11 @@ class TestValidatePublicationExtendedCoverage:
     def test_schema_walks_map_branch(self, tmp_path: Path) -> None:
         # The validator must reject a schema containing a map field, even
         # one accessed after a list-of-struct combination.
-        from dataclasses import replace
+        import pyarrow as pa
+
         from osm_polygon_sentence_relevance.output.dataset_card import (
             schema_has_map_types,
         )
-
-        import pyarrow as pa
 
         # list-of-struct, struct child is map: nested case.
         s = pa.schema(
@@ -1105,6 +1103,193 @@ class TestValidatePublicationTypeChecks:
             encoding="utf-8",
         )
         with pytest.raises(ExportError):
+            validation_publication.validate_publication_directory(
+                export_dir
+            )
+
+
+class TestValidatePublicationContractExtensions:
+    """The corrective release adds strict five-file contract checks
+    that reject an extra file at the publication root and reject a
+    missing required artefact. These tests pin those branches."""
+
+    def test_extra_root_file_rejected(self, tmp_path: Path) -> None:
+        from osm_polygon_sentence_relevance.contracts.errors import ExportError
+
+        export_dir, _p, _g, _l = _build_minimal_export(tmp_path)
+        (export_dir / "extra.txt").write_text("nope")
+        with pytest.raises(ExportError, match="contract"):
+            validation_publication.validate_publication_directory(
+                export_dir
+            )
+
+    def test_missing_parquet_rejected(self, tmp_path: Path) -> None:
+        from osm_polygon_sentence_relevance.contracts.errors import ExportError
+
+        export_dir, _p, _g, _l = _build_minimal_export(tmp_path)
+        (export_dir / "sentences.parquet").unlink()
+        with pytest.raises(ExportError, match="Missing required artefact"):
+            validation_publication.validate_publication_directory(
+                export_dir
+            )
+
+    def test_parquet_sha_mismatch_rejected(self, tmp_path: Path) -> None:
+        from osm_polygon_sentence_relevance.contracts.errors import ExportError
+
+        export_dir, _p, _g, _l = _build_minimal_export(tmp_path)
+        manifest = json.loads(
+            (export_dir / "manifest.json").read_text(encoding="utf-8")
+        )
+        manifest["sha256"] = "0" * 64
+        (export_dir / "manifest.json").write_text(
+            json.dumps(manifest, sort_keys=True, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        with pytest.raises(ExportError, match="sha"):
+            validation_publication.validate_publication_directory(
+                export_dir
+            )
+
+    def test_manifest_json_decode_error_rejected(
+        self, tmp_path: Path
+    ) -> None:
+        from osm_polygon_sentence_relevance.contracts.errors import ExportError
+
+        export_dir, _p, _g, _l = _build_minimal_export(tmp_path)
+        (export_dir / "manifest.json").write_text("not-json")
+        with pytest.raises(ExportError, match="Manifest is not readable"):
+            validation_publication.validate_publication_directory(
+                export_dir
+            )
+
+    def test_manifest_not_object_rejected(self, tmp_path: Path) -> None:
+        from osm_polygon_sentence_relevance.contracts.errors import ExportError
+
+        export_dir, _p, _g, _l = _build_minimal_export(tmp_path)
+        (export_dir / "manifest.json").write_text("[1, 2, 3]")
+        with pytest.raises(ExportError, match="Manifest must be a JSON object"):
+            validation_publication.validate_publication_directory(
+                export_dir
+            )
+
+    def test_language_counts_disagree_rejected(self, tmp_path: Path) -> None:
+        from osm_polygon_sentence_relevance.contracts.errors import ExportError
+
+        export_dir, _p, _g, _l = _build_minimal_export(tmp_path)
+        manifest = json.loads(
+            (export_dir / "manifest.json").read_text(encoding="utf-8")
+        )
+        # Add a phantom language with row_count - sum(other langs).
+        existing = sum(manifest["counts_by_language"].values())
+        phantom = manifest["row_count"] - existing
+        manifest["counts_by_language"]["xx"] = phantom
+        (export_dir / "manifest.json").write_text(
+            json.dumps(manifest, sort_keys=True, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        with pytest.raises(ExportError, match="counts_by_language disagrees"):
+            validation_publication.validate_publication_directory(
+                export_dir
+            )
+
+    def test_symlink_to_contract_file_rejected(
+        self, tmp_path: Path
+    ) -> None:
+        """A symlink at the root whose target is a contract file must
+        be rejected as a symlink (rather than as a missing file)."""
+        from osm_polygon_sentence_relevance.contracts.errors import ExportError
+
+        export_dir, _p, _g, _l = _build_minimal_export(tmp_path)
+        # Replace sentences.parquet with a symlink so the contract
+        # check sees the contract file present but symlinked.
+        (export_dir / "sentences.parquet").unlink()
+        link = export_dir / "sentences.parquet"
+        # Point at a file outside the export directory so the
+        # contract check sees the symlink, not an extra file.
+        link.symlink_to(tmp_path.parent / "some_other_file.bin")
+        with pytest.raises(ExportError, match="symlink"):
+            validation_publication.validate_publication_directory(
+                export_dir
+            )
+
+    def test_profile_build_failure_wrapped(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """If ``build_dataset_profile`` raises, the validator must
+        re-raise as ``ExportError`` with the original cause."""
+        from osm_polygon_sentence_relevance.contracts.errors import ExportError
+        from osm_polygon_sentence_relevance.output import validation_publication
+
+        def _broken(*args, **kwargs):
+            raise validation_publication.ProfileError("synthetic profile error")
+
+        monkeypatch.setattr(
+            validation_publication, "build_dataset_profile", _broken
+        )
+        export_dir, _p, _g, _l = _build_minimal_export(tmp_path)
+        with pytest.raises(ExportError, match="Could not rebuild profile"):
+            validation_publication.validate_publication_directory(
+                export_dir
+            )
+
+    def test_stale_card_text_rejected(self, tmp_path: Path) -> None:
+        """When the on-disk README differs from the deterministic
+        profile render, the validator must reject."""
+        from osm_polygon_sentence_relevance.contracts.errors import ExportError
+
+        export_dir, _p, _g, _l = _build_minimal_export(tmp_path)
+        (export_dir / "README.md").write_text("not the rendered card", encoding="utf-8")
+        with pytest.raises(ExportError, match="stale|deterministic"):
+            validation_publication.validate_publication_directory(
+                export_dir
+            )
+
+    def test_unexpected_subdirectory_rejected(
+        self, tmp_path: Path
+    ) -> None:
+        """An extra directory at the root is rejected as 'unexpected'."""
+        from osm_polygon_sentence_relevance.contracts.errors import ExportError
+
+        export_dir, _p, _g, _l = _build_minimal_export(tmp_path)
+        (export_dir / "extra-dir").mkdir()
+        with pytest.raises(ExportError, match="unexpected subdirectory"):
+            validation_publication.validate_publication_directory(
+                export_dir
+            )
+
+    def test_card_unreadable_oserror(self, tmp_path: Path) -> None:
+        """Replacing the card with a directory triggers the OSError path."""
+        from osm_polygon_sentence_relevance.contracts.errors import ExportError
+
+        export_dir, _p, _g, _l = _build_minimal_export(tmp_path)
+        (export_dir / "README.md").unlink()
+        (export_dir / "README.md").mkdir()
+        # The contract check rejects a directory at the root path,
+        # so the OSError branch is unreachable through the public
+        # validator entry point. We rely on the contract-level
+        # rejection to surface the problem.
+        with pytest.raises(ExportError):
+            validation_publication.validate_publication_directory(
+                export_dir
+            )
+
+    def test_assets_set_mismatch_rejected(self, tmp_path: Path) -> None:
+        """The on-disk asset set differs from the manifest's."""
+        from osm_polygon_sentence_relevance.contracts.errors import ExportError
+
+        export_dir, _p, _g, _l = _build_minimal_export(tmp_path)
+        manifest = json.loads(
+            (export_dir / "manifest.json").read_text(encoding="utf-8")
+        )
+        # Insert a phantom asset entry; the on-disk set won't match.
+        manifest["assets"] = list(manifest["assets"]) + [
+            {"name": "ghost.png", "sha256": "a" * 64, "bytes": 1}
+        ]
+        (export_dir / "manifest.json").write_text(
+            json.dumps(manifest, sort_keys=True, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        with pytest.raises(ExportError, match="Asset set"):
             validation_publication.validate_publication_directory(
                 export_dir
             )

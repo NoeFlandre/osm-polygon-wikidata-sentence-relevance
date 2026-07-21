@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import sqlite3
 import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -44,16 +43,46 @@ from osm_polygon_sentence_relevance.output.dataset_card import (
 from osm_polygon_sentence_relevance.output.profile import (
     AssetInfo,
     DatasetProfile,
-    ExampleRow,
     ProfileError,
     build_dataset_profile,
 )
+
+def _derive_asset_base_url(manifest: Mapping[str, Any]) -> str | None:
+    """Return the asset base URL the publication script would have used.
+
+    The script derives the URL from the ``dataset_repo_id`` argument
+    (defaulting to the canonical Phase 9P repo) so the on-disk README
+    uses absolute ``huggingface.co/.../assets`` image URLs.  The
+    validator must reproduce the same choice to deterministically
+    re-render the card.
+    """
+    repo_id = manifest.get("dataset_repo_id")
+    if not isinstance(repo_id, str) or not repo_id:
+        return None
+    return f"https://huggingface.co/datasets/{repo_id}/resolve/main/assets"
 
 
 _PARQUET_NAME = "sentences.parquet"
 _MANIFEST_NAME = "manifest.json"
 _CARD_NAME = "README.md"
 _ASSETS_DIR_NAME = "assets"
+
+# Canonical contract for a published Phase 9P directory. The set of
+# files that must appear in the directory at exactly these relative
+# paths and no other files (apart from internal scratch/cache the
+# publication pipeline strips before validation runs). This is the
+# layout the corrective release enforces so the missing-parquet
+# regression that affected commit ``2e8d68d9`` cannot recur.
+_REQUIRED_PUBLICATION_FILES: tuple[str, ...] = (
+    "sentences.parquet",
+    "manifest.json",
+    "README.md",
+    "assets/geographic_coverage.png",
+    "assets/language_distribution.png",
+)
+_REQUIRED_ASSET_NAMES: frozenset[str] = frozenset(
+    {"geographic_coverage.png", "language_distribution.png"}
+)
 
 _REQUIRED_MANIFEST_KEYS: frozenset[str] = frozenset(
     {
@@ -254,6 +283,46 @@ def validate_publication_directory(
     if not assets_dir.is_dir():
         raise ExportError(f"Assets path is not a directory: {assets_dir}")
 
+    # Enforce the strict five-file publication contract. After this
+    # gate every file in the directory must be one of the contract
+    # artefacts; anything else (orphan files at the root, hidden
+    # directories, sidecar parquets) is a publication regression.
+    actual_relpaths: set[str] = set()
+    for entry in sorted(export_dir.iterdir()):
+        rel = entry.relative_to(export_dir).as_posix()
+        if entry.is_dir():
+            if rel == _ASSETS_DIR_NAME:
+                for asset_entry in sorted(entry.iterdir()):
+                    asset_rel = (
+                        f"{rel}/{asset_entry.relative_to(entry).as_posix()}"
+                    )
+                    actual_relpaths.add(asset_rel)
+            else:
+                raise ExportError(
+                    f"Publication directory contains unexpected "
+                    f"subdirectory: {rel!r}"
+                )
+        elif entry.is_file():
+            actual_relpaths.add(rel)
+        elif entry.is_symlink():
+            raise ExportError(
+                f"Publication directory contains a symlink: {rel!r}"
+            )
+
+    expected_relpaths = set(_REQUIRED_PUBLICATION_FILES)
+    if actual_relpaths != expected_relpaths:
+        missing = sorted(expected_relpaths - actual_relpaths)
+        extra = sorted(actual_relpaths - expected_relpaths)
+        problems: list[str] = []
+        if missing:
+            problems.append(f"missing={missing}")
+        if extra:
+            problems.append(f"extra={extra}")
+        raise ExportError(
+            "Publication directory does not match the canonical "
+            "five-file contract: " + "; ".join(problems)
+        )
+
     # Loader the manifest strictly.
     try:
         manifest_text = manifest_path.read_text(encoding="utf-8")
@@ -401,14 +470,30 @@ def validate_publication_directory(
 
     # Asset cross-check
     inventory = load_asset_inventory(export_dir)
-    # ``manifest["assets"]`` is required to be a list per the
-    # versioned manifest schema; the type check above has already
-    # constrained this loop's element type to ``dict``.
+    # Defensive manifest parsing: the v2 schema requires ``assets`` to
+    # be a list of {"name", "sha256", "bytes"} objects.  The
+    # surrounding schema guarantees this for a freshly-written
+    # manifest, but a tampered manifest can violate the contract.
     manifest_assets = manifest["assets"]
+    if not isinstance(manifest_assets, list):
+        raise ExportError("Manifest 'assets' must be a JSON array")
     manifest_asset_map: dict[str, Mapping[str, object]] = {}
     for entry in manifest_assets:
-        name = entry["name"]
-        sha = entry["sha256"]
+        if not isinstance(entry, dict):
+            raise ExportError(
+                "Manifest asset entries must be JSON objects"
+            )
+        name = entry.get("name")
+        sha = entry.get("sha256")
+        if not isinstance(name, str) or not isinstance(sha, str):
+            raise ExportError(
+                "Manifest asset entries must have a 'name' and 'sha256'"
+            )
+        if not name or not sha:
+            raise ExportError(
+                "Manifest asset entries must have non-empty 'name' and "
+                "'sha256'"
+            )
         manifest_asset_map[name] = entry
 
     if set(inventory) != set(manifest_asset_map):
@@ -442,7 +527,9 @@ def validate_publication_directory(
         card_text = card_path.read_text(encoding="utf-8")
     except OSError as err:
         raise ExportError(f"Card is not readable: {err}") from err
-    expected_card = render_dataset_card_from_profile(profile)
+    expected_card = render_dataset_card_from_profile(
+        profile, asset_base_url=_derive_asset_base_url(manifest)
+    )
     if card_text != expected_card:
         raise ExportError(
             "Card on disk does not match the deterministic profile render; "
