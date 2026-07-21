@@ -78,6 +78,33 @@ set +e
     2>"${JOB_LOG_DIR}/finalize.stderr.log"
 finalize_rc=$?
 set -e
+
+if [ "${finalize_rc}" -eq 0 ]; then
+    # OAR removes the allocation scratch when the job ends, so copy
+    # the three final artifacts to the operator's persistent NFS mount
+    # via the dedicated helper before propagating the exit code.
+    PERSIST_HELPER="${REPO_ROOT}/scripts/grid5000/_finalize_persist.sh"
+    if [ ! -x "${PERSIST_HELPER}" ]; then
+        echo "run_streaming_finalization_job: persist helper is missing" >&9
+        finalize_rc=1
+    else
+        set +e
+        PERSIST_OUTPUT=$(
+            ( source "${PERSIST_HELPER}"
+              finalize_persist_artifacts "${WORK_DIR}/out" "${LOG_ROOT}" "${OAR_JOB_ID}"
+            ) 2>>"${JOB_LOG_DIR}/finalize.stderr.log"
+        )
+        persist_rc=$?
+        set -e
+        if [ "${persist_rc}" -ne 0 ]; then
+            echo "run_streaming_finalization_job: persist step failed" >&9
+            finalize_rc=1
+        else
+            printf '%s\n' "${PERSIST_OUTPUT}" >>"${JOB_LOG_DIR}/finalize.stdout.log"
+        fi
+    fi
+fi
+
 printf '%s\n' "${finalize_rc}" >"${JOB_LOG_DIR}/finalize.exit_code"
 chmod 0600 "${JOB_LOG_DIR}"/*
 exit "${finalize_rc}"
