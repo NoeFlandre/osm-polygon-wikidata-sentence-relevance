@@ -85,7 +85,7 @@ osm-polygon-sentence-relevance = "osm_polygon_sentence_relevance.application.cli
 testpaths = ["tests"]
 addopts = "--cov=osm_polygon_sentence_relevance --cov=scripts.streaming --cov-branch"
 filterwarnings = [
-    'ignore::SyntaxWarning:docopt',
+    'ignore:invalid escape sequence.*:SyntaxWarning',
 ]
 
 
