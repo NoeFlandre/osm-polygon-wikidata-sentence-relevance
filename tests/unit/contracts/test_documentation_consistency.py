@@ -430,27 +430,13 @@ def test_changelog_records_implemented_publishing_and_validator() -> None:
 
 
 def test_changelog_states_precise_remaining_publishing_boundaries() -> None:
-    """[Unreleased] must distinguish remaining boundaries precisely:
-    CLI publishing and repository creation are still unimplemented;
-    classification and concurrency/resumability boundaries still stand.
-    """
+    """[Unreleased] distinguishes supported publishing from remaining scope."""
     text = _read(_resolve("CHANGELOG.md"))
     unreleased = _changelog_unreleased_block(text)
-    # CLI publishing is still unimplemented.
-    assert re.search(r"CLI\s+publishing", unreleased), (
-        "CHANGELOG.md [Unreleased] must state that CLI publishing is "
-        "still not implemented."
-    )
-    # Repository creation is still unimplemented.
-    assert re.search(r"repository\s+creation", unreleased, re.IGNORECASE), (
-        "CHANGELOG.md [Unreleased] must state that repository creation "
-        "is still not implemented."
-    )
-    # Concurrency/resumability boundary still stands.
-    assert re.search(r"concurrency|resumable", unreleased, re.IGNORECASE), (
-        "CHANGELOG.md [Unreleased] must still list the concurrency/"
-        "resumability boundary."
-    )
+    assert re.search(r"CLI\s+publishing", unreleased)
+    assert re.search(r"repository\s+creation", unreleased, re.IGNORECASE)
+    assert "classification" in unreleased
+    assert "parallel shard processing" in unreleased
 
 
 def test_contributing_scope_is_accurate_about_publishing() -> None:
@@ -593,3 +579,36 @@ def test_contributing_hub_extra_supports_acquisition_and_publishing() -> None:
         "CONTRIBUTING.md 'hub' extra comment must mention publishing as "
         "well as read-only acquisition."
     )
+
+
+def test_current_docs_contain_no_historical_or_superseded_workflows() -> None:
+    current_docs = (
+        "README.md",
+        "CONTRIBUTING.md",
+        "CHANGELOG.md",
+        "docs/index.md",
+        "docs/architecture/overview.md",
+        "docs/guides/development.md",
+        "docs/guides/getting-started.md",
+        "docs/guides/grid5000.md",
+        "docs/guides/reproducibility.md",
+        "docs/reference/api.md",
+        "docs/reference/cli.md",
+        "docs/reference/data-contract.md",
+    )
+    stale_terms = (
+        "Phase 9",
+        "amendment",
+        "smoke test",
+        "submit_gpu_build.sh",
+        "run_gpu_build.sh",
+        "submit_gpu_smoke.sh",
+        "run_gpu_smoke.sh",
+    )
+    offenders = {
+        f"{path}:{term}"
+        for path in current_docs
+        for term in stale_terms
+        if term.casefold() in _read(_resolve(path)).casefold()
+    }
+    assert offenders == set()

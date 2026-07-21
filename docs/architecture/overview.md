@@ -74,7 +74,7 @@ export chain (Parquet schema metadata, manifest, statistics, generated
 
 Both modes require `--input-dataset-revision` and `--pipeline-version`.
 
-## Hardware selection (Phase 9A)
+## Hardware selection
 
 The SaT segmenter accepts a `device` argument: one of
 `"auto"`, `"cpu"`, `"cuda"`, `"mps"`. `"auto"` (default) resolves to
@@ -119,7 +119,7 @@ agreement.
 
 Hardware selection never alters output schema, IDs, hashes, or
 dataset-card statistics; it only changes the runtime accelerator.
-**One GPU only.** Multi-GPU is not implemented in this phase. The
+**One GPU only.** Multi-GPU is not implemented. The
 expected production invocation is `osm-polygon-sentence-relevance
 --device cuda`.
 
@@ -147,7 +147,7 @@ identity; Wikivoyage keys on Wikidata QID).
 
 ## Context-before-deduplication ordering
 
-The Phase 2 joined-sections table is sorted by
+The joined-sections table is sorted by
 `(polygon_id, source, language, document_id, section_index, section_id)`
 during composition. That sort order is a property of the join output and
 is **separate** from the finalization context grouping below.
