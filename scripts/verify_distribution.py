@@ -82,6 +82,26 @@ SDIST_FORBIDDEN = [
     "coverage.xml",
 ]
 WHEEL_FORBIDDEN_PREFIXES = ("docs/", ".local-docs/", "tests/", ".git")
+SDIST_PRODUCTION_SHELL_SCRIPTS = (
+    "scripts/grid5000/_finalize_persist.sh",
+    "scripts/grid5000/run_streaming_build.sh",
+    "scripts/grid5000/run_streaming_build_job.sh",
+    "scripts/grid5000/run_streaming_finalization.sh",
+    "scripts/grid5000/run_streaming_finalization_job.sh",
+    "scripts/grid5000/submit_streaming_build.sh",
+    "scripts/grid5000/submit_streaming_finalization.sh",
+)
+SDIST_PRODUCTION_PYTHON_SCRIPTS = (
+    "scripts/grid5000/gpu_preflight.py",
+    "scripts/render_assets.py",
+    "scripts/verify_distribution.py",
+    "scripts/streaming/__init__.py",
+    "scripts/streaming/data_root.py",
+    "scripts/streaming/downloader.py",
+    "scripts/streaming/driver.py",
+    "scripts/streaming/finalization.py",
+    "scripts/streaming/offload.py",
+)
 
 
 def _fail(msg: str) -> None:
@@ -165,31 +185,12 @@ def verify_sdist(sdist: Path) -> None:
     if not in_sdist("tests"):
         _fail("sdist is missing tests/")
 
-    # Public Grid'5000 operational scripts must ship in the sdist
-    # so a remote node can run the non-interactive smoke and the
-    # non-interactive full build without a checkout of the full
-    # repo. The supporting Python helpers that the payloads
-    # import must also ship. The shell scripts must
-    # additionally be regular files with mode 0755 so a
-    # downstream operator can invoke them without restoring the
-    # executable bit manually.
-    shell_scripts = (
-        "scripts/grid5000/run_gpu_smoke.sh",
-        "scripts/grid5000/run_gpu_smoke_job.sh",
-        "scripts/grid5000/submit_gpu_smoke.sh",
-        "scripts/grid5000/run_gpu_build.sh",
-        "scripts/grid5000/run_gpu_build_job.sh",
-        "scripts/grid5000/submit_gpu_build.sh",
-        "scripts/grid5000/run_streaming_build.sh",
-        "scripts/grid5000/run_streaming_build_job.sh",
-        "scripts/grid5000/submit_streaming_build.sh",
-        "scripts/grid5000/_cache_ref_validator.sh",
-    )
+    # The sdist carries the bounded streaming production runner and its
+    # finalization path. Superseded diagnostic and full-snapshot launchers
+    # are deliberately absent.
     for public_script in (
-        *shell_scripts,
-        "scripts/grid5000/gpu_preflight.py",
-        "scripts/grid5000/_validate_artifact.py",
-        "scripts/grid5000/_run_metadata.py",
+        *SDIST_PRODUCTION_SHELL_SCRIPTS,
+        *SDIST_PRODUCTION_PYTHON_SCRIPTS,
     ):
         if not in_sdist(public_script):
             _fail(f"sdist is missing public script: {public_script}")
@@ -197,7 +198,10 @@ def verify_sdist(sdist: Path) -> None:
     # Open the sdist once and inspect each shell script's TarInfo:
     # it must be a regular file with mode 0o755.
     with tarfile.open(sdist) as tf:
-        shell_members = {name: tf.getmember(f"{root}/{name}") for name in shell_scripts}
+        shell_members = {
+            name: tf.getmember(f"{root}/{name}")
+            for name in SDIST_PRODUCTION_SHELL_SCRIPTS
+        }
     for rel, member in shell_members.items():
         if not member.isreg():
             _fail(f"sdist shell script is not a regular file: {rel}")

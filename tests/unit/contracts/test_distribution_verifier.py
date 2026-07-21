@@ -16,6 +16,27 @@ import pytest
 ROOT = Path(__file__).resolve().parents[3]
 SCRIPT = ROOT / "scripts" / "verify_distribution.py"
 
+PRODUCTION_SHELL_SCRIPTS = [
+    "scripts/grid5000/_finalize_persist.sh",
+    "scripts/grid5000/run_streaming_build.sh",
+    "scripts/grid5000/run_streaming_build_job.sh",
+    "scripts/grid5000/run_streaming_finalization.sh",
+    "scripts/grid5000/run_streaming_finalization_job.sh",
+    "scripts/grid5000/submit_streaming_build.sh",
+    "scripts/grid5000/submit_streaming_finalization.sh",
+]
+PRODUCTION_PYTHON_SCRIPTS = [
+    "scripts/grid5000/gpu_preflight.py",
+    "scripts/render_assets.py",
+    "scripts/verify_distribution.py",
+    "scripts/streaming/__init__.py",
+    "scripts/streaming/data_root.py",
+    "scripts/streaming/downloader.py",
+    "scripts/streaming/driver.py",
+    "scripts/streaming/finalization.py",
+    "scripts/streaming/offload.py",
+]
+
 
 def _load_verifier():
     """Import the verifier script as a module."""
@@ -229,22 +250,8 @@ def _make_fake_sdist(
     sdist = tmp_path / "fake-0.1.0.tar.gz"
     root = "osm_polygon_sentence_relevance-0.1.0"
 
-    public_scripts = [
-        "scripts/grid5000/run_gpu_smoke.sh",
-        "scripts/grid5000/run_gpu_smoke_job.sh",
-        "scripts/grid5000/submit_gpu_smoke.sh",
-        "scripts/grid5000/run_gpu_build.sh",
-        "scripts/grid5000/run_gpu_build_job.sh",
-        "scripts/grid5000/submit_gpu_build.sh",
-        "scripts/grid5000/run_streaming_build.sh",
-        "scripts/grid5000/run_streaming_build_job.sh",
-        "scripts/grid5000/submit_streaming_build.sh",
-        "scripts/grid5000/_cache_ref_validator.sh",
-        "scripts/grid5000/gpu_preflight.py",
-        "scripts/grid5000/_validate_artifact.py",
-        "scripts/grid5000/_run_metadata.py",
-    ]
-    shell_only = set(public_scripts[:10])
+    public_scripts = [*PRODUCTION_SHELL_SCRIPTS, *PRODUCTION_PYTHON_SCRIPTS]
+    shell_only = set(PRODUCTION_SHELL_SCRIPTS)
     modes = shell_script_modes or {}
     with tarfile.open(sdist, "w:gz") as tf:
         # Minimal required sdist layout.
@@ -299,21 +306,7 @@ class TestVerifierRequiresPublicScriptsInSdist:
 
     @pytest.mark.parametrize(
         "missing",
-        [
-            "scripts/grid5000/run_gpu_smoke.sh",
-            "scripts/grid5000/run_gpu_smoke_job.sh",
-            "scripts/grid5000/submit_gpu_smoke.sh",
-            "scripts/grid5000/run_gpu_build.sh",
-            "scripts/grid5000/run_gpu_build_job.sh",
-            "scripts/grid5000/submit_gpu_build.sh",
-            "scripts/grid5000/run_streaming_build.sh",
-            "scripts/grid5000/run_streaming_build_job.sh",
-            "scripts/grid5000/submit_streaming_build.sh",
-            "scripts/grid5000/_cache_ref_validator.sh",
-            "scripts/grid5000/gpu_preflight.py",
-            "scripts/grid5000/_validate_artifact.py",
-            "scripts/grid5000/_run_metadata.py",
-        ],
+        [*PRODUCTION_SHELL_SCRIPTS, *PRODUCTION_PYTHON_SCRIPTS],
     )
     def test_missing_public_script_rejected(self, tmp_path: Path, missing: str) -> None:
         v = _load_verifier()
@@ -338,16 +331,9 @@ class TestVerifierRequiresShellScriptMode0755:
     @pytest.mark.parametrize(
         ("script", "bad_mode"),
         [
-            ("scripts/grid5000/run_gpu_smoke.sh", 0o711),
-            ("scripts/grid5000/run_gpu_smoke.sh", 0o644),
-            ("scripts/grid5000/run_gpu_smoke_job.sh", 0o711),
-            ("scripts/grid5000/run_gpu_smoke_job.sh", 0o600),
-            ("scripts/grid5000/submit_gpu_smoke.sh", 0o711),
-            ("scripts/grid5000/submit_gpu_smoke.sh", 0o755 ^ 0o001),
-            ("scripts/grid5000/submit_gpu_build.sh", 0o711),
-            ("scripts/grid5000/submit_gpu_build.sh", 0o644),
-            ("scripts/grid5000/_cache_ref_validator.sh", 0o711),
-            ("scripts/grid5000/_cache_ref_validator.sh", 0o644),
+            (script, mode)
+            for script in PRODUCTION_SHELL_SCRIPTS
+            for mode in (0o711, 0o644)
         ],
     )
     def test_incorrectly_permissioned_shell_script_rejected(
