@@ -1300,7 +1300,528 @@ __all__ = [
     "STATISTICS_VERSION",
     "DatasetStatistics",
     "compute_statistics",
+    "compute_parquet_statistics",
     "statistics_to_dict",
     "statistics_from_dict",
     "render_dataset_card",
+    "render_dataset_card_from_profile",
+    "schema_has_map_types",
+    "schema_field_documentation",
 ]
+
+
+def schema_has_map_types(schema: Any) -> bool:
+    """Return True if *schema* contains any ``map<...>`` field, recursively.
+
+    The Hugging Face ``datasets`` library cannot ingest
+    ``map<string, string>`` columns; any export with such a field will
+    fail Viewer-side requests (``/info``, ``/parquet``).  Used by the
+    validator to reject exports that have not yet been migrated.
+    """
+    for field in schema:
+        t = field.type
+        if pa.types.is_map(t):
+            return True
+        if pa.types.is_list(t):
+            if pa.types.is_map(t.value_type):
+                return True
+            if pa.types.is_struct(t.value_type):
+                for child in t.value_type:
+                    if pa.types.is_map(child.type):
+                        return True
+        elif pa.types.is_struct(t):
+            for child in t:
+                if pa.types.is_map(child.type):
+                    return True
+    return False
+
+
+_SCHEMA_FIELD_DESCRIPTIONS: dict[str, str] = {
+    "sentence_id": (
+        "Deterministic ID from polygon, language, and sentence "
+        "content hash."
+    ),
+    "polygon_id": "OSM polygon identifier.",
+    "wikidata": "Wikidata entity QID for the polygon/page.",
+    "document_id": (
+        "Document/page identifier within its source/site/language."
+    ),
+    "article_id": "Article identifier where available.",
+    "source": "`wikipedia` or `wikivoyage`.",
+    "language": "Language code of the sentence.",
+    "site": "Source site (e.g. `en.wikipedia.org`).",
+    "page_title": "Page title.",
+    "section_id": "Section identifier.",
+    "section_index": "Section ordinal within the document.",
+    "section_path": "Section breadcrumb path.",
+    "sentence_index": "Sentence ordinal within the section.",
+    "sentence_text_raw": (
+        "Segment text after surrounding-whitespace trimming."
+    ),
+    "sentence_text_normalized": (
+        "Normalised sentence text used as the dedup key."
+    ),
+    "previous_sentence": (
+        "Prior sentence in the section (context)."
+    ),
+    "next_sentence": "Next sentence in the section (context).",
+    "url": "Source URL of the document.",
+    "page_id": "Source page ID.",
+    "revision_id": "Source revision ID.",
+    "revision_timestamp": "Source revision timestamp.",
+    "document_content_hash": "Hash of the source document.",
+    "section_content_hash": "Hash of the source section.",
+    "sentence_content_hash": (
+        "Hash of the normalised sentence (dedup key component)."
+    ),
+    "duplicate_occurrence_count": (
+        "Number of source occurrences collapsed into this row."
+    ),
+    "duplicate_sources": (
+        "Distinct sources among the collapsed occurrences."
+    ),
+    "polygon_name": "Human-readable polygon name.",
+    "osm_primary_tag": "Primary OSM tag of the polygon.",
+    "osm_tags": (
+        "OSM tags of the polygon, encoded as a list of "
+        "`{key, value}` structs so the Hugging Face Viewer can "
+        "ingest the export."
+    ),
+    "region": "Input region/extract name.",
+    "lat": (
+        "Latitude of the polygon centroid, if known."
+    ),
+    "lon": (
+        "Longitude of the polygon centroid, if known."
+    ),
+    "input_dataset_revision": (
+        "Exact input revision recorded for reproducibility."
+    ),
+    "pipeline_version": (
+        "Pipeline version recorded for reproducibility."
+    ),
+}
+
+
+def _profile_field_type_label(field_name: str) -> str:
+    """Return the on-card type label for *field_name*."""
+    f = OUTPUT_SENTENCE_SCHEMA.field(field_name)
+    if pa.types.is_list(f.type):
+        inner = f.type.value_type
+        if pa.types.is_struct(inner):
+            children = ", ".join(
+                f"`{c.name}`: string"
+                for c in inner
+            )
+            return f"list<struct<{children}>>"
+        return f"list<{inner}>"
+    return str(f.type)
+
+
+def schema_field_documentation() -> list[tuple[str, str, str, str]]:
+    """Return deterministic ``(name, type, nullable, description)`` rows.
+
+    Order matches ``OUTPUT_SENTENCE_SCHEMA`` so two profiles with the
+    same schema emit byte-identical documentation sections.
+    """
+    rows: list[tuple[str, str, str, str]] = []
+    for f in OUTPUT_SENTENCE_SCHEMA:
+        nullable = "yes" if f.nullable else "no"
+        desc = _SCHEMA_FIELD_DESCRIPTIONS.get(
+            f.name, "(no documentation)"
+        )
+        rows.append((
+            f.name,
+            _profile_field_type_label(f.name),
+            nullable,
+            desc,
+        ))
+    return rows
+
+
+def _profile_schema_table() -> str:
+    """Render the on-card schema field documentation table."""
+    rows = schema_field_documentation()
+    header = (
+        "| Field | Type | Nullable | Description |\n"
+        "| --- | --- | --- | --- |"
+    )
+    body = "\n".join(
+        f"| `{name}` | `{type_label}` | {nullable} | {desc} |"
+        for name, type_label, nullable, desc in rows
+    )
+    return f"{header}\n{body}\n"
+
+
+def _profile_yaml(stats: DatasetStatistics, profile: Any) -> str:
+    """Render the minimal valid YAML front matter for the on-card.
+
+    Includes ``language`` block, a ``license: other`` declaration, and
+    a ``dataset_info.splits`` entry so the Hugging Face Viewer can
+    resolve the default config/split.  No ``dataset_info.features``
+    block: the parquet is now Viewer-compatible directly, so we
+    delegate feature discovery to the actual parquet bytes (which is
+    what produces the structured JSON on the Viewer UI).
+    """
+    if stats.language_counts:
+        languages_block = "\n".join(
+            f"- {_yaml_quote_scalar(lang)}" for lang in stats.language_counts
+        )
+        language_section = f"language:\n{languages_block}"
+    else:
+        language_section = "language: []"
+    lines = [
+        "---",
+        "license: other",
+        "pretty_name: OSM Polygon Wikidata Sentence Relevance",
+        language_section,
+        f"dataset_info:",
+        f"  features:",
+        f"  - name: osm_tags",
+        f"    sequence:",
+        f"    - name: key",
+        f"      dtype: string",
+        f"    - name: value",
+        f"      dtype: string",
+        f"  splits:",
+        f"  - name: train",
+        f"    num_examples: {stats.row_count}",
+        "---",
+    ]
+    return "\n".join(lines)
+
+
+def _escape_md_inline_profile(value: str) -> str:
+    """Escape inline code content for profile-based rendering."""
+    return (
+        value.replace("&", "&amp;")
+        .replace("`", "&#96;")
+        .replace("|", "&#124;")
+        .replace("\\", "&#92;")
+        .replace("\r", "&#13;")
+        .replace("\n", "&#10;")
+        .replace("\t", "&#9;")
+    )
+
+
+def _profile_preview_section(profile: Any) -> str:
+    """Render the single-region preview section.
+
+    Returns the empty string when the profile covers zero or multiple
+    regions so multi-region and empty exports do not advertise a
+    misleading preview scope.
+    """
+    if len(profile.region_counts) != 1:
+        return ""
+    region_key, region_rows = next(iter(profile.region_counts.items()))
+    display_name = region_key.replace("-latest", "").replace("-", " ").title()
+    if not display_name:
+        display_name = region_key
+    sha = profile.parquet_sha256
+    revision = _escape_md_inline_profile(profile.input_dataset_revision)
+    sha_inline = _escape_md_inline_profile(sha)
+    return (
+        f"## Dataset scope\n\n"
+        f"This published artifact is the **{display_name}-only preview** "
+        f"of the OSM Polygon Wikidata Sentence Relevance dataset. "
+        f"It contains {profile.row_count} deduplicated sentence rows "
+        f"extracted from {profile.unique_polygons} unique OSM polygons "
+        f"in the `{region_key}` shard, covering "
+        f"{profile.unique_wikidata_entities} Wikidata entities and "
+        f"{profile.unique_documents} unique documents. The full "
+        f"multi-region dataset is published incrementally; the current "
+        f"artifact covers a single region only and is intended as a "
+        f"canary/validation snapshot of the production export "
+        f"pipeline.\n\n"
+        f"- **Region:** {display_name}\n"
+        f"- **Region key:** `{_escape_md_inline_profile(region_key)}`\n"
+        f"- **Region rows:** {region_rows}\n"
+        f"- **Preview rows:** {profile.row_count}\n"
+        f"- **Preview polygons:** {profile.unique_polygons}\n"
+        f"- **Preview Wikidata entities:** "
+        f"{profile.unique_wikidata_entities}\n"
+        f"- **Preview documents:** {profile.unique_documents}\n"
+        f"- **Recorded input revision:** `{revision}`\n"
+        f"- **Preview Parquet SHA-256:** `{sha_inline}`\n"
+    )
+
+
+def render_dataset_card_from_profile(profile: Any) -> str:
+    """Render the dataset card from an immutable ``DatasetProfile``.
+
+    This renderer is the canonical post-Phase 9P format. It uses
+    profile-derived fields (so the card and manifest cannot drift) and
+    embeds two PNG assets, a full real example row, and the schema
+    field documentation. All quantitative figures are derived from the
+    profile; nothing is hand-typed.
+    """
+    from osm_polygon_sentence_relevance.output.profile import (
+        render_example_row_json,
+    )
+
+    stats = DatasetStatistics(
+        version=STATISTICS_VERSION,
+        row_count=profile.row_count,
+        unique_sentence_ids=profile.unique_sentence_ids,
+        unique_polygons=profile.unique_polygons,
+        unique_wikidata_entities=profile.unique_wikidata_entities,
+        unique_documents=profile.unique_documents,
+        source_counts=profile.source_counts,
+        language_counts=profile.language_counts,
+        region_counts=profile.region_counts,
+        rows_with_coordinates=profile.rows_with_coordinates,
+        rows_without_coordinates=profile.rows_without_coordinates,
+        input_dataset_revision=profile.input_dataset_revision,
+        pipeline_version=profile.pipeline_version,
+        input_dataset_id=profile.input_dataset_id,
+        parquet_sha256=profile.parquet_sha256,
+    )
+    coords = profile.rows_with_coordinates
+    total = profile.rows_with_coordinates + profile.rows_without_coordinates
+
+    # Asset embeds
+    geo = profile.assets.get("geographic_coverage.png")
+    lang_png = profile.assets.get("language_distribution.png")
+    geo_md = (
+        f"![Geographic coverage](assets/geographic_coverage.png)"
+        if geo is not None
+        else "_(Geographic coverage asset unavailable.)_"
+    )
+    lang_md = (
+        f"![Language distribution](assets/language_distribution.png)"
+        if lang_png is not None
+        else "_(Language distribution asset unavailable.)_"
+    )
+
+    example_json = render_example_row_json(profile)
+
+    schema_table = _profile_schema_table()
+    preview_section = _profile_preview_section(profile)
+
+    yaml_block = _profile_yaml(stats, profile)
+
+    coords_extent = (
+        f"{profile.lat_min:.4f}, {profile.lon_min:.4f}"
+        if profile.lat_min is not None
+        and profile.lat_max is not None
+        and profile.lon_min is not None
+        and profile.lon_max is not None
+        else "(no coordinates)"
+    )
+    coords_extent = (
+        f"{profile.lat_min:.4f} → {profile.lat_max:.4f}, "
+        f"{profile.lon_min:.4f} → {profile.lon_max:.4f}"
+    )
+
+    language_table_rows = "\n".join(
+        f"| `{_escape_md_inline_profile(lang)}` | {count} |"
+        for lang, count in sorted(
+            profile.language_counts.items(), key=lambda kv: (-kv[1], kv[0])
+        )
+    )
+    full_language_table = (
+        "| Language | Rows |\n| --- | --- |\n"
+        f"{language_table_rows}\n"
+    )
+
+    return f"""\
+{yaml_block}
+
+<!-- GENERATED AUTOMATICALLY DURING EXPORT. DO NOT EDIT MANUALLY. -->
+<!-- The quantitative sections below are computed from the exported Parquet -->
+<!-- data via the immutable DatasetProfile; rebuild the dataset to regenerate. -->
+
+# OSM Polygon Wikidata Sentence Relevance
+
+This dataset contains normalised sentences extracted from OpenStreetMap
+(OSM) polygon articles and their linked Wikipedia / Wikivoyage pages.
+Each row is a deduplicated sentence occurrence scoped to a polygon,
+language, and content hash.
+
+The dataset is a sentence-level snapshot with sentence/provenance fields
+only. Land-use relevance labels, polygon-description classifications,
+relevance scores, and similarity-pair annotations are future downstream
+work and are absent from this dataset.
+
+{preview_section}## Dataset summary
+
+- **Total sentence rows:** {profile.row_count}
+- **Unique sentence IDs:** {profile.unique_sentence_ids}
+- **Unique polygons:** {profile.unique_polygons}
+- **Unique Wikidata entities:** {profile.unique_wikidata_entities}
+- **Unique document identities
+  (source, site, language, document_id):** {profile.unique_documents}
+- **Rows with coordinates:** {coords} / {total}
+- **Rows without coordinates:** {profile.rows_without_coordinates} / {total}
+- **Rows with polygon_name:** {profile.rows_with_polygon_name}
+- **Sentence length (chars):**
+  min {profile.sentence_length_min},
+  mean {profile.sentence_length_mean:.2f},
+  max {profile.sentence_length_max}
+- **Coordinate extent:** {coords_extent}
+- **Input dataset revision:** `{_escape_md_inline_profile(profile.input_dataset_revision)}`
+- **Pipeline version:** `{_escape_md_inline_profile(profile.pipeline_version)}`
+- **Exported Parquet SHA-256:** `{_escape_md_inline_profile(profile.parquet_sha256)}`
+
+## Source dataset and recorded input revision
+
+{_source_provenance_section(stats)}
+
+## Geographic coverage
+
+{geo_md}
+
+The scatter plot shows the centroid of every polygon with both
+`lat` and `lon` populated (one dot per polygon, not one per row).
+The visible extent is derived from the actual data; the
+`(min, max)` pair reported under *Dataset summary* is the precise
+bounding box used to auto-fit the asset.
+
+## Language coverage
+
+{lang_md}
+
+<details>
+<summary>Full language breakdown ({len(profile.language_counts)} languages)</summary>
+
+{full_language_table}
+</details>
+
+A "document identity" is defined as the tuple
+`(source, site, language, document_id)`. Rows with the same raw
+`document_id` but different source / site / language are treated as
+distinct documents.
+
+## Wikipedia and Wikivoyage coverage
+
+{_counts_table("Source coverage", profile.source_counts)}
+
+Wikipedia and Wikivoyage rows may describe the same Wikidata entity;
+cross-source duplicates are collapsed to a single canonical
+occurrence during finalisation. The canonical selection rule is
+documented below in *Deterministic IDs, deduplication, and context
+policy*.
+
+## Sentence segmentation and normalisation
+
+Sentences were extracted using the segmentation model
+`{_escape_md_inline_profile(profile.segmentation_model)}`
+at the exact model revision
+`{_escape_md_inline_profile(profile.segmentation_revision)}`,
+recorded for reproducibility.
+
+Each emitted segment has its surrounding whitespace trimmed and is
+then passed through a fixed-order normalisation pipeline:
+
+1. Unicode NFC normalisation.
+2. Removal of configured zero-width characters (`U+200B`, `U+2060`,
+   `U+FEFF`).
+3. Replacement of Unicode control characters with spaces.
+4. Whitespace collapse.
+5. Stripping of leading MediaWiki edit markers.
+
+The pipeline preserves case, punctuation, accents, and joiner
+characters; only `sentence_text_normalized` (the post-pipeline text)
+is used as the content hash and dedup key.
+
+## Deterministic IDs, deduplication, and context policy
+
+Each sentence occurrence is assigned a deterministic `sentence_id`
+derived from `polygon_id`, `language`, and the SHA-256 of the
+normalised text. Exact duplicates (same polygon, language, and
+normalised text) are collapsed into a single canonical occurrence.
+When a Wikipedia and a Wikivoyage occurrence collide, Wikipedia is
+chosen as the canonical source; the full set of contributing sources
+is recorded in `duplicate_sources`. Intra-section previous/next
+sentences are attached as context and never alter the identity or
+content of the row itself.
+
+## Real example row (from the export)
+
+<details>
+<summary>Show one row from the canonical-sorted Parquet</summary>
+
+```json
+{example_json}
+```
+
+</details>
+
+## Output schema (field descriptions)
+
+The export is a single Parquet table (`sentences.parquet`) with the
+following schema. Note the ``osm_tags`` column is now encoded as a
+list of ``{{key, value}}`` structs (the legacy ``map<string,string>``
+form is not ingestible by the Hugging Face ``datasets`` library).
+
+{schema_table}
+
+## Provenance and revision tracking
+
+Every export records `input_dataset_revision`, `pipeline_version`,
+and (when applicable) `input_dataset_id` in both the Parquet schema
+metadata and the `manifest.json`. The manifest also stores the
+Parquet SHA-256, the asset SHA-256s, the segmentation model name and
+exact revision, and the source-code commit that produced this export,
+so the content identity of every byte in this directory is
+verifiable independently of this card. The versioned `statistics`
+object inside the manifest and the top-level count fields are
+derived from the same computation; the validator rejects manifests
+where they disagree.
+
+## Intended use
+
+This dataset supports text-research tasks over OSM polygon articles:
+contextual analysis of how places are described across Wikipedia and
+Wikivoyage, sentence-level corpus studies, and downstream modeling
+that needs sentence text plus article provenance. It is intended for
+research and evaluation, not as a substitute for the upstream sources.
+The dataset is not a labelled dataset: it does not contain relevance
+labels, similarity pairs, or classification outputs, and should not
+be treated as one.
+
+## Limitations and known biases
+
+- Extraction depends on upstream OSM / Wikimedia availability,
+  coverage, and language balance; over-represented languages and
+  regions will be reflected in the statistics above.
+- Coordinates are only present when the source polygon carries
+  centroid information; see the coordinate counts above.
+- Sentence segmentation uses an automatic multilingual model and may
+  mis-segment short or mixed-script text.
+- Deduplication is exact-match on the normalised text within a
+  polygon and language; this collapses identical sentences only and
+  does not in any way imply semantic similarity or relevance. The
+  exporter does not apply semantic deduplication or
+  sentence-pair scoring.
+
+## Licensing
+
+This dataset combines content from OpenStreetMap and Wikimedia
+projects. The repository `LICENSE` covers only the code and this
+dataset-card generator; it does not grant rights to the dataset's
+underlying content, which is governed by the upstream terms of
+OpenStreetMap and Wikimedia. Provenance fields and source
+URL/revision identifiers are retained in every row to support
+attribution; satisfying the upstream attribution and licence
+requirements (such as ODbL for OpenStreetMap contributions and
+CC BY-SA or project-specific terms for Wikimedia contributions)
+remains the responsibility of downstream users. No single SPDX
+identifier covers the combined dataset, which is why `license: other`
+is used in the front matter.
+
+## Reproducibility
+
+Builds are deterministic for identical inputs, identical code
+revision, locked dependencies, and a compatible execution
+environment. Re-running the pipeline on the same immutable input
+revision and pipeline version reproduces the same Parquet bytes, the
+same `manifest.json`, the same asset PNGs, and this auto-generated
+card.
+
+---
+
+*This dataset card was generated automatically from the exported
+data via the immutable ``DatasetProfile`` and must not be edited
+manually; rebuild the dataset to regenerate.*
+"""
