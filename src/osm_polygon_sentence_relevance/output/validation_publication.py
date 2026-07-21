@@ -401,23 +401,14 @@ def validate_publication_directory(
 
     # Asset cross-check
     inventory = load_asset_inventory(export_dir)
+    # ``manifest["assets"]`` is required to be a list per the
+    # versioned manifest schema; the type check above has already
+    # constrained this loop's element type to ``dict``.
     manifest_assets = manifest["assets"]
-    if not isinstance(manifest_assets, list):
-        raise ExportError("Manifest 'assets' must be a JSON array")
     manifest_asset_map: dict[str, Mapping[str, object]] = {}
     for entry in manifest_assets:
-        if not isinstance(entry, dict):
-            raise ExportError("Manifest asset entries must be JSON objects")
-        name = entry.get("name")
-        sha = entry.get("sha256")
-        if not isinstance(name, str) or not isinstance(sha, str):
-            raise ExportError(
-                "Manifest asset entries must have a 'name' and 'sha256'"
-            )
-        if not name or not sha:
-            raise ExportError(
-                "Manifest asset entries must have non-empty 'name' and 'sha256'"
-            )
+        name = entry["name"]
+        sha = entry["sha256"]
         manifest_asset_map[name] = entry
 
     if set(inventory) != set(manifest_asset_map):

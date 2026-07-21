@@ -197,7 +197,13 @@ def _sorted_dict(mapping: Mapping[str, int]) -> dict[str, int]:
 
 
 def _parse_meta(metadata: Mapping[bytes, bytes] | None, key: bytes) -> str | None:
-    """Read a UTF-8 metadata key. Missing → ``None``."""
+    """Read a UTF-8 metadata key. Missing → ``None``.
+
+    Returns the raw decoded bytes.  The blank check used to live in
+    this helper but was lifted to ``build_dataset_profile`` so the
+    helper can serve optional metadata keys (e.g.
+    ``input_dataset_id``) without false positives.
+    """
     if metadata is None:
         return None
     raw = metadata.get(key)

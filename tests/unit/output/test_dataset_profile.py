@@ -547,3 +547,103 @@ class TestProfileValidationErrors:
                 scratch_dir=tmp_path,
                 input_dataset_id="   ",
             )
+
+
+class TestProfileParseMetaErrors:
+    def test_parse_meta_rejects_blank(self) -> None:
+        from osm_polygon_sentence_relevance.output.profile import (
+            _parse_meta,
+            ProfileError,
+        )
+
+        with pytest.raises(ProfileError):
+            _parse_meta({b"k": b"   "}, b"k")
+
+    def test_parse_meta_rejects_non_utf8(self) -> None:
+        from osm_polygon_sentence_relevance.output.profile import (
+            _parse_meta,
+            ProfileError,
+        )
+
+        with pytest.raises(ProfileError):
+            _parse_meta({b"k": b"\xff\xfe"}, b"k")
+
+
+class TestProfileToDictUnknownCols:
+    """``to_dict`` should not crash when the example_row has unknown columns."""
+
+    def test_to_dict_with_extra_cols_is_ok(self) -> None:
+        from osm_polygon_sentence_relevance.output.profile import (
+            DatasetProfile,
+            ExampleRow,
+        )
+
+        profile = DatasetProfile(
+            version=1,
+            row_count=1,
+            unique_sentence_ids=1,
+            unique_polygons=1,
+            unique_wikidata_entities=1,
+            unique_documents=1,
+            source_counts={"wikipedia": 1},
+            language_counts={"en": 1},
+            region_counts={"a": 1},
+            rows_with_coordinates=1,
+            rows_without_coordinates=0,
+            rows_with_polygon_name=0,
+            input_dataset_revision="r",
+            pipeline_version="v",
+            input_dataset_id=None,
+            parquet_sha256="a" * 64,
+            segmentation_model="m",
+            segmentation_revision="r",
+            source_commit="c",
+            lat_min=0.0,
+            lat_max=1.0,
+            lon_min=0.0,
+            lon_max=1.0,
+            sentence_length_min=0,
+            sentence_length_mean=0.0,
+            sentence_length_max=0,
+            example_row=ExampleRow(fields={"unknown_col": "x"}),
+        )
+        d = profile.to_dict()
+        # Unknown columns are not added to the schema-ordered dict but
+        # the call still succeeds.
+        assert "row_count" in d
+
+
+class TestProfileFirstBatchErrors:
+    """Empty parquet must trigger an explicit ProfileError."""
+
+    def test_build_profile_on_empty_parquet_rejected(
+        self, tmp_path: Path
+    ) -> None:
+        from osm_polygon_sentence_relevance.output.profile import (
+            build_dataset_profile,
+            ProfileError,
+        )
+        from osm_polygon_sentence_relevance.contracts.schemas import (
+            OUTPUT_SENTENCE_SCHEMA,
+        )
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+
+        empty = OUTPUT_SENTENCE_SCHEMA.empty_table().replace_schema_metadata(
+            {
+                b"input_dataset_revision": b"r",
+                b"pipeline_version": b"v",
+            }
+        )
+        path = tmp_path / "empty.parquet"
+        pq.write_table(empty, path)
+        sha = "0" * 64
+        with pytest.raises(ProfileError):
+            build_dataset_profile(
+                parquet_path=path,
+                parquet_sha256=sha,
+                segmentation_model="m",
+                segmentation_revision="r",
+                source_commit="c",
+                scratch_dir=tmp_path,
+            )
