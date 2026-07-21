@@ -171,6 +171,9 @@ class DatasetProfile:
     sentence_length_max: int
     example_row: ExampleRow
     assets: Mapping[str, AssetInfo] = field(default_factory=dict)
+    input_occurrence_count: int = 0
+    duplicates_removed: int = 0
+    cross_source_duplicate_groups: int = 0
 
     def __post_init__(self) -> None:
         for name in (
@@ -205,11 +208,14 @@ class DatasetProfile:
             row_in_order[col] = self.example_row.fields.get(col)
 
         # Sort the asset map by name.
-        assets_dict = {name: {
-            "name": info.name,
-            "sha256": info.sha256,
-            "bytes": info.bytes_,
-        } for name, info in sorted(self.assets.items())}
+        assets_dict = {
+            name: {
+                "name": info.name,
+                "sha256": info.sha256,
+                "bytes": info.bytes_,
+            }
+            for name, info in sorted(self.assets.items())
+        }
 
         return {
             "version": self.version,
@@ -240,6 +246,9 @@ class DatasetProfile:
             "sentence_length_max": self.sentence_length_max,
             "example_row": row_in_order,
             "assets": assets_dict,
+            "input_occurrence_count": self.input_occurrence_count,
+            "duplicates_removed": self.duplicates_removed,
+            "cross_source_duplicate_groups": self.cross_source_duplicate_groups,
         }
 
 
@@ -270,6 +279,100 @@ def _parse_meta(metadata: Mapping[bytes, bytes] | None, key: bytes) -> str | Non
     return value
 
 
+def collect_polygon_centroids(
+    profile: DatasetProfile,
+    parquet_path: str | Path,
+) -> list[tuple[float, float]]:
+    """Return one ``(lat, lon)`` per unique polygon_id with coordinates.
+
+    The geographic-coverage renderer must plot a single centroid per
+    *canonical polygon identity*, not per sentence row.  Multiple
+    sentence rows share a single polygon_id (one row per Wikipedia
+    sentence that mentions that polygon), so plotting every row
+    would over-count by an order of magnitude.
+
+    Deduplication strategy:
+
+    * iterate the Parquet in row-order chunks reading the
+      ``polygon_id``, ``lat``, and ``lon`` columns together so a
+      single scan yields the canonical polygon → centroid map;
+    * keep the *first* non-null coordinate per polygon_id so the
+      output is byte-deterministic given a fixed Parquet order;
+    * skip rows whose polygon_id has no coordinates — the polygon
+      is still recorded in :attr:`DatasetProfile.unique_polygons`
+      but contributes no centroid.
+
+    The returned list is ordered by first-seen polygon_id so the
+    renderer can apply its deterministic jitter without reshuffling.
+    """
+    points: list[tuple[float, float]] = []
+    seen: set[str] = set()
+    path = Path(parquet_path)
+    if not path.is_file():
+        return points
+    try:
+        parquet = pq.ParquetFile(path)
+    except Exception:
+        return points
+    try:
+        for batch in parquet.iter_batches(
+            batch_size=65_536,
+            columns=["polygon_id", "lat", "lon"],
+        ):
+            values = batch.to_pydict()
+            polygon_ids = values["polygon_id"]
+            lats = values["lat"]
+            lons = values["lon"]
+            for polygon_id, lat, lon in zip(polygon_ids, lats, lons, strict=False):
+                if not polygon_id or polygon_id in seen:
+                    continue
+                if lat is None or lon is None:
+                    continue
+                seen.add(polygon_id)
+                points.append((float(lat), float(lon)))
+    except (KeyError, OSError):
+        return points
+    return points
+
+
+def geographic_caption_for_profile(profile: DatasetProfile) -> str:
+    """Build the caption text drawn under the geographic-coverage PNG.
+
+    Centralising the caption here keeps the on-PNG text and the
+    legend label in lockstep: both report the deduplicated polygon
+    centroid count (which equals ``profile.unique_polygons`` for
+    Afghanistan-shaped datasets where every polygon has
+    coordinates) alongside the dataset row count and the vendor
+    attribution.
+    """
+    polygon_centroid_count = profile.unique_polygons
+    if (
+        profile.lat_min is not None
+        and profile.lat_max is not None
+        and profile.lon_min is not None
+        and profile.lon_max is not None
+    ):
+        extent_text = (
+            f"Extent: {profile.lat_min:.3f}°N → {profile.lat_max:.3f}°N, "
+            f"{profile.lon_min:.3f}°E → {profile.lon_max:.3f}°E  |  "
+            f"Polygons: {profile.unique_polygons}  |  "
+            f"Rows: {profile.row_count}"
+        )
+    else:
+        extent_text = (
+            f"Extent: (no coordinates)  |  "
+            f"Polygons: {profile.unique_polygons}  |  "
+            f"Rows: {profile.row_count}"
+        )
+    caption = (
+        "Country outline: Natural Earth 1:110m Admin 0 Countries "
+        "(public domain, vendored at "
+        "src/osm_polygon_sentence_relevance/output/_vendor/natural_earth/"
+        "afghanistan_outline.geojson)."
+    )
+    return f"{extent_text}\nPolygon centroids ({polygon_centroid_count})\n{caption}"
+
+
 def _sample_first_full_row(
     parquet: pq.ParquetFile,
 ) -> dict[str, Any]:
@@ -281,7 +384,13 @@ def _sample_first_full_row(
     finalisation step, so the first row in batch order is the same
     row finalisation would pick next.
     """
-    first_batch = next(iter(parquet.iter_batches(batch_size=1)))
+    iterator = parquet.iter_batches(batch_size=1)
+    try:
+        first_batch = next(iter(iterator))
+    except StopIteration as err:
+        raise ProfileError(
+            "Cannot sample an example row from an empty Parquet file"
+        ) from err
     if first_batch.num_rows == 0:
         raise ProfileError("Cannot sample an example row from an empty Parquet file")
     values = first_batch.to_pydict()
@@ -302,7 +411,9 @@ def _build_signature_png(
     pixel callbacks do not crash.  The returned PNG is a blank
     white image of the requested dimensions.
     """
-    fig, ax = plt.subplots(figsize=(width / 100, height / 100), dpi=100)  # pragma: no cover
+    fig, ax = plt.subplots(
+        figsize=(width / 100, height / 100), dpi=100
+    )  # pragma: no cover
     ax.set_axis_off()  # pragma: no cover
     fig.patch.set_facecolor("white")  # pragma: no cover
     ax.set_facecolor("white")  # pragma: no cover
@@ -369,13 +480,13 @@ def _load_afghanistan_outline() -> tuple[list[tuple[float, float]], dict[str, st
             f"Afghanistan outline GeoJSON is missing: {_NATURAL_EARTH_PATH}"
         )
     try:
-        actual_sha = hashlib.sha256(
-            _NATURAL_EARTH_PATH.read_bytes()
-        ).hexdigest().lower()
-    except OSError as err:  # pragma: no cover - OSError during read is unreachable in tests
-        raise ProfileError(
-            f"Cannot read Afghanistan outline GeoJSON: {err}"
-        ) from err
+        actual_sha = (
+            hashlib.sha256(_NATURAL_EARTH_PATH.read_bytes()).hexdigest().lower()
+        )
+    except (
+        OSError
+    ) as err:  # pragma: no cover - OSError during read is unreachable in tests
+        raise ProfileError(f"Cannot read Afghanistan outline GeoJSON: {err}") from err
     if actual_sha != _NATURAL_EARTH_EXPECTED_SHA256.lower():
         raise ProfileError(
             "Afghanistan outline GeoJSON SHA does not match the pinned "
@@ -386,24 +497,16 @@ def _load_afghanistan_outline() -> tuple[list[tuple[float, float]], dict[str, st
     try:
         payload = json.loads(_NATURAL_EARTH_PATH.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as err:
-        raise ProfileError(
-            f"Afghanistan outline GeoJSON is malformed: {err}"
-        ) from err
+        raise ProfileError(f"Afghanistan outline GeoJSON is malformed: {err}") from err
     features = payload.get("features") or []
     if not features:
-        raise ProfileError(
-            "Afghanistan outline GeoJSON contains no features"
-        )
+        raise ProfileError("Afghanistan outline GeoJSON contains no features")
     geometry = features[0].get("geometry") or {}
     if geometry.get("type") != "Polygon":
-        raise ProfileError(
-            "Afghanistan outline GeoJSON first feature is not a Polygon"
-        )
+        raise ProfileError("Afghanistan outline GeoJSON first feature is not a Polygon")
     rings = geometry.get("coordinates") or []
     if not rings:
-        raise ProfileError(
-            "Afghanistan outline GeoJSON Polygon has no coordinates"
-        )
+        raise ProfileError("Afghanistan outline GeoJSON Polygon has no coordinates")
     outer_ring = rings[0]
     polygon_lonlat = [(float(lon), float(lat)) for lon, lat in outer_ring]
     properties = dict(features[0].get("properties") or {})
@@ -488,21 +591,15 @@ def render_geographic_coverage_png(
 
     lats: list[float] = []
     lons: list[float] = []
-    path = Path(parquet_path)
-    if path.is_file():
-        try:
-            parquet = pq.ParquetFile(path)
-        except Exception:
-            parquet = None
-        if parquet is not None:
-            for batch in parquet.iter_batches(
-                batch_size=65_536, columns=["lat", "lon"]
-            ):
-                values = batch.to_pydict()
-                for lat, lon in zip(values["lat"], values["lon"], strict=False):
-                    if lat is not None and lon is not None:
-                        lats.append(lat)
-                        lons.append(lon)
+    # Deduplicate by canonical polygon_id so the scatter cloud
+    # plots one centroid per unique polygon, never one per
+    # sentence row.  ``collect_polygon_centroids`` is the single
+    # source of truth used by both the renderer and the test
+    # suite so the legend count can never disagree with what is
+    # actually drawn.
+    for lat, lon in collect_polygon_centroids(profile, parquet_path):
+        lats.append(lat)
+        lons.append(lon)
 
     fig = Figure(figsize=(_GEOGRAPHIC_PNG_WIDTH / 100, _GEOGRAPHIC_PNG_HEIGHT / 100))
     ax = fig.add_subplot(111)
@@ -524,7 +621,9 @@ def render_geographic_coverage_png(
 
     if lats:
         # Apply a tiny deterministic jitter so overlapping polygons
-        # remain visible without obscuring the outline.
+        # remain visible without obscuring the outline.  The legend
+        # count is derived from the deduplicated point list so it
+        # always matches what is drawn.
         rng = np.random.default_rng(0x5A_52_4D_4F)
         jitter_lon = rng.uniform(-0.02, 0.02, size=len(lons))
         jitter_lat = rng.uniform(-0.02, 0.02, size=len(lats))
@@ -555,32 +654,10 @@ def render_geographic_coverage_png(
     )
     ax.legend(loc="lower left", frameon=True, fontsize=10)
 
-    extent_text = (
-        (
-            f"Extent: {profile.lat_min:.3f}°N → {profile.lat_max:.3f}°N, "
-            f"{profile.lon_min:.3f}°E → {profile.lon_max:.3f}°E  |  "
-            f"Polygons: {profile.unique_polygons}  |  Rows: {profile.row_count}"
-        )
-        if (
-            profile.lat_min is not None
-            and profile.lat_max is not None
-            and profile.lon_min is not None
-            and profile.lon_max is not None
-        )
-        else (
-            f"Extent: (no coordinates)  |  "
-            f"Polygons: {profile.unique_polygons}  |  Rows: {profile.row_count}"
-        )
-    )
-    caption = (
-        "Country outline: Natural Earth 1:110m Admin 0 Countries "
-        "(public domain, vendored at "
-        "data/natural_earth/afghanistan_outline.geojson)."
-    )
     fig.text(
         0.5,
         0.02,
-        f"{extent_text}\n{caption}",
+        geographic_caption_for_profile(profile),
         ha="center",
         va="bottom",
         fontsize=8,
@@ -660,17 +737,13 @@ def render_language_distribution_png(profile: DatasetProfile) -> bytes:
 
     # Sort the bars so the largest is on top (matplotlib draws first
     # row at the bottom of the y-axis).
-    order = sorted(
-        range(len(counts)), key=lambda i: (-counts[i], labels[i])
-    )
+    order = sorted(range(len(counts)), key=lambda i: (-counts[i], labels[i]))
     labels = [labels[i] for i in order]
     counts = [counts[i] for i in order]
     colors = [colors[i] for i in order]
 
     n_bars = len(labels)
-    fig = Figure(
-        figsize=(_LANGUAGE_PNG_WIDTH / 100, _LANGUAGE_PNG_HEIGHT / 100)
-    )
+    fig = Figure(figsize=(_LANGUAGE_PNG_WIDTH / 100, _LANGUAGE_PNG_HEIGHT / 100))
     ax = fig.add_subplot(111)
     fig.patch.set_facecolor(_LANG_BACKGROUND_COLOR)
     ax.set_facecolor(_LANG_BACKGROUND_COLOR)
@@ -717,8 +790,7 @@ def render_language_distribution_png(profile: DatasetProfile) -> bytes:
         f"Total rows: {total:,}",
         f"Distinct languages: {len(profile.language_counts)}",
         f"Top languages shown: {min(top_n, len(sorted_langs))}",
-        f"Other bucket rows: {other_count:,} "
-        f"({len(other_langs)} languages)",
+        f"Other bucket rows: {other_count:,} ({len(other_langs)} languages)",
     ]
     fig.text(
         0.02,
@@ -805,26 +877,17 @@ def build_dataset_profile(
         raise ProfileError(f"Parquet file is missing: {path}")
     if not isinstance(parquet_sha256, str) or not parquet_sha256.strip():
         raise ProfileError("parquet_sha256 must be a non-blank string")
-    if (
-        not isinstance(segmentation_model, str)
-        or not segmentation_model.strip()
-    ):
+    if not isinstance(segmentation_model, str) or not segmentation_model.strip():
         raise ProfileError("segmentation_model must be a non-blank string")
-    if (
-        not isinstance(segmentation_revision, str)
-        or not segmentation_revision.strip()
-    ):
-        raise ProfileError(
-            "segmentation_revision must be a non-blank string"
-        )
+    if not isinstance(segmentation_revision, str) or not segmentation_revision.strip():
+        raise ProfileError("segmentation_revision must be a non-blank string")
     if not isinstance(source_commit, str) or not source_commit.strip():
         raise ProfileError("source_commit must be a non-blank string")
 
     actual_sha = sha256_file(path)
     if actual_sha.lower() != parquet_sha256.lower():
         raise ProfileError(
-            f"Parquet SHA {actual_sha!r} does not match expected "
-            f"{parquet_sha256!r}"
+            f"Parquet SHA {actual_sha!r} does not match expected {parquet_sha256!r}"
         )
 
     scratch = Path(scratch_dir)
@@ -846,9 +909,7 @@ def build_dataset_profile(
     if stored_revision is None or stored_version is None:
         raise ProfileError("Parquet metadata is missing required provenance keys")
     if input_dataset_id is not None and metadata_dataset_id != input_dataset_id:
-        raise ProfileError(
-            "Explicit input_dataset_id does not match Parquet metadata"
-        )
+        raise ProfileError("Explicit input_dataset_id does not match Parquet metadata")
 
     # Sample the first full row for the on-card example.
     example_row_dict = _sample_first_full_row(parquet)
@@ -866,6 +927,8 @@ def build_dataset_profile(
     source_counts: dict[str, int] = {}
     language_counts: dict[str, int] = {}
     region_counts: dict[str, int] = {}
+    input_occurrence_count = 0
+    cross_source_duplicate_groups = 0
 
     connection = sqlite3.connect(database)
     try:
@@ -901,10 +964,10 @@ def build_dataset_profile(
             "sentence_text_normalized",
             "input_dataset_revision",
             "pipeline_version",
+            "duplicate_occurrence_count",
+            "duplicate_sources",
         )
-        for batch in parquet.iter_batches(
-            batch_size=65_536, columns=list(columns)
-        ):
+        for batch in parquet.iter_batches(batch_size=65_536, columns=list(columns)):
             values = batch.to_pydict()
             n = batch.num_rows
             sentence_ids: list[tuple[str]] = []
@@ -922,10 +985,11 @@ def build_dataset_profile(
                 document_id = values["document_id"][i]
                 region = values["region"][i]
                 source_counts[source] = source_counts.get(source, 0) + 1
-                language_counts[language] = (
-                    language_counts.get(language, 0) + 1
-                )
+                language_counts[language] = language_counts.get(language, 0) + 1
                 region_counts[region] = region_counts.get(region, 0) + 1
+                input_occurrence_count += int(values["duplicate_occurrence_count"][i])
+                if len(set(values["duplicate_sources"][i])) > 1:
+                    cross_source_duplicate_groups += 1
                 lat = values["lat"][i]
                 lon = values["lon"][i]
                 if lat is not None and lon is not None:
@@ -967,9 +1031,7 @@ def build_dataset_profile(
             allowed = {"sentence_ids", "polygons", "wikidata", "documents"}
             if table not in allowed:  # pragma: no cover - internal invariant
                 raise ProfileError("unexpected internal table name")
-            result = connection.execute(
-                f"SELECT COUNT(*) FROM {table}"
-            ).fetchone()
+            result = connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()
             assert result is not None
             return int(result[0])
 
@@ -987,14 +1049,12 @@ def build_dataset_profile(
             database.unlink()  # pragma: no cover - cleanup only
 
     if row_count == 0:  # pragma: no cover - row_count is asserted > 0 below
-        raise ProfileError(
-            "Cannot build a profile from an empty Parquet file"
-        )
+        raise ProfileError("Cannot build a profile from an empty Parquet file")
 
-    sentence_length_mean = (
-        sentence_lengths_total / row_count if row_count else 0.0
-    )
-    if sentence_length_min is None:  # pragma: no cover - unreachable; row_count > 0 is enforced above
+    sentence_length_mean = sentence_lengths_total / row_count if row_count else 0.0
+    if (
+        sentence_length_min is None
+    ):  # pragma: no cover - unreachable; row_count > 0 is enforced above
         sentence_length_min = 0
 
     return DatasetProfile(
@@ -1026,6 +1086,9 @@ def build_dataset_profile(
         sentence_length_max=sentence_length_max,
         example_row=ExampleRow(fields=example_row_dict),
         assets=MappingProxyType({}),
+        input_occurrence_count=input_occurrence_count,
+        duplicates_removed=input_occurrence_count - row_count,
+        cross_source_duplicate_groups=cross_source_duplicate_groups,
     )
 
 

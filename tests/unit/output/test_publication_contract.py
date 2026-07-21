@@ -93,7 +93,9 @@ def _build_publication_row(idx: int) -> dict:
         ).isoformat(),
         "document_content_hash": hashlib.sha256(f"doc{idx // 4}".encode()).hexdigest(),
         "section_content_hash": hashlib.sha256(b"0").hexdigest(),
-        "sentence_content_hash": hashlib.sha256(f"Row {idx} text.".encode()).hexdigest(),
+        "sentence_content_hash": hashlib.sha256(
+            f"Row {idx} text.".encode()
+        ).hexdigest(),
         "duplicate_occurrence_count": 1,
         "duplicate_sources": ["wikipedia"],
         "polygon_name": None,
@@ -146,6 +148,7 @@ def _build_contract_publication(
         render_geographic_coverage_png,
         render_language_distribution_png,
     )
+
     geo_bytes = render_geographic_coverage_png(profile, parquet_path)
     lang_bytes = render_language_distribution_png(profile)
 
@@ -218,6 +221,7 @@ def _build_contract_publication(
     # Clean up the scratch directory so the directory matches the
     # strict five-file contract.
     import shutil
+
     scratch = export_dir / ".scratch"
     if scratch.exists():
         shutil.rmtree(scratch)
@@ -240,9 +244,7 @@ class TestPublicationContractFilesystem:
             "assets/language_distribution.png",
         )
 
-    def test_publication_directory_lists_contract_files(
-        self, tmp_path: Path
-    ) -> None:
+    def test_publication_directory_lists_contract_files(self, tmp_path: Path) -> None:
         """After running the publication pipeline the directory must
         contain exactly the contract files. Anything else is a
         publication bug.
@@ -258,9 +260,9 @@ class TestPublicationContractFilesystem:
         # Exclude internal scratch and cache artifacts the publication
         # pipeline leaves behind (e.g. .scratch for the SQLite build).
         relpaths = [
-            p for p in relpaths
-            if not p.startswith(".scratch/")
-            and not p.startswith(".staging/")
+            p
+            for p in relpaths
+            if not p.startswith(".scratch/") and not p.startswith(".staging/")
         ]
         assert sorted(_REQUIRED_PUBLICATION_FILES) == relpaths
 
@@ -279,9 +281,7 @@ class TestPublicationContractFilesystem:
         # Remove parquet only.
         (export_dir / "sentences.parquet").unlink()
         with pytest.raises(ExportError):
-            validation_publication.validate_publication_directory(
-                export_dir
-            )
+            validation_publication.validate_publication_directory(export_dir)
 
     def test_publication_directory_rejects_missing_manifest(
         self, tmp_path: Path
@@ -293,13 +293,9 @@ class TestPublicationContractFilesystem:
         _build_contract_publication(export_dir)
         (export_dir / "manifest.json").unlink()
         with pytest.raises(ExportError):
-            validation_publication.validate_publication_directory(
-                export_dir
-            )
+            validation_publication.validate_publication_directory(export_dir)
 
-    def test_publication_directory_rejects_missing_readme(
-        self, tmp_path: Path
-    ) -> None:
+    def test_publication_directory_rejects_missing_readme(self, tmp_path: Path) -> None:
         from osm_polygon_sentence_relevance.contracts.errors import ExportError
 
         export_dir = tmp_path / "missing-readme"
@@ -307,9 +303,7 @@ class TestPublicationContractFilesystem:
         _build_contract_publication(export_dir)
         (export_dir / "README.md").unlink()
         with pytest.raises(ExportError):
-            validation_publication.validate_publication_directory(
-                export_dir
-            )
+            validation_publication.validate_publication_directory(export_dir)
 
     def test_publication_directory_rejects_missing_geographic_png(
         self, tmp_path: Path
@@ -321,9 +315,7 @@ class TestPublicationContractFilesystem:
         _build_contract_publication(export_dir)
         (export_dir / "assets" / "geographic_coverage.png").unlink()
         with pytest.raises(ExportError):
-            validation_publication.validate_publication_directory(
-                export_dir
-            )
+            validation_publication.validate_publication_directory(export_dir)
 
     def test_publication_directory_rejects_missing_language_png(
         self, tmp_path: Path
@@ -335,9 +327,7 @@ class TestPublicationContractFilesystem:
         _build_contract_publication(export_dir)
         (export_dir / "assets" / "language_distribution.png").unlink()
         with pytest.raises(ExportError):
-            validation_publication.validate_publication_directory(
-                export_dir
-            )
+            validation_publication.validate_publication_directory(export_dir)
 
     def test_publication_directory_rejects_extra_orphan_file(
         self, tmp_path: Path
@@ -353,13 +343,9 @@ class TestPublicationContractFilesystem:
         _build_contract_publication(export_dir)
         (export_dir / "extra.txt").write_text("nope")
         with pytest.raises(ExportError):
-            validation_publication.validate_publication_directory(
-                export_dir
-            )
+            validation_publication.validate_publication_directory(export_dir)
 
-    def test_publication_directory_rejects_extra_asset(
-        self, tmp_path: Path
-    ) -> None:
+    def test_publication_directory_rejects_extra_asset(self, tmp_path: Path) -> None:
         from osm_polygon_sentence_relevance.contracts.errors import ExportError
 
         export_dir = tmp_path / "extra-asset"
@@ -367,9 +353,7 @@ class TestPublicationContractFilesystem:
         _build_contract_publication(export_dir)
         (export_dir / "assets" / "extra.png").write_bytes(b"x")
         with pytest.raises(ExportError):
-            validation_publication.validate_publication_directory(
-                export_dir
-            )
+            validation_publication.validate_publication_directory(export_dir)
 
 
 class TestPublicationScriptPipeline:
@@ -382,9 +366,7 @@ class TestPublicationScriptPipeline:
     parquet gets dropped during directory cleanup.
     """
 
-    def test_publish_directory_survives_cleanup(
-        self, tmp_path: Path
-    ) -> None:
+    def test_publish_directory_survives_cleanup(self, tmp_path: Path) -> None:
         """The script's ``_publish_directory`` helper rebuilds the
         output directory but must preserve the converted parquet
         across the wipe. Without that preservation the post-cleanup
@@ -425,9 +407,7 @@ class TestPublicationScriptPipeline:
         # The publication directory must round-trip through the
         # validator. This is the same call the publish script must
         # pass before pushing to the Hub.
-        result = validation_publication.validate_publication_directory(
-            output_dir
-        )
+        result = validation_publication.validate_publication_directory(output_dir)
         assert result.profile_row_count > 0
 
     def test_publish_directory_overwrites_dont_drop_parquet(
@@ -470,6 +450,44 @@ class TestPublicationScriptPipeline:
         # Both passes must validate.
         validation_publication.validate_publication_directory(output_dir)
 
+    def test_manifest_uses_profile_derived_duplicate_accounting(
+        self, tmp_path: Path
+    ) -> None:
+        """The render script must never reset deduplication accounting to
+        row_count/zero while converting the Parquet schema."""
+        from dataclasses import replace
+
+        from scripts.render_assets import _build_manifest_payload
+
+        export_dir = tmp_path / "publication"
+        export_dir.mkdir()
+        profile, _geo, _lang = _build_contract_publication(export_dir)
+        profile = replace(
+            profile,
+            input_occurrence_count=profile.row_count + 9,
+            duplicates_removed=9,
+            cross_source_duplicate_groups=2,
+        )
+
+        manifest = _build_manifest_payload(profile)
+
+        assert manifest["input_occurrence_count"] == profile.row_count + 9
+        assert manifest["duplicates_removed"] == 9
+        assert manifest["cross_source_duplicate_groups"] == 2
+
+    def test_manifest_payload_is_deterministic(self, tmp_path: Path) -> None:
+        from scripts.render_assets import _build_manifest_payload
+
+        export_dir = tmp_path / "publication"
+        export_dir.mkdir()
+        profile, _geo, _lang = _build_contract_publication(export_dir)
+
+        first = _build_manifest_payload(profile)
+        second = _build_manifest_payload(profile)
+
+        assert first == second
+        assert "generated_at" not in first
+
 
 class TestPublicationHelperRejectsPathMistakes:
     """A non-existent path or wrong type must be rejected loudly."""
@@ -494,9 +512,7 @@ class TestPublicationHelperRejectsPathMistakes:
         with pytest.raises(ExportError):
             validation_publication.validate_publication_directory(f)
 
-    def test_publication_directory_rejects_root_symlink(
-        self, tmp_path: Path
-    ) -> None:
+    def test_publication_directory_rejects_root_symlink(self, tmp_path: Path) -> None:
         from osm_polygon_sentence_relevance.contracts.errors import ExportError
 
         export_dir = tmp_path / "publish"
@@ -509,9 +525,7 @@ class TestPublicationHelperRejectsPathMistakes:
         link = export_dir / "sentences.parquet"
         link.symlink_to(target)
         with pytest.raises(ExportError):
-            validation_publication.validate_publication_directory(
-                export_dir
-            )
+            validation_publication.validate_publication_directory(export_dir)
 
     def test_publication_directory_rejects_unreadable_manifest(
         self, tmp_path: Path
@@ -524,12 +538,11 @@ class TestPublicationHelperRejectsPathMistakes:
         # Replace manifest.json with a directory-shaped blob so the
         # JSON load fails.
         import os
+
         os.remove(export_dir / "manifest.json")
         os.makedirs(export_dir / "manifest.json")
         with pytest.raises(ExportError, match="Manifest is not readable|not a file"):
-            validation_publication.validate_publication_directory(
-                export_dir
-            )
+            validation_publication.validate_publication_directory(export_dir)
 
     def test_publication_directory_rejects_unreadable_card(
         self, tmp_path: Path
@@ -541,16 +554,42 @@ class TestPublicationHelperRejectsPathMistakes:
         _build_contract_publication(export_dir)
         # Replace README.md with a directory so the read fails.
         import os
+
         os.remove(export_dir / "README.md")
         os.makedirs(export_dir / "README.md")
         with pytest.raises(ExportError, match="Card is not readable|not a file"):
-            validation_publication.validate_publication_directory(
-                export_dir
-            )
+            validation_publication.validate_publication_directory(export_dir)
 
 
 __all__ = [
     "TestPublicationContractFilesystem",
     "TestPublicationScriptPipeline",
     "TestPublicationHelperRejectsPathMistakes",
+    "TestSha256BytesUtility",
 ]
+
+
+class TestSha256BytesUtility:
+    """The shared ``sha256_bytes`` helper used by both the manifest
+    and the on-disk asset validation must produce lowercase hex."""
+
+    def test_returns_lowercase_64_hex(self) -> None:
+        from osm_polygon_sentence_relevance.output.profile import (
+            sha256_bytes,
+        )
+
+        result = sha256_bytes(b"hello world")
+        # Known fixed hash for "hello world".
+        expected = "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
+        assert result == expected
+        assert all(c in "0123456789abcdef" for c in result)
+        assert len(result) == 64
+
+    def test_different_payloads_produce_different_hashes(self) -> None:
+        from osm_polygon_sentence_relevance.output.profile import (
+            sha256_bytes,
+        )
+
+        h1 = sha256_bytes(b"alpha")
+        h2 = sha256_bytes(b"beta")
+        assert h1 != h2

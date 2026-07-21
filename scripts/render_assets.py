@@ -12,14 +12,14 @@ Run from the project root::
     PYTHONPATH=src .venv/bin/python scripts/render_assets.py \\
         --input-parquet /tmp/afghanistan-main/sentences.parquet \\
         --output-dir /tmp/afghanistan-publication \\
-        --segmentation-model wtpsplit \\
-        --segmentation-revision sat-3l \\
-        --source-commit "$(git rev-parse HEAD)"
+        --segmentation-model segment-any-text/sat-3l-sm \\
+        --segmentation-revision <pinned-model-revision> \\
+        --source-commit <data-producing-source-commit>
 """
+
 from __future__ import annotations
 
 import argparse
-import datetime as _dt
 import hashlib
 import json
 import shutil
@@ -66,10 +66,7 @@ def _convert_parquet(input_path: Path, output_path: Path) -> None:
         col = table.column(field.name)
         if field.name == "osm_tags":
             new_col = pa.array(
-                [
-                    convert_osm_tags_to_list_of_struct(row)
-                    for row in col.to_pylist()
-                ],
+                [convert_osm_tags_to_list_of_struct(row) for row in col.to_pylist()],
                 type=field.type,
             )
             out_columns["osm_tags"] = new_col
@@ -144,9 +141,9 @@ def _build_manifest_payload(
     base = {
         "manifest_version": MANIFEST_VERSION,
         "row_count": profile.row_count,
-        "input_occurrence_count": profile.row_count,
-        "duplicates_removed": 0,
-        "cross_source_duplicate_groups": 0,
+        "input_occurrence_count": profile.input_occurrence_count,
+        "duplicates_removed": profile.duplicates_removed,
+        "cross_source_duplicate_groups": profile.cross_source_duplicate_groups,
         "counts_by_source": dict(profile.source_counts),
         "counts_by_language": dict(profile.language_counts),
         "counts_by_region": dict(profile.region_counts),
@@ -175,7 +172,6 @@ def _build_manifest_payload(
     return merge_profile_into_manifest(
         base,
         profile,
-        generated_at=_dt.datetime.now(_dt.UTC).isoformat(),
         dataset_repo_id=dataset_repo_id,
     )
 
@@ -240,18 +236,13 @@ def _publish_directory(
     # ``assets/`` paths reliably).
     if asset_base_url is None and dataset_repo_id is not None:
         asset_base_url = (
-            f"https://huggingface.co/datasets/{dataset_repo_id}"
-            "/resolve/main/assets"
+            f"https://huggingface.co/datasets/{dataset_repo_id}/resolve/main/assets"
         )
 
-    manifest = _build_manifest_payload(
-        profile, dataset_repo_id=dataset_repo_id
-    )
+    manifest = _build_manifest_payload(profile, dataset_repo_id=dataset_repo_id)
     write_manifest(output_dir / "manifest.json", manifest)
     (output_dir / "README.md").write_text(
-        render_dataset_card_from_profile(
-            profile, asset_base_url=asset_base_url
-        ),
+        render_dataset_card_from_profile(profile, asset_base_url=asset_base_url),
         encoding="utf-8",
     )
 

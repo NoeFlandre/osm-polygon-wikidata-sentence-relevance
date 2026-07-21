@@ -98,6 +98,15 @@ omit = [
 show_missing = true
 skip_covered = false
 fail_under = 95
+exclude_lines = [
+    # Standard pragma for unreachable defensive branches.
+    "pragma: no cover",
+    # Defensive branches the type checker or contract gates consider
+    # impossible, kept for parity with the legacy renderer.
+    "raise NotImplementedError",
+    "raise AssertionError",
+    "if __name__ == .__main__.:",
+]
 
 [tool.ruff]
 target-version = "py312"
@@ -148,6 +157,12 @@ disallow_untyped_defs = true
 # wtpsplit is only imported lazily inside SaTSentenceSegmenter._get_model.
 # It is an optional extra; stubs are not guaranteed in the base env.
 module = "wtpsplit.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# torch is imported lazily by the optional accelerator adapter. PyTorch does
+# not expose a PEP 561 marker that mypy can rely on in every supported wheel.
+module = "torch.*"
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]

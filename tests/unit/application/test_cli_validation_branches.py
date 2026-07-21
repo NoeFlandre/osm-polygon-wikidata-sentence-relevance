@@ -128,6 +128,39 @@ class TestCLIArgumentValidationBranches:
         with pytest.raises(ValueError, match="surrounding whitespace"):
             _validate_args(args)
 
+    def test_blank_device_rejected(self, tmp_path):
+        from osm_polygon_sentence_relevance.application.cli import (
+            _build_parser,
+            _validate_args,
+        )
+
+        # The argparse ``choices`` filter rejects blank strings
+        # before ``_validate_args`` runs, so we cannot pass "   "
+        # directly. Build the args namespace manually.
+        args = _build_parser().parse_args(
+            [
+                "--input-root",
+                str(tmp_path / "in"),
+                "--output-dir",
+                str(tmp_path / "out"),
+                "--input-dataset-revision",
+                "r1",
+                "--pipeline-version",
+                "v1",
+            ]
+        )
+        # Force the blank value past argparse.
+        object.__setattr__(args, "device", "")
+        with pytest.raises(ValueError, match="device"):
+            _validate_args(args)
+
+    def test_input_dataset_revision_blank_rejected(self, tmp_path):
+        from osm_polygon_sentence_relevance.application.cli import _validate_args
+
+        args = _build_args(tmp_path, extra=["--input-dataset-revision", "   "])
+        with pytest.raises(ValueError, match="input_dataset_revision"):
+            _validate_args(args)
+
     def test_blank_input_dataset_id_hub_mode_rejected(self, tmp_path):
         from osm_polygon_sentence_relevance.application.cli import (
             _build_parser,
@@ -235,9 +268,7 @@ class TestCLIArgumentValidationBranches:
         assert resolved.mode == "local"
         assert resolved.resolved_revision == "r1"
 
-    def test_resolve_input_hub_mode_with_mocked_acquisition(
-        self, tmp_path
-    ) -> None:
+    def test_resolve_input_hub_mode_with_mocked_acquisition(self, tmp_path) -> None:
         """``_resolve_input`` returns a Hub-mode ``_ResolvedInput``."""
         from dataclasses import dataclass
 
@@ -316,9 +347,7 @@ class TestCLIArgumentValidationBranches:
             "   ",
         ]
         args = _build_parser().parse_args(argv)
-        with pytest.raises(
-            ValueError, match="publish_commit_message cannot be blank"
-        ):
+        with pytest.raises(ValueError, match="publish_commit_message cannot be blank"):
             _validate_args(args)
 
     def test_blank_publish_revision_rejected(self, tmp_path) -> None:
@@ -371,9 +400,7 @@ class TestCLIArgumentValidationBranches:
         with pytest.raises(ValueError, match="device must be one of"):
             _validate_args(args)
 
-    def test_main_returns_1_for_pipeline_failure(
-        self, tmp_path, monkeypatch
-    ) -> None:
+    def test_main_returns_1_for_pipeline_failure(self, tmp_path, monkeypatch) -> None:
         """``main`` must return exit code 1 when the pipeline raises."""
         from dataclasses import dataclass
         from typing import Any
@@ -473,7 +500,9 @@ class TestCLIArgumentValidationBranches:
             dataset_id: str = "owner/data"
             target_revision: str = "main"
             commit_id: str = "deadbeef"
-            commit_url: str = "https://huggingface.co/datasets/owner/data/commit/deadbeef"
+            commit_url: str = (
+                "https://huggingface.co/datasets/owner/data/commit/deadbeef"
+            )
             row_count: int = 0
             sha256: str = "a" * 64
 

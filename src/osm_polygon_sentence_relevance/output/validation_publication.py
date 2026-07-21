@@ -30,6 +30,7 @@ import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import pyarrow.parquet as pq
 
@@ -46,6 +47,7 @@ from osm_polygon_sentence_relevance.output.profile import (
     ProfileError,
     build_dataset_profile,
 )
+
 
 def _derive_asset_base_url(manifest: Mapping[str, Any]) -> str | None:
     """Return the asset base URL the publication script would have used.
@@ -161,9 +163,7 @@ def first_parquet_row(parquet_path: Path) -> dict[str, object]:
     """
     table = pq.read_table(parquet_path, columns=None)
     if table.num_rows == 0:
-        raise ExportError(
-            f"Cannot read example row from empty Parquet {parquet_path}"
-        )
+        raise ExportError(f"Cannot read example row from empty Parquet {parquet_path}")
     values = table.slice(0, 1).to_pydict()
     return {col: values[col][0] for col in table.column_names}
 
@@ -181,16 +181,12 @@ def load_asset_inventory(
     assets_dir = export_dir / assets_relative
     inventory: dict[str, AssetInfo] = {}
     if not assets_dir.is_dir():
-        raise ExportError(
-            f"Assets directory is missing: {assets_dir}"
-        )
+        raise ExportError(f"Assets directory is missing: {assets_dir}")
     for entry in sorted(assets_dir.iterdir()):
         if not entry.is_file():
             continue
         if entry.is_symlink():
-            raise ExportError(
-                f"Asset must not be a symlink: {entry}"
-            )
+            raise ExportError(f"Asset must not be a symlink: {entry}")
         sha = compute_asset_sha(entry)
         inventory[entry.name] = AssetInfo(
             name=entry.name,
@@ -203,9 +199,7 @@ def load_asset_inventory(
 def _require_manifest_string(manifest: Mapping[str, object], key: str) -> str:
     value = manifest.get(key)
     if not isinstance(value, str) or not value.strip():
-        raise ExportError(
-            f"Manifest field {key!r} must be a non-blank string"
-        )
+        raise ExportError(f"Manifest field {key!r} must be a non-blank string")
     return value
 
 
@@ -293,21 +287,16 @@ def validate_publication_directory(
         if entry.is_dir():
             if rel == _ASSETS_DIR_NAME:
                 for asset_entry in sorted(entry.iterdir()):
-                    asset_rel = (
-                        f"{rel}/{asset_entry.relative_to(entry).as_posix()}"
-                    )
+                    asset_rel = f"{rel}/{asset_entry.relative_to(entry).as_posix()}"
                     actual_relpaths.add(asset_rel)
             else:
                 raise ExportError(
-                    f"Publication directory contains unexpected "
-                    f"subdirectory: {rel!r}"
+                    f"Publication directory contains unexpected subdirectory: {rel!r}"
                 )
         elif entry.is_file():
             actual_relpaths.add(rel)
         elif entry.is_symlink():
-            raise ExportError(
-                f"Publication directory contains a symlink: {rel!r}"
-            )
+            raise ExportError(f"Publication directory contains a symlink: {rel!r}")
 
     expected_relpaths = set(_REQUIRED_PUBLICATION_FILES)
     if actual_relpaths != expected_relpaths:
@@ -341,9 +330,7 @@ def validate_publication_directory(
 
     missing_keys = sorted(set(_REQUIRED_MANIFEST_KEYS) - set(manifest.keys()))
     if missing_keys:
-        raise ExportError(
-            f"Manifest is missing required keys: {missing_keys}"
-        )
+        raise ExportError(f"Manifest is missing required keys: {missing_keys}")
 
     # Parquet schema is identical to OUTPUT_SENTENCE_SCHEMA (we
     # already enforced this on the export side; the publication
@@ -391,8 +378,7 @@ def validate_publication_directory(
     manifest_sha = _require_manifest_string(manifest, "sha256")
     if actual_sha.lower() != manifest_sha.lower():
         raise ExportError(
-            f"Manifest sha {manifest_sha!r} does not match Parquet "
-            f"sha {actual_sha!r}"
+            f"Manifest sha {manifest_sha!r} does not match Parquet sha {actual_sha!r}"
         )
 
     # Build the profile and use it as the single source of truth.
@@ -414,9 +400,7 @@ def validate_publication_directory(
                 input_dataset_id=manifest.get("input_dataset_id"),
             )
         except ProfileError as err:
-            raise ExportError(
-                f"Could not rebuild profile from Parquet: {err}"
-            ) from err
+            raise ExportError(f"Could not rebuild profile from Parquet: {err}") from err
     finally:
         if scratch_dir is None:
             scratch_ctx.cleanup()
@@ -434,9 +418,7 @@ def validate_publication_directory(
         sha = entry.get("sha256")
         size = entry.get("bytes")
         if isinstance(name, str) and isinstance(sha, str) and isinstance(size, int):
-            asset_map[name] = AssetInfo(
-                name=name, sha256=sha, bytes_=size
-            )
+            asset_map[name] = AssetInfo(name=name, sha256=sha, bytes_=size)
     if asset_map:
         profile = replace(profile, assets=asset_map)
 
@@ -456,17 +438,21 @@ def validate_publication_directory(
     # Cross-check language breakdown vs profile one-by-one (so a
     # value-mutation that preserves the sum is still caught).
     if dict(manifest["counts_by_language"]) != dict(profile.language_counts):
-        raise ExportError(
-            "Manifest counts_by_language disagrees with the profile"
-        )
+        raise ExportError("Manifest counts_by_language disagrees with the profile")
     if dict(manifest["counts_by_source"]) != dict(profile.source_counts):
-        raise ExportError(
-            "Manifest counts_by_source disagrees with the profile"
-        )
+        raise ExportError("Manifest counts_by_source disagrees with the profile")
     if dict(manifest["counts_by_region"]) != dict(profile.region_counts):
-        raise ExportError(
-            "Manifest counts_by_region disagrees with the profile"
-        )
+        raise ExportError("Manifest counts_by_region disagrees with the profile")
+    for key, expected in (
+        ("input_occurrence_count", profile.input_occurrence_count),
+        ("duplicates_removed", profile.duplicates_removed),
+        (
+            "cross_source_duplicate_groups",
+            profile.cross_source_duplicate_groups,
+        ),
+    ):
+        if manifest[key] != expected:
+            raise ExportError(f"Manifest {key} disagrees with the profile")
 
     # Asset cross-check
     inventory = load_asset_inventory(export_dir)
@@ -480,19 +466,14 @@ def validate_publication_directory(
     manifest_asset_map: dict[str, Mapping[str, object]] = {}
     for entry in manifest_assets:
         if not isinstance(entry, dict):
-            raise ExportError(
-                "Manifest asset entries must be JSON objects"
-            )
+            raise ExportError("Manifest asset entries must be JSON objects")
         name = entry.get("name")
         sha = entry.get("sha256")
         if not isinstance(name, str) or not isinstance(sha, str):
-            raise ExportError(
-                "Manifest asset entries must have a 'name' and 'sha256'"
-            )
+            raise ExportError("Manifest asset entries must have a 'name' and 'sha256'")
         if not name or not sha:
             raise ExportError(
-                "Manifest asset entries must have non-empty 'name' and "
-                "'sha256'"
+                "Manifest asset entries must have non-empty 'name' and 'sha256'"
             )
         manifest_asset_map[name] = entry
 
@@ -513,9 +494,7 @@ def validate_publication_directory(
             )
         manifest_bytes = manifest_entry.get("bytes")
         if not isinstance(manifest_bytes, int) or manifest_bytes < 0:
-            raise ExportError(
-                f"Manifest asset {name!r} has invalid 'bytes' value"
-            )
+            raise ExportError(f"Manifest asset {name!r} has invalid 'bytes' value")
         if manifest_bytes != info.bytes_:
             raise ExportError(
                 f"Asset {name!r} has manifest bytes {manifest_bytes} "
