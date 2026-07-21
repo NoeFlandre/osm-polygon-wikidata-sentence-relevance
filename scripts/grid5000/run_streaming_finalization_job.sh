@@ -27,6 +27,12 @@ EXPECTED_SHARD="${10}"; readonly EXPECTED_SHARD
 WALLTIME="${11}"; readonly WALLTIME
 NODE_TYPE="${12}"; readonly NODE_TYPE
 
+JOB_LOG_DIR="${LOG_ROOT}/${OAR_JOB_ID}"
+mkdir -m 0700 -- "${JOB_LOG_DIR}" 2>/dev/null || true
+WRAPPER_LOG="${JOB_LOG_DIR}/finalize.exit_code"
+exec 9>"${JOB_LOG_DIR}/finalize.stderr.log"
+exec 1>"${JOB_LOG_DIR}/finalize.stdout.log"
+
 # HEAD may legitimately differ from EXPECTED_SOURCE_COMMIT: the latter
 # is the data identity (the source commit that produced the staged
 # checkpoint) and the wrapper does not enforce that the checkout was
@@ -36,11 +42,15 @@ NODE_TYPE="${12}"; readonly NODE_TYPE
 # scheduler is actually running is provably the script present in
 # the checkout.
 if ! git -C "${REPO_ROOT}" cat-file -e "HEAD:scripts/streaming/finalization.py" 2>/dev/null; then
-    echo "run_streaming_finalization_job: HEAD does not contain scripts/streaming/finalization.py; refusing" >&2
+    echo "run_streaming_finalization_job: HEAD does not contain scripts/streaming/finalization.py; refusing" >&9
+    printf '1\n' >"${WRAPPER_LOG}"
+    chmod 0600 "${JOB_LOG_DIR}"/* 2>/dev/null || true
     exit 1
 fi
 if [ -n "$(git -C "${REPO_ROOT}" status --porcelain)" ]; then
-    echo "run_streaming_finalization_job: checkout is dirty" >&2
+    echo "run_streaming_finalization_job: checkout is dirty" >&9
+    printf '1\n' >"${WRAPPER_LOG}"
+    chmod 0600 "${JOB_LOG_DIR}"/* 2>/dev/null || true
     exit 1
 fi
 
@@ -54,14 +64,11 @@ fi
 SCRATCH_BASE="${LOCALSCRATCH:-${OAR_JOB_SCRATCH_DIR:-/tmp/oar-${OAR_JOB_ID}}}"
 case "${SCRATCH_BASE}" in
     *"${OAR_JOB_ID}"*) ;;
-    *) echo "run_streaming_finalization_job: scratch path is not allocation-bound" >&2; exit 1 ;;
+    *) echo "run_streaming_finalization_job: scratch path is not allocation-bound" >&9; printf '1\n' >"${WRAPPER_LOG}"; chmod 0600 "${JOB_LOG_DIR}"/* 2>/dev/null || true; exit 1 ;;
 esac
 mkdir -p -m 0700 -- "${SCRATCH_BASE}"
 WORK_DIR="${SCRATCH_BASE}/osm_finalize_${RUN_ID}"
 mkdir -m 0700 -- "${WORK_DIR}"
-
-JOB_LOG_DIR="${LOG_ROOT}/${OAR_JOB_ID}"
-mkdir -m 0700 -- "${JOB_LOG_DIR}"
 
 set +e
 "${PAYLOAD}" "${REPO_ROOT}" "${HF_HOME}" "${WORK_DIR}" \
