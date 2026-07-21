@@ -136,7 +136,15 @@ class TestCardFactualClaims:
         # Raw section text is stripped (.strip()); not verbatim input.
         assert "verbatim" not in card
 
-    def test_card_states_land_use_labels_are_future_work(self):
+    def test_card_omits_land_use_future_work_phrase(self):
+        """The card no longer mentions future downstream land-use work.
+
+        Phase 9P removed the original sentence (which talked about
+        future work for land-use relevance labels, polygon-description
+        classifications, etc.) at the user's request; the test pins
+        the omission so a regression cannot quietly re-introduce
+        the phrase.
+        """
         from osm_polygon_sentence_relevance.output.dataset_card import (
             compute_statistics,
             render_dataset_card,
@@ -150,9 +158,45 @@ class TestCardFactualClaims:
             parquet_sha256="0" * 64,
         )
         card = render_dataset_card(stats).lower()
-        assert "future" in card
-        assert "land-use" in card or "land use" in card
-        assert "absent" in card
+        # The phrase "land-use relevance labels" must not appear.
+        assert "land-use relevance labels" not in card
+        assert "similarity-pair annotations" not in card
+        # The "preview rows" line was also removed; the preview
+        # section must show only polygons/Wikidata entities/documents.
+        assert "preview rows" not in card
+        # The word "articles" must not appear in the introduction
+        # paragraph about OpenStreetMap polygons.
+        assert "polygon articles" not in card
+
+    def test_card_describes_the_actual_edit_marker_normalization(self):
+        """The public card must match ``normalize_sentence`` exactly.
+
+        Normalization removes consecutive leading bracketed MediaWiki
+        markers containing a pipe when their closing bracket occurs within
+        120 characters. It does not remove templates, list syntax, or
+        signature tildes.
+        """
+        from osm_polygon_sentence_relevance.output.dataset_card import (
+            compute_statistics,
+            render_dataset_card,
+        )
+
+        ds = _finalize([make_segmented_row(sentence_text_normalized="x")])
+        stats = compute_statistics(
+            ds.table,
+            input_dataset_revision="rev",
+            pipeline_version="1.0.0",
+            parquet_sha256="0" * 64,
+        )
+        card = render_dataset_card(stats)
+        prose = " ".join(card.split())
+
+        assert "`[label | target]`" in prose
+        assert "within 120 characters" in prose
+        assert "consecutive leading" in prose
+        assert "signature tildes" not in prose
+        assert "{{subst:" not in prose
+        assert "numbered list" not in prose
 
 
 # ---------------------------------------------------------------------------

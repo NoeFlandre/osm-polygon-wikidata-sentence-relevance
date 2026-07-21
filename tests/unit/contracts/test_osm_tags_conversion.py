@@ -240,10 +240,7 @@ class TestFinalizationConvertsOsmTags:
             "lon": [0.0],
         }
         return pa.Table.from_pydict(
-            {
-                name: row[name]
-                for name in SEGMENTED_SENTENCES_SCHEMA.names
-            },
+            {name: row[name] for name in SEGMENTED_SENTENCES_SCHEMA.names},
             schema=SEGMENTED_SENTENCES_SCHEMA,
         )
 
@@ -285,9 +282,7 @@ class TestFinalizationConvertsOsmTags:
             "lat": [0.0],
             "lon": [0.0],
         }
-        table = pa.Table.from_pydict(
-            base, schema=SEGMENTED_SENTENCES_SCHEMA
-        )
+        table = pa.Table.from_pydict(base, schema=SEGMENTED_SENTENCES_SCHEMA)
         result = finalize_sentence_dataset(
             table, input_dataset_revision="r", pipeline_version="v"
         )

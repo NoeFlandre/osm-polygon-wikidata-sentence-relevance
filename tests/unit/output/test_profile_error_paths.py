@@ -101,9 +101,7 @@ def _install_test_outline(
     target.write_text(body)
     actual = hashlib.sha256(target.read_bytes()).hexdigest().lower()
     monkeypatch.setattr(profile_mod, "_NATURAL_EARTH_PATH", target)
-    monkeypatch.setattr(
-        profile_mod, "_NATURAL_EARTH_EXPECTED_SHA256", actual
-    )
+    monkeypatch.setattr(profile_mod, "_NATURAL_EARTH_EXPECTED_SHA256", actual)
 
 
 class TestLoadAfghanistanOutlineErrors:
@@ -140,9 +138,7 @@ class TestLoadAfghanistanOutlineErrors:
         target = tmp_path / "no-feat.geojson"
         _install_test_outline(
             monkeypatch,
-            body=json.dumps(
-                {"type": "FeatureCollection", "features": []}
-            ),
+            body=json.dumps({"type": "FeatureCollection", "features": []}),
             target=target,
         )
         with pytest.raises(ProfileError, match="no features"):
@@ -199,9 +195,7 @@ class TestLoadAfghanistanOutlineErrors:
 
 
 class TestBuildProfileErrorBranches:
-    def test_missing_required_metadata_keys(
-        self, tmp_path: Path
-    ) -> None:
+    def test_missing_required_metadata_keys(self, tmp_path: Path) -> None:
         """When required provenance keys are absent, ProfileError must
         fire before any row is read."""
         path = tmp_path / "p.parquet"
@@ -242,9 +236,7 @@ class TestBuildProfileErrorBranches:
         with pytest.raises(ProfileError, match="not valid UTF-8"):
             _parse_meta({b"k": b"\xff\xfe"}, b"k")
 
-    def test_blank_pipeline_version_metadata(
-        self, tmp_path: Path
-    ) -> None:
+    def test_blank_pipeline_version_metadata(self, tmp_path: Path) -> None:
         path = tmp_path / "p.parquet"
         sha = _write_minimal_parquet(
             path,
@@ -264,9 +256,7 @@ class TestBuildProfileErrorBranches:
                 scratch_dir=tmp_path,
             )
 
-    def test_explicit_dataset_id_mismatch(
-        self, tmp_path: Path
-    ) -> None:
+    def test_explicit_dataset_id_mismatch(self, tmp_path: Path) -> None:
         path = tmp_path / "p.parquet"
         sha = _write_minimal_parquet(
             path,
@@ -285,9 +275,7 @@ class TestBuildProfileErrorBranches:
                 input_dataset_id="another/different",
             )
 
-    def test_parquet_schema_mismatch(
-        self, tmp_path: Path
-    ) -> None:
+    def test_parquet_schema_mismatch(self, tmp_path: Path) -> None:
         """A parquet whose schema does not match OUTPUT_SENTENCE_SCHEMA
         must be rejected at profile-construction time."""
         path = tmp_path / "p.parquet"
@@ -304,9 +292,7 @@ class TestBuildProfileErrorBranches:
                 scratch_dir=tmp_path,
             )
 
-    def test_parquet_row_revision_mismatch(
-        self, tmp_path: Path
-    ) -> None:
+    def test_parquet_row_revision_mismatch(self, tmp_path: Path) -> None:
         """A row whose revision disagrees with the metadata must be
         rejected (the iteration re-checks the schema metadata)."""
         path = tmp_path / "p.parquet"
@@ -342,9 +328,7 @@ class TestBuildProfileErrorBranches:
                 scratch_dir=tmp_path,
             )
 
-    def test_parquet_row_pipeline_version_mismatch(
-        self, tmp_path: Path
-    ) -> None:
+    def test_parquet_row_pipeline_version_mismatch(self, tmp_path: Path) -> None:
         """A row whose pipeline_version disagrees with the metadata."""
         path = tmp_path / "p.parquet"
         sha = _write_minimal_parquet(
@@ -372,9 +356,7 @@ class TestBuildProfileErrorBranches:
                 scratch_dir=tmp_path,
             )
 
-    def test_parquet_with_polygon_name_records_count(
-        self, tmp_path: Path
-    ) -> None:
+    def test_parquet_with_polygon_name_records_count(self, tmp_path: Path) -> None:
         """The profile must record ``rows_with_polygon_name``."""
         path = tmp_path / "p.parquet"
         sha = _write_minimal_parquet(
@@ -405,11 +387,53 @@ class TestBuildProfileErrorBranches:
         )
         assert profile.rows_with_polygon_name == 1
 
+    def test_empty_parquet_rejected_with_profile_error(self, tmp_path: Path) -> None:
+        """An empty Parquet (zero rows) must raise ``ProfileError``.
+
+        The build path raises ``ProfileError`` for an empty file
+        either during SQLite loading or during the first-row
+        sample, depending on which loop fires first.  We accept
+        any ``ProfileError`` message so the test is robust against
+        re-orderings of the internal checks.
+        """
+        path = tmp_path / "empty.parquet"
+        table = pa.table(
+            {
+                name: pa.array([], type=field.type)
+                for name, field in zip(
+                    OUTPUT_SENTENCE_SCHEMA.names,
+                    OUTPUT_SENTENCE_SCHEMA,
+                    strict=True,
+                )
+            },
+            schema=OUTPUT_SENTENCE_SCHEMA,
+        )
+        table = table.replace_schema_metadata(
+            {
+                b"input_dataset_revision": b"rev",
+                b"pipeline_version": b"1.0.0",
+            }
+        )
+        pq.write_table(table, path)
+        sha = hashlib.sha256(path.read_bytes()).hexdigest()
+        # The empty-parquet path raises ProfileError; the error
+        # message can mention either "empty Parquet" or be a
+        # downstream failure.  We accept any ProfileError here so
+        # the test exercises the rejection branch without locking
+        # in the order of internal checks.
+        with pytest.raises(ProfileError):
+            build_dataset_profile(
+                parquet_path=path,
+                parquet_sha256=sha,
+                segmentation_model="m",
+                segmentation_revision="r",
+                source_commit="c",
+                scratch_dir=tmp_path,
+            )
+
 
 class TestRenderGeoErrorBranches:
-    def test_render_handles_unreadable_parquet(
-        self, tmp_path: Path
-    ) -> None:
+    def test_render_handles_unreadable_parquet(self, tmp_path: Path) -> None:
         """A path that is not a real parquet must not crash the renderer."""
         path = tmp_path / "p.parquet"
         _write_minimal_parquet(path)
@@ -429,9 +453,7 @@ class TestRenderGeoErrorBranches:
         # The renderer should still emit a valid PNG (no scatter dots).
         assert png.startswith(b"\x89PNG\r\n\x1a\n")
 
-    def test_render_handles_missing_parquet_path(
-        self, tmp_path: Path
-    ) -> None:
+    def test_render_handles_missing_parquet_path(self, tmp_path: Path) -> None:
         """A non-existent parquet path must not crash the renderer."""
         path = tmp_path / "p.parquet"
         _write_minimal_parquet(path)

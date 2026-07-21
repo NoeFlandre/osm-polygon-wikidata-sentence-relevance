@@ -1086,7 +1086,6 @@ of the production export pipeline.
 - **Region:** {display_name}
 - **Region key in this preview:** `{_escape_md_inline(region_key)}`
 - **Region rows:** {region_rows}
-- **Preview rows:** {stats.row_count}
 - **Preview polygons:** {stats.unique_polygons}
 - **Preview Wikidata entities:** {stats.unique_wikidata_entities}
 - **Preview documents:** {stats.unique_documents}
@@ -1121,14 +1120,9 @@ def render_dataset_card(stats: DatasetStatistics) -> str:
 # OSM Polygon Wikidata Sentence Relevance
 
 This dataset contains normalized sentences extracted from OpenStreetMap
-(OSM) polygon articles and their linked Wikipedia / Wikivoyage pages.
+(OSM) polygons and their linked Wikipedia / Wikivoyage pages.
 Each row is a deduplicated sentence occurrence scoped to a polygon,
 language, and content hash.
-
-The dataset is a sentence-level snapshot with sentence/provenance fields
-only. Land-use relevance labels, polygon-description classifications,
-relevance scores, and similarity-pair annotations are future downstream
-work and are absent from this dataset.
 
 {preview_section}## Dataset summary
 
@@ -1211,8 +1205,12 @@ has its surrounding whitespace trimmed and is then passed through a
 fixed-order normalization pipeline that performs Unicode NFC
 normalization, removes the configured zero-width characters (U+200B,
 U+2060, U+FEFF), replaces Unicode control characters with spaces,
-collapses whitespace, and strips leading MediaWiki edit markers. The
-pipeline **preserves case**, punctuation,
+collapses whitespace, and strips consecutive leading MediaWiki edit
+markers such as `[label | target]`. A marker must start at the current
+leading position, contain a pipe (`|`), and close with `]` within 120
+characters. The pipeline repeats this check until the next leading text is
+not a valid marker, then collapses whitespace again. It **preserves case**,
+punctuation,
 accents, and joiner characters; only `sentence_text_normalized` (the
 post-pipeline text) is used as the content hash and dedup key.
 `sentence_text_raw` is the segment text after surrounding-whitespace
@@ -1243,7 +1241,7 @@ where they disagree.
 
 ## Intended use
 
-This dataset supports text-research tasks over OSM polygon articles:
+This dataset supports text-research tasks over OSM polygons:
 contextual analysis of how places are described across Wikipedia and
 Wikivoyage, sentence-level corpus studies, and downstream modeling that
 needs sentence text plus article provenance. It is intended for research
@@ -1338,14 +1336,11 @@ def schema_has_map_types(schema: Any) -> bool:
 
 _SCHEMA_FIELD_DESCRIPTIONS: dict[str, str] = {
     "sentence_id": (
-        "Deterministic ID from polygon, language, and sentence "
-        "content hash."
+        "Deterministic ID from polygon, language, and sentence content hash."
     ),
     "polygon_id": "OSM polygon identifier.",
     "wikidata": "Wikidata entity QID for the polygon/page.",
-    "document_id": (
-        "Document/page identifier within its source/site/language."
-    ),
+    "document_id": ("Document/page identifier within its source/site/language."),
     "article_id": "Article identifier where available.",
     "source": "`wikipedia` or `wikivoyage`.",
     "language": "Language code of the sentence.",
@@ -1355,15 +1350,9 @@ _SCHEMA_FIELD_DESCRIPTIONS: dict[str, str] = {
     "section_index": "Section ordinal within the document.",
     "section_path": "Section breadcrumb path.",
     "sentence_index": "Sentence ordinal within the section.",
-    "sentence_text_raw": (
-        "Segment text after surrounding-whitespace trimming."
-    ),
-    "sentence_text_normalized": (
-        "Normalised sentence text used as the dedup key."
-    ),
-    "previous_sentence": (
-        "Prior sentence in the section (context)."
-    ),
+    "sentence_text_raw": ("Segment text after surrounding-whitespace trimming."),
+    "sentence_text_normalized": ("Normalised sentence text used as the dedup key."),
+    "previous_sentence": ("Prior sentence in the section (context)."),
     "next_sentence": "Next sentence in the section (context).",
     "url": "Source URL of the document.",
     "page_id": "Source page ID.",
@@ -1371,15 +1360,11 @@ _SCHEMA_FIELD_DESCRIPTIONS: dict[str, str] = {
     "revision_timestamp": "Source revision timestamp.",
     "document_content_hash": "Hash of the source document.",
     "section_content_hash": "Hash of the source section.",
-    "sentence_content_hash": (
-        "Hash of the normalised sentence (dedup key component)."
-    ),
+    "sentence_content_hash": ("Hash of the normalised sentence (dedup key component)."),
     "duplicate_occurrence_count": (
         "Number of source occurrences collapsed into this row."
     ),
-    "duplicate_sources": (
-        "Distinct sources among the collapsed occurrences."
-    ),
+    "duplicate_sources": ("Distinct sources among the collapsed occurrences."),
     "polygon_name": "Human-readable polygon name.",
     "osm_primary_tag": "Primary OSM tag of the polygon.",
     "osm_tags": (
@@ -1388,18 +1373,10 @@ _SCHEMA_FIELD_DESCRIPTIONS: dict[str, str] = {
         "ingest the export."
     ),
     "region": "Input region/extract name.",
-    "lat": (
-        "Latitude of the polygon centroid, if known."
-    ),
-    "lon": (
-        "Longitude of the polygon centroid, if known."
-    ),
-    "input_dataset_revision": (
-        "Exact input revision recorded for reproducibility."
-    ),
-    "pipeline_version": (
-        "Pipeline version recorded for reproducibility."
-    ),
+    "lat": ("Latitude of the polygon centroid, if known."),
+    "lon": ("Longitude of the polygon centroid, if known."),
+    "input_dataset_revision": ("Exact input revision recorded for reproducibility."),
+    "pipeline_version": ("Pipeline version recorded for reproducibility."),
 }
 
 
@@ -1409,10 +1386,7 @@ def _profile_field_type_label(field_name: str) -> str:
     if pa.types.is_list(f.type):
         inner = f.type.value_type
         if pa.types.is_struct(inner):
-            children = ", ".join(
-                f"`{c.name}`: string"
-                for c in inner
-            )
+            children = ", ".join(f"`{c.name}`: string" for c in inner)
             return f"list<struct<{children}>>"
         return f"list<{inner}>"
     return str(f.type)
@@ -1427,25 +1401,22 @@ def schema_field_documentation() -> list[tuple[str, str, str, str]]:
     rows: list[tuple[str, str, str, str]] = []
     for f in OUTPUT_SENTENCE_SCHEMA:
         nullable = "yes" if f.nullable else "no"
-        desc = _SCHEMA_FIELD_DESCRIPTIONS.get(
-            f.name, "(no documentation)"
+        desc = _SCHEMA_FIELD_DESCRIPTIONS.get(f.name, "(no documentation)")
+        rows.append(
+            (
+                f.name,
+                _profile_field_type_label(f.name),
+                nullable,
+                desc,
+            )
         )
-        rows.append((
-            f.name,
-            _profile_field_type_label(f.name),
-            nullable,
-            desc,
-        ))
     return rows
 
 
 def _profile_schema_table() -> str:
     """Render the on-card schema field documentation table."""
     rows = schema_field_documentation()
-    header = (
-        "| Field | Type | Nullable | Description |\n"
-        "| --- | --- | --- | --- |"
-    )
+    header = "| Field | Type | Nullable | Description |\n| --- | --- | --- | --- |"
     body = "\n".join(
         f"| `{name}` | `{type_label}` | {nullable} | {desc} |"
         for name, type_label, nullable, desc in rows
@@ -1456,12 +1427,24 @@ def _profile_schema_table() -> str:
 def _profile_yaml(stats: DatasetStatistics, profile: Any) -> str:
     """Render the minimal valid YAML front matter for the on-card.
 
-    Includes ``language`` block, a ``license: other`` declaration, and
-    a ``dataset_info.splits`` entry so the Hugging Face Viewer can
-    resolve the default config/split.  No ``dataset_info.features``
-    block: the parquet is now Viewer-compatible directly, so we
-    delegate feature discovery to the actual parquet bytes (which is
-    what produces the structured JSON on the Viewer UI).
+    Includes ``language`` block, a ``license: other`` declaration, an
+    explicit ``configs`` block (with ``data_files`` pointing at
+    ``sentences.parquet`` for the ``train`` split), and a
+    ``dataset_info.splits`` entry so the Hugging Face Viewer can
+    resolve the default config/split.  The explicit
+    ``configs[].data_files`` declaration prevents the Viewer from
+    interpreting ``assets/*.png`` as dataset rows (imagefolder
+    inference) and pins the parquet as the only data source.
+
+    Note: the ``dataset_info.features`` block is intentionally
+    omitted.  The Parquet file embeds the canonical
+    ``list<struct<{key, value}>>`` Arrow schema, and the Viewer
+    uses the Parquet schema (not the YAML features block) to drive
+    type-cast.  Adding a misaligned YAML features block triggers a
+    ``CastError`` because the Viewer's YAML-derived schema uses
+    ``Sequence<key: list<string>, value: list<string>>`` while the
+    Parquet's actual schema is
+    ``list<struct<key: string, value: string>>``.
     """
     if stats.language_counts:
         languages_block = "\n".join(
@@ -1475,14 +1458,12 @@ def _profile_yaml(stats: DatasetStatistics, profile: Any) -> str:
         "license: other",
         "pretty_name: OSM Polygon Wikidata Sentence Relevance",
         language_section,
+        "configs:",
+        "  - config_name: default",
+        "    data_files:",
+        "      - split: train",
+        "        path: sentences.parquet",
         "dataset_info:",
-        "  features:",
-        "  - name: osm_tags",
-        "    sequence:",
-        "    - name: key",
-        "      dtype: string",
-        "    - name: value",
-        "      dtype: string",
         "  splits:",
         "  - name: train",
         f"    num_examples: {stats.row_count}",
@@ -1513,36 +1494,14 @@ def _profile_preview_section(profile: Any) -> str:
     """
     if len(profile.region_counts) != 1:
         return ""
-    region_key, region_rows = next(iter(profile.region_counts.items()))
+    region_key, _region_rows = next(iter(profile.region_counts.items()))
     display_name = region_key.replace("-latest", "").replace("-", " ").title()
     if not display_name:
         display_name = region_key
-    sha = profile.parquet_sha256
-    revision = _escape_md_inline_profile(profile.input_dataset_revision)
-    sha_inline = _escape_md_inline_profile(sha)
     return (
         f"## Dataset scope\n\n"
-        f"This published artifact is the **{display_name}-only preview** "
-        f"of the OSM Polygon Wikidata Sentence Relevance dataset. "
-        f"It contains {profile.row_count} deduplicated sentence rows "
-        f"extracted from {profile.unique_polygons} unique OSM polygons "
-        f"in the `{region_key}` shard, covering "
-        f"{profile.unique_wikidata_entities} Wikidata entities and "
-        f"{profile.unique_documents} unique documents. The full "
-        f"multi-region dataset is published incrementally; the current "
-        f"artifact covers a single region only and is intended as a "
-        f"canary/validation snapshot of the production export "
-        f"pipeline.\n\n"
-        f"- **Region:** {display_name}\n"
-        f"- **Region key:** `{_escape_md_inline_profile(region_key)}`\n"
-        f"- **Region rows:** {region_rows}\n"
-        f"- **Preview rows:** {profile.row_count}\n"
-        f"- **Preview polygons:** {profile.unique_polygons}\n"
-        f"- **Preview Wikidata entities:** "
-        f"{profile.unique_wikidata_entities}\n"
-        f"- **Preview documents:** {profile.unique_documents}\n"
-        f"- **Recorded input revision:** `{revision}`\n"
-        f"- **Preview Parquet SHA-256:** `{sha_inline}`\n"
+        f"Current release: **{display_name} only** "
+        f"(`{_escape_md_inline_profile(region_key)}` shard).\n\n"
     )
 
 
@@ -1637,10 +1596,7 @@ def render_dataset_card_from_profile(
             profile.language_counts.items(), key=lambda kv: (-kv[1], kv[0])
         )
     )
-    full_language_table = (
-        "| Language | Rows |\n| --- | --- |\n"
-        f"{language_table_rows}\n"
-    )
+    full_language_table = f"| Language | Rows |\n| --- | --- |\n{language_table_rows}\n"
 
     return f"""\
 {yaml_block}
@@ -1652,26 +1608,21 @@ def render_dataset_card_from_profile(
 # OSM Polygon Wikidata Sentence Relevance
 
 This dataset contains normalised sentences extracted from OpenStreetMap
-(OSM) polygon articles and their linked Wikipedia / Wikivoyage pages.
+(OSM) polygons and their linked Wikipedia / Wikivoyage pages.
 Each row is a deduplicated sentence occurrence scoped to a polygon,
 language, and content hash.
-
-The dataset is a sentence-level snapshot with sentence/provenance fields
-only. Land-use relevance labels, polygon-description classifications,
-relevance scores, and similarity-pair annotations are future downstream
-work and are absent from this dataset.
 
 {preview_section}## Dataset summary
 
 - **Total sentence rows:** {profile.row_count}
-- **Unique sentence IDs:** {profile.unique_sentence_ids}
+- **Input sentence occurrences:** {profile.input_occurrence_count}
+- **Duplicates removed:** {profile.duplicates_removed}
+- **Cross-source duplicate groups:** {profile.cross_source_duplicate_groups}
 - **Unique polygons:** {profile.unique_polygons}
 - **Unique Wikidata entities:** {profile.unique_wikidata_entities}
-- **Unique document identities
-  (source, site, language, document_id):** {profile.unique_documents}
+- **Unique documents:** {profile.unique_documents}
+- **Languages:** {len(profile.language_counts)}
 - **Rows with coordinates:** {coords} / {total}
-- **Rows without coordinates:** {profile.rows_without_coordinates} / {total}
-- **Rows with polygon_name:** {profile.rows_with_polygon_name}
 - **Sentence length (chars):**
   min {profile.sentence_length_min},
   mean {profile.sentence_length_mean:.2f},
@@ -1681,6 +1632,8 @@ work and are absent from this dataset.
 - **Pipeline version:** `{_escape_md_inline_profile(profile.pipeline_version)}`
 - **Exported Parquet SHA-256:** `{_escape_md_inline_profile(profile.parquet_sha256)}`
 
+{_counts_table("Sources", profile.source_counts)}
+
 ## Source dataset and recorded input revision
 
 {_source_provenance_section(stats)}
@@ -1689,11 +1642,8 @@ work and are absent from this dataset.
 
 {geo_md}
 
-The scatter plot shows the centroid of every polygon with both
-`lat` and `lon` populated (one dot per polygon, not one per row).
-The visible extent is derived from the actual data; the
-`(min, max)` pair reported under *Dataset summary* is the precise
-bounding box used to auto-fit the asset.
+One dot represents each unique polygon with coordinates; the map extent
+is derived from the data.
 
 ## Language coverage
 
@@ -1705,28 +1655,11 @@ bounding box used to auto-fit the asset.
 {full_language_table}
 </details>
 
-A "document identity" is defined as the tuple
-`(source, site, language, document_id)`. Rows with the same raw
-`document_id` but different source / site / language are treated as
-distinct documents.
+## Processing
 
-## Wikipedia and Wikivoyage coverage
-
-{_counts_table("Source coverage", profile.source_counts)}
-
-Wikipedia and Wikivoyage rows may describe the same Wikidata entity;
-cross-source duplicates are collapsed to a single canonical
-occurrence during finalisation. The canonical selection rule is
-documented below in *Deterministic IDs, deduplication, and context
-policy*.
-
-## Sentence segmentation and normalisation
-
-Sentences were extracted using the segmentation model
-`{_escape_md_inline_profile(profile.segmentation_model)}`
-at the exact model revision
-`{_escape_md_inline_profile(profile.segmentation_revision)}`,
-recorded for reproducibility.
+Sentence boundaries were produced with
+`{_escape_md_inline_profile(profile.segmentation_model)}` at revision
+`{_escape_md_inline_profile(profile.segmentation_revision)}`.
 
 Each emitted segment has its surrounding whitespace trimmed and is
 then passed through a fixed-order normalisation pipeline:
@@ -1736,23 +1669,18 @@ then passed through a fixed-order normalisation pipeline:
    `U+FEFF`).
 3. Replacement of Unicode control characters with spaces.
 4. Whitespace collapse.
-5. Stripping of leading MediaWiki edit markers.
+5. Stripping of consecutive leading MediaWiki edit markers such as
+   `[label | target]`. A marker must start at the current leading
+   position, contain a pipe (`|`), and close with `]` within 120
+   characters. The check repeats until the next leading text is not a
+   valid marker, after which whitespace is collapsed again.
 
-The pipeline preserves case, punctuation, accents, and joiner
-characters; only `sentence_text_normalized` (the post-pipeline text)
-is used as the content hash and dedup key.
-
-## Deterministic IDs, deduplication, and context policy
-
-Each sentence occurrence is assigned a deterministic `sentence_id`
-derived from `polygon_id`, `language`, and the SHA-256 of the
-normalised text. Exact duplicates (same polygon, language, and
-normalised text) are collapsed into a single canonical occurrence.
-When a Wikipedia and a Wikivoyage occurrence collide, Wikipedia is
-chosen as the canonical source; the full set of contributing sources
-is recorded in `duplicate_sources`. Intra-section previous/next
-sentences are attached as context and never alter the identity or
-content of the row itself.
+Case, punctuation, accents and joiner characters are preserved.
+`sentence_id` is derived from `polygon_id`, language and the SHA-256 of
+the normalised text. Exact duplicates within that key are collapsed;
+Wikipedia is the canonical row when Wikipedia and Wikivoyage collide,
+while `duplicate_sources` retains all contributing sources. Adjacent
+sentences are context fields and do not affect identity.
 
 ## Real example row (from the export)
 
@@ -1765,81 +1693,42 @@ content of the row itself.
 
 </details>
 
-## Output schema (field descriptions)
+## Schema
 
-The export is a single Parquet table (`sentences.parquet`) with the
-following schema. Note the ``osm_tags`` column is now encoded as a
-list of ``{{key, value}}`` structs (the legacy ``map<string,string>``
-form is not ingestible by the Hugging Face ``datasets`` library).
+The export is a single Parquet table. `osm_tags` is represented as a
+Viewer-compatible list of `{{key, value}}` structs.
+
+<details>
+<summary>Show all fields</summary>
 
 {schema_table}
 
-## Provenance and revision tracking
+</details>
 
-Every export records `input_dataset_revision`, `pipeline_version`,
-and (when applicable) `input_dataset_id` in both the Parquet schema
-metadata and the `manifest.json`. The manifest also stores the
-Parquet SHA-256, the asset SHA-256s, the segmentation model name and
-exact revision, and the source-code commit that produced this export,
-so the content identity of every byte in this directory is
-verifiable independently of this card. The versioned `statistics`
-object inside the manifest and the top-level count fields are
-derived from the same computation; the validator rejects manifests
-where they disagree.
+## Provenance and reproducibility
 
-## Intended use
+The Parquet metadata and `manifest.json` record the input dataset,
+input revision, pipeline version, model revision, producing source
+commit and artifact hashes. Identical pinned inputs and locked
+dependencies produce deterministic artifacts.
 
-This dataset supports text-research tasks over OSM polygon articles:
-contextual analysis of how places are described across Wikipedia and
-Wikivoyage, sentence-level corpus studies, and downstream modeling
-that needs sentence text plus article provenance. It is intended for
-research and evaluation, not as a substitute for the upstream sources.
-The dataset is not a labelled dataset: it does not contain relevance
-labels, similarity pairs, or classification outputs, and should not
-be treated as one.
+## Uses and limitations
 
-## Limitations and known biases
+Suitable uses include multilingual corpus analysis and research on how
+places are described across Wikipedia and Wikivoyage. This is not a
+labelled relevance, similarity or classification dataset.
 
 - Extraction depends on upstream OSM / Wikimedia availability,
-  coverage, and language balance; over-represented languages and
-  regions will be reflected in the statistics above.
-- Coordinates are only present when the source polygon carries
-  centroid information; see the coordinate counts above.
+  coverage and language balance.
 - Sentence segmentation uses an automatic multilingual model and may
   mis-segment short or mixed-script text.
-- Deduplication is exact-match on the normalised text within a
-  polygon and language; this collapses identical sentences only and
-  does not in any way imply semantic similarity or relevance. The
-  exporter does not apply semantic deduplication or
-  sentence-pair scoring.
+- Deduplication is exact, not semantic, and does not imply relevance.
 
 ## Licensing
 
-This dataset combines content from OpenStreetMap and Wikimedia
-projects. The repository `LICENSE` covers only the code and this
-dataset-card generator; it does not grant rights to the dataset's
-underlying content, which is governed by the upstream terms of
-OpenStreetMap and Wikimedia. Provenance fields and source
-URL/revision identifiers are retained in every row to support
-attribution; satisfying the upstream attribution and licence
-requirements (such as ODbL for OpenStreetMap contributions and
-CC BY-SA or project-specific terms for Wikimedia contributions)
-remains the responsibility of downstream users. No single SPDX
-identifier covers the combined dataset, which is why `license: other`
-is used in the front matter.
-
-## Reproducibility
-
-Builds are deterministic for identical inputs, identical code
-revision, locked dependencies, and a compatible execution
-environment. Re-running the pipeline on the same immutable input
-revision and pipeline version reproduces the same Parquet bytes, the
-same `manifest.json`, the same asset PNGs, and this auto-generated
-card.
-
----
-
-*This dataset card was generated automatically from the exported
-data via the immutable ``DatasetProfile`` and must not be edited
-manually; rebuild the dataset to regenerate.*
+The code is covered by the repository licence. Dataset content retains
+its upstream terms, including ODbL for OpenStreetMap and CC BY-SA or
+project-specific Wikimedia terms. Source URLs and revision identifiers
+are retained for attribution; no single SPDX identifier covers the
+combined content, so the card uses `license: other`.
 """

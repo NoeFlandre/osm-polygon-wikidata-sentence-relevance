@@ -82,8 +82,10 @@ def _make_afghanistan_parquet(path: Path) -> tuple[str, int]:
                 "sentence_content_hash": hashlib.sha256(
                     f"Row {idx} text.".encode()
                 ).hexdigest(),
-                "duplicate_occurrence_count": 1,
-                "duplicate_sources": ["wikipedia"],
+                "duplicate_occurrence_count": 3 if idx == 0 else 1,
+                "duplicate_sources": (
+                    ["wikipedia", "wikivoyage"] if idx == 0 else ["wikipedia"]
+                ),
                 "polygon_name": None,
                 "osm_primary_tag": None,
                 "osm_tags": [{"key": "highway", "value": "primary"}],
@@ -133,6 +135,9 @@ class TestBuildDatasetProfile:
         assert profile.segmentation_model == "sat-3l"
         assert profile.segmentation_revision == "abc1234"
         assert profile.source_commit == "HEAD"
+        assert profile.input_occurrence_count == 62
+        assert profile.duplicates_removed == 2
+        assert profile.cross_source_duplicate_groups == 1
 
     def test_profile_has_lat_lon_extents(
         self, afghanistan_parquet: tuple[Path, str, int], tmp_path: Path
@@ -596,9 +601,7 @@ class TestProfileToDictUnknownCols:
 class TestProfileFirstBatchErrors:
     """Empty parquet must trigger an explicit ProfileError."""
 
-    def test_build_profile_on_empty_parquet_rejected(
-        self, tmp_path: Path
-    ) -> None:
+    def test_build_profile_on_empty_parquet_rejected(self, tmp_path: Path) -> None:
         import pyarrow.parquet as pq
 
         from osm_polygon_sentence_relevance.contracts.schemas import (

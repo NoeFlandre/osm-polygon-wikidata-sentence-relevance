@@ -40,9 +40,7 @@ def _build_minimal_profile(tmp_path: Path) -> DatasetProfile:
     for idx in range(6):
         rows.append(
             {
-                "sentence_id": hashlib.sha256(
-                    str(idx).encode()
-                ).hexdigest(),
+                "sentence_id": hashlib.sha256(str(idx).encode()).hexdigest(),
                 "polygon_id": f"a:way:{idx // 3}",
                 "wikidata": f"Q{idx + 1}",
                 "document_id": f"doc{idx}",
@@ -68,9 +66,7 @@ def _build_minimal_profile(tmp_path: Path) -> DatasetProfile:
                 "document_content_hash": hashlib.sha256(
                     f"doc{idx}".encode()
                 ).hexdigest(),
-                "section_content_hash": hashlib.sha256(
-                    b"s0"
-                ).hexdigest(),
+                "section_content_hash": hashlib.sha256(b"s0").hexdigest(),
                 "sentence_content_hash": hashlib.sha256(
                     f"Row {idx} text.".encode()
                 ).hexdigest(),
@@ -137,15 +133,11 @@ class TestSchemaHasMapTypes:
         assert schema_has_map_types(SEGMENTED_SENTENCES_SCHEMA) is True
 
     def test_handcrafted_map_field_is_detected(self) -> None:
-        bogus = pa.schema(
-            [pa.field("x", pa.map_(pa.string(), pa.string()))]
-        )
+        bogus = pa.schema([pa.field("x", pa.map_(pa.string(), pa.string()))])
         assert schema_has_map_types(bogus) is True
 
     def test_list_of_map_is_detected(self) -> None:
-        bogus = pa.schema(
-            [pa.field("x", pa.list_(pa.map_(pa.string(), pa.string())))]
-        )
+        bogus = pa.schema([pa.field("x", pa.list_(pa.map_(pa.string(), pa.string())))])
         assert schema_has_map_types(bogus) is True
 
     def test_struct_of_map_is_detected(self) -> None:
@@ -165,9 +157,7 @@ class TestSchemaHasMapTypes:
                 pa.field(
                     "x",
                     pa.list_(
-                        pa.struct(
-                            [pa.field("y", pa.map_(pa.string(), pa.string()))]
-                        )
+                        pa.struct([pa.field("y", pa.map_(pa.string(), pa.string()))])
                     ),
                 )
             ]
@@ -253,7 +243,7 @@ class TestSchemaHasMapTypes:
         section = _profile_preview_section(profile)
         assert "## Dataset scope" in section
         # Region key after "-latest" strip and title-case becomes "Latest".
-        assert "Latest-only preview" in section
+        assert "Current release: **Latest only**" in section
 
 
 class TestSchemaFieldDocumentation:
@@ -283,15 +273,34 @@ class TestRenderDatasetCardFromProfile:
         assert "Geographic coverage" in card
         assert "Language coverage" in card
 
+    def test_public_card_is_concise_factual_and_non_redundant(
+        self, tmp_path: Path
+    ) -> None:
+        """The generated public card must read like documentation, not a
+        pipeline status report, and must expose derived accounting once."""
+        profile = _build_minimal_profile(tmp_path)
+        card = render_dataset_card_from_profile(_with_assets(profile))
+
+        assert "Current release: **A only**" in card
+        assert "canary" not in card.lower()
+        assert "validation snapshot" not in card.lower()
+        assert "published incrementally" not in card.lower()
+        assert "production export pipeline" not in card.lower()
+        assert "Input sentence occurrences" in card
+        assert "Duplicates removed" in card
+        assert card.count("## Dataset summary") == 1
+        assert card.count("## Processing") == 1
+        assert "## Wikipedia and Wikivoyage coverage" not in card
+        assert "## Provenance and revision tracking" not in card
+        assert "## Reproducibility" not in card
+
     def test_embeds_png_assets(self, tmp_path: Path) -> None:
         profile = _build_minimal_profile(tmp_path)
         card = render_dataset_card_from_profile(_with_assets(profile))
         assert "assets/geographic_coverage.png" in card
         assert "assets/language_distribution.png" in card
 
-    def test_embeds_png_assets_with_absolute_url(
-        self, tmp_path: Path
-    ) -> None:
+    def test_embeds_png_assets_with_absolute_url(self, tmp_path: Path) -> None:
         from dataclasses import replace
 
         profile = _build_minimal_profile(tmp_path)
@@ -318,6 +327,158 @@ class TestRenderDatasetCardFromProfile:
         assert "dataset_info:" in card
         assert "splits:" in card
         assert "- name: train" in card
+
+    def test_yaml_declares_configs_with_sentences_parquet(self, tmp_path: Path) -> None:
+        """The YAML front matter must declare the parquet file as
+        the default config's data source so the Hugging Face Dataset
+        Viewer never interprets ``assets/*.png`` as dataset rows
+        (imagefolder inference regression)."""
+        import yaml
+
+        profile = _build_minimal_profile(tmp_path)
+        card = render_dataset_card_from_profile(_with_assets(profile))
+        # Parse the YAML front matter. The card always opens with
+        # '---' on its own line.
+        assert card.startswith("---")
+        end = card.index("\n---\n", 3)
+        front_matter = card[3:end]
+        parsed = yaml.safe_load(front_matter)
+        assert parsed is not None
+        # Exactly one default config exists.
+        assert "configs" in parsed
+        assert len(parsed["configs"]) == 1
+        assert parsed["configs"][0]["config_name"] == "default"
+        # Exactly one train split exists and its path is exactly
+        # sentences.parquet.
+        data_files = parsed["configs"][0]["data_files"]
+        assert len(data_files) == 1
+        assert data_files[0]["split"] == "train"
+        assert data_files[0]["path"] == "sentences.parquet"
+
+    def test_yaml_assets_paths_never_doubles_as_data_files(
+        self, tmp_path: Path
+    ) -> None:
+        """The README's data_files section must NEVER reference any
+        asset/*.png path; the imagefolder builder would otherwise
+        classify the PNGs as dataset rows."""
+        profile = _build_minimal_profile(tmp_path)
+        card = render_dataset_card_from_profile(_with_assets(profile))
+        # The assets/* links appear only inside markdown image
+        # references (lines starting with "![") and the README
+        # markdown body; the YAML front matter must not.
+        yaml_end = card.index("\n---\n", 3)
+        yaml_block = card[:yaml_end]
+        assert "assets/" not in yaml_block, (
+            "YAML front matter must not reference assets/* paths; "
+            "the Viewer would infer imagefolder semantics and treat "
+            "the PNGs as dataset rows."
+        )
+
+    def test_yaml_split_count_agrees_with_parquet(self, tmp_path: Path) -> None:
+        """The ``num_examples`` field of the YAML train split must
+        equal the parquet's row count and the profile's row_count."""
+        import pyarrow.parquet as pq
+        import yaml
+
+        profile = _build_minimal_profile(tmp_path)
+        card = render_dataset_card_from_profile(_with_assets(profile))
+        front_matter = card[3 : card.index("\n---\n", 3)]
+        parsed = yaml.safe_load(front_matter)
+        # Train split num_examples is declared once in
+        # dataset_info.splits.
+        split_entry = next(
+            s for s in parsed["dataset_info"]["splits"] if s["name"] == "train"
+        )
+        parquet_rows = pq.read_table(tmp_path / "sentences.parquet").num_rows
+        assert split_entry["num_examples"] == parquet_rows
+        assert split_entry["num_examples"] == profile.row_count
+
+    def test_yaml_parses_with_strict_yaml_library(self, tmp_path: Path) -> None:
+        """Strict YAML parsing must accept the front matter."""
+        import yaml
+
+        profile = _build_minimal_profile(tmp_path)
+        card = render_dataset_card_from_profile(_with_assets(profile))
+        front_matter = card[3 : card.index("\n---\n", 3)]
+        parsed = yaml.safe_load(front_matter)
+        # Required top-level keys.
+        for key in ("license", "pretty_name", "configs", "dataset_info"):
+            assert key in parsed
+        # configs must be a list with exactly one entry.
+        assert isinstance(parsed["configs"], list)
+        assert len(parsed["configs"]) == 1
+
+    def test_yaml_empty_language_block(self, tmp_path: Path) -> None:
+        """A profile with zero languages renders an empty YAML
+        language block without crashing."""
+        from dataclasses import replace
+
+        import yaml
+
+        profile = _build_minimal_profile(tmp_path)
+        # Empty language_counts drives the else branch in
+        # ``_profile_yaml``.
+        profile = replace(
+            profile,
+            language_counts={},
+        )
+        card = render_dataset_card_from_profile(_with_assets(profile))
+        front_matter = card[3 : card.index("\n---\n", 3)]
+        parsed = yaml.safe_load(front_matter)
+        assert parsed["language"] == []
+
+    def test_preview_section_empty_display_name(self, tmp_path: Path) -> None:
+        """A region key that strips to an empty string falls back
+        to the raw key (defensive fallback)."""
+        from dataclasses import replace
+
+        from osm_polygon_sentence_relevance.output.dataset_card import (
+            _profile_preview_section,
+        )
+
+        profile = _build_minimal_profile(tmp_path)
+        # ``-latest`` strips to an empty string and ``.title()``
+        # of an empty string is still empty, so the fallback
+        # ``display_name = region_key`` branch is hit.
+        profile = replace(
+            profile,
+            region_counts={"-latest": 3},
+        )
+        section = _profile_preview_section(profile)
+        assert "## Dataset scope" in section
+        # The fallback uses the raw region_key "-latest".
+        assert "-latest" in section
+
+    def test_dataset_statistics_eq_with_non_statistics(self, tmp_path: Path) -> None:
+        """DatasetStatistics.__eq__ returns NotImplemented for non-statistics."""
+        profile = _build_minimal_profile(tmp_path)
+        from osm_polygon_sentence_relevance.output.dataset_card import (
+            DatasetStatistics,
+        )
+
+        a = DatasetStatistics(
+            version=1,
+            row_count=1,
+            unique_sentence_ids=1,
+            unique_polygons=1,
+            unique_wikidata_entities=1,
+            unique_documents=1,
+            source_counts={"wikipedia": 1},
+            language_counts={"en": 1},
+            region_counts={"a": 1},
+            rows_with_coordinates=1,
+            rows_without_coordinates=0,
+            input_dataset_revision="r",
+            pipeline_version="v",
+            parquet_sha256="a" * 64,
+            input_dataset_id=None,
+        )
+        # Comparing against a non-statistics returns NotImplemented,
+        # which Python falls back to ``False``.
+        assert (a == "not a stats") is False
+        assert (a == object()) is False
+        # And not compared against the profile either (also not stats).
+        assert (a == profile) is False
 
     def test_deterministic_for_identical_input(self, tmp_path: Path) -> None:
         profile_a = _build_minimal_profile(tmp_path)
@@ -359,4 +520,4 @@ class TestRenderDatasetCardFromProfile:
         card = render_dataset_card_from_profile(_with_assets(profile))
         # Profile fixture uses single "a" region.
         assert "## Dataset scope" in card
-        assert "A-only preview" in card
+        assert "Current release: **A only**" in card

@@ -27,6 +27,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
+from osm_polygon_sentence_relevance.contracts.errors import ExportError
 from osm_polygon_sentence_relevance.contracts.schemas import OUTPUT_SENTENCE_SCHEMA
 from osm_polygon_sentence_relevance.output import validation_publication
 from osm_polygon_sentence_relevance.output.dataset_card import (
@@ -56,9 +57,7 @@ def _build_minimal_export(
     for idx in range(6):
         rows.append(
             {
-                "sentence_id": hashlib.sha256(
-                    f"s{idx}".encode()
-                ).hexdigest(),
+                "sentence_id": hashlib.sha256(f"s{idx}".encode()).hexdigest(),
                 "polygon_id": f"a:way:{idx // 3}",
                 "wikidata": f"Q{idx + 1}",
                 "document_id": f"doc{idx}",
@@ -84,9 +83,7 @@ def _build_minimal_export(
                 "document_content_hash": hashlib.sha256(
                     f"doc{idx}".encode()
                 ).hexdigest(),
-                "section_content_hash": hashlib.sha256(
-                    b"0"
-                ).hexdigest(),
+                "section_content_hash": hashlib.sha256(b"0").hexdigest(),
                 "sentence_content_hash": hashlib.sha256(
                     f"Row {idx} text.".encode()
                 ).hexdigest(),
@@ -131,6 +128,7 @@ def _build_minimal_export(
         render_geographic_coverage_png,
         render_language_distribution_png,
     )
+
     geo_bytes = render_geographic_coverage_png(preliminary, parquet_path)
     lang_bytes = render_language_distribution_png(preliminary)
 
@@ -207,33 +205,46 @@ def _build_minimal_export(
 class TestValidatePublicationHappyPath:
     def test_valid_export_passes(self, tmp_path: Path) -> None:
         export_dir, profile, _geo, _lang = _build_minimal_export(tmp_path)
-        result = validation_publication.validate_publication_directory(
-            export_dir
-        )
-        assert isinstance(
-            result, validation_publication.ValidatedPublication
-        )
+        result = validation_publication.validate_publication_directory(export_dir)
+        assert isinstance(result, validation_publication.ValidatedPublication)
         assert result.asset_count == 2
         assert result.profile_row_count == profile.row_count
 
+    @pytest.mark.parametrize(
+        "field",
+        [
+            "input_occurrence_count",
+            "duplicates_removed",
+            "cross_source_duplicate_groups",
+        ],
+    )
+    def test_rejects_manifest_duplicate_accounting_drift(
+        self, tmp_path: Path, field: str
+    ) -> None:
+        export_dir, _profile, _geo, _lang = _build_minimal_export(tmp_path)
+        manifest_path = export_dir / "manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest[field] += 1
+        manifest_path.write_text(
+            json.dumps(manifest, sort_keys=True, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+
+        with pytest.raises(ExportError, match=field):
+            validation_publication.validate_publication_directory(export_dir)
+
 
 class TestValidatePublicationAssetFailures:
-    def test_missing_asset_rejected(
-        self, tmp_path: Path
-    ) -> None:
+    def test_missing_asset_rejected(self, tmp_path: Path) -> None:
         from osm_polygon_sentence_relevance.contracts.errors import ExportError
 
         export_dir, _p, _g, _l = _build_minimal_export(tmp_path)
         # Delete one asset file but keep its entry in the manifest.
         (export_dir / "assets" / "geographic_coverage.png").unlink()
         with pytest.raises(ExportError):
-            validation_publication.validate_publication_directory(
-                export_dir
-            )
+            validation_publication.validate_publication_directory(export_dir)
 
-    def test_tampered_asset_rejected(
-        self, tmp_path: Path
-    ) -> None:
+    def test_tampered_asset_rejected(self, tmp_path: Path) -> None:
         from osm_polygon_sentence_relevance.contracts.errors import ExportError
 
         export_dir, _p, _g, _l = _build_minimal_export(tmp_path)
@@ -242,13 +253,9 @@ class TestValidatePublicationAssetFailures:
             b"not-a-real-png"
         )
         with pytest.raises(ExportError):
-            validation_publication.validate_publication_directory(
-                export_dir
-            )
+            validation_publication.validate_publication_directory(export_dir)
 
-    def test_unknown_extra_asset_rejected(
-        self, tmp_path: Path
-    ) -> None:
+    def test_unknown_extra_asset_rejected(self, tmp_path: Path) -> None:
         from osm_polygon_sentence_relevance.contracts.errors import ExportError
 
         export_dir, _p, _g, _l = _build_minimal_export(tmp_path)
@@ -256,27 +263,19 @@ class TestValidatePublicationAssetFailures:
         # an exporter mistake (the manifest is the source of truth).
         (export_dir / "assets" / "extra.png").write_bytes(b"x")
         with pytest.raises(ExportError):
-            validation_publication.validate_publication_directory(
-                export_dir
-            )
+            validation_publication.validate_publication_directory(export_dir)
 
 
 class TestValidatePublicationCardFailures:
-    def test_stale_readme_rejected(
-        self, tmp_path: Path
-    ) -> None:
+    def test_stale_readme_rejected(self, tmp_path: Path) -> None:
         from osm_polygon_sentence_relevance.contracts.errors import ExportError
 
         export_dir, _p, _g, _l = _build_minimal_export(tmp_path)
         (export_dir / "README.md").write_text("stale", encoding="utf-8")
         with pytest.raises(ExportError):
-            validation_publication.validate_publication_directory(
-                export_dir
-            )
+            validation_publication.validate_publication_directory(export_dir)
 
-    def test_accounting_drift_rejected(
-        self, tmp_path: Path
-    ) -> None:
+    def test_accounting_drift_rejected(self, tmp_path: Path) -> None:
         from osm_polygon_sentence_relevance.contracts.errors import ExportError
 
         export_dir, _p, _g, _l = _build_minimal_export(tmp_path)
@@ -292,9 +291,7 @@ class TestValidatePublicationCardFailures:
             encoding="utf-8",
         )
         with pytest.raises(ExportError):
-            validation_publication.validate_publication_directory(
-                export_dir
-            )
+            validation_publication.validate_publication_directory(export_dir)
 
 
 class TestValidatePublicationSchemaFailures:
@@ -312,15 +309,11 @@ class TestValidatePublicationSchemaFailures:
         )
         export_dir, _p, _g, _l = _build_minimal_export(tmp_path)
         with pytest.raises(ExportError):
-            validation_publication.validate_publication_directory(
-                export_dir
-            )
+            validation_publication.validate_publication_directory(export_dir)
 
 
 class TestValidatePublicationExampleRow:
-    def test_example_row_mismatch_rejected(
-        self, tmp_path: Path
-    ) -> None:
+    def test_example_row_mismatch_rejected(self, tmp_path: Path) -> None:
         from osm_polygon_sentence_relevance.contracts.errors import ExportError
 
         export_dir, _p, _g, _l = _build_minimal_export(tmp_path)
@@ -336,9 +329,7 @@ class TestValidatePublicationExampleRow:
             encoding="utf-8",
         )
         with pytest.raises(ExportError):
-            validation_publication.validate_publication_directory(
-                export_dir
-            )
+            validation_publication.validate_publication_directory(export_dir)
 
 
 class TestValidatorsUtilities:
@@ -364,9 +355,7 @@ class TestValidatorsUtilities:
         assert "language_distribution.png" in inventory
         for name, info in inventory.items():
             assert info.name == name
-            assert info.sha256 == compute_asset_sha(
-                export_dir / "assets" / name
-            )
+            assert info.sha256 == compute_asset_sha(export_dir / "assets" / name)
 
 
 class TestValidatePublicationManifestFailures:
@@ -376,9 +365,7 @@ class TestValidatePublicationManifestFailures:
         export_dir = tmp_path / "empty"
         export_dir.mkdir()
         with pytest.raises(ExportError):
-            validation_publication.validate_publication_directory(
-                export_dir
-            )
+            validation_publication.validate_publication_directory(export_dir)
 
     def test_path_is_not_a_directory(self, tmp_path: Path) -> None:
         from osm_polygon_sentence_relevance.contracts.errors import ExportError
@@ -401,9 +388,7 @@ class TestValidatePublicationManifestFailures:
             encoding="utf-8",
         )
         with pytest.raises(ExportError):
-            validation_publication.validate_publication_directory(
-                export_dir
-            )
+            validation_publication.validate_publication_directory(export_dir)
 
     def test_missing_required_keys_rejected(self, tmp_path: Path) -> None:
         from osm_polygon_sentence_relevance.contracts.errors import ExportError
@@ -418,9 +403,7 @@ class TestValidatePublicationManifestFailures:
             encoding="utf-8",
         )
         with pytest.raises(ExportError):
-            validation_publication.validate_publication_directory(
-                export_dir
-            )
+            validation_publication.validate_publication_directory(export_dir)
 
     def test_assets_list_must_be_list(self, tmp_path: Path) -> None:
         from osm_polygon_sentence_relevance.contracts.errors import ExportError
@@ -435,13 +418,9 @@ class TestValidatePublicationManifestFailures:
             encoding="utf-8",
         )
         with pytest.raises(ExportError):
-            validation_publication.validate_publication_directory(
-                export_dir
-            )
+            validation_publication.validate_publication_directory(export_dir)
 
-    def test_assets_entry_must_have_name_and_sha(
-        self, tmp_path: Path
-    ) -> None:
+    def test_assets_entry_must_have_name_and_sha(self, tmp_path: Path) -> None:
         from osm_polygon_sentence_relevance.contracts.errors import ExportError
 
         export_dir, _p, _g, _l = _build_minimal_export(tmp_path)
@@ -454,13 +433,9 @@ class TestValidatePublicationManifestFailures:
             encoding="utf-8",
         )
         with pytest.raises(ExportError):
-            validation_publication.validate_publication_directory(
-                export_dir
-            )
+            validation_publication.validate_publication_directory(export_dir)
 
-    def test_assets_entry_invalid_bytes(
-        self, tmp_path: Path
-    ) -> None:
+    def test_assets_entry_invalid_bytes(self, tmp_path: Path) -> None:
         from osm_polygon_sentence_relevance.contracts.errors import ExportError
 
         export_dir, _p, _g, _l = _build_minimal_export(tmp_path)
@@ -473,9 +448,7 @@ class TestValidatePublicationManifestFailures:
             encoding="utf-8",
         )
         with pytest.raises(ExportError):
-            validation_publication.validate_publication_directory(
-                export_dir
-            )
+            validation_publication.validate_publication_directory(export_dir)
 
 
 class TestValidatePublicationSymlinkGuard:
@@ -500,9 +473,7 @@ class TestValidatePublicationSymlinkGuard:
 
 
 class TestValidatePublicationSchemaMismatch:
-    def test_parquet_schema_mismatch_rejected(
-        self, tmp_path: Path
-    ) -> None:
+    def test_parquet_schema_mismatch_rejected(self, tmp_path: Path) -> None:
         from osm_polygon_sentence_relevance.contracts.errors import ExportError
 
         export_dir, _p, _g, _l = _build_minimal_export(tmp_path)
@@ -513,15 +484,11 @@ class TestValidatePublicationSchemaMismatch:
         small = pa.Table.from_pylist([{"a": 1}])
         pq.write_table(small, export_dir / "sentences.parquet")
         with pytest.raises(ExportError):
-            validation_publication.validate_publication_directory(
-                export_dir
-            )
+            validation_publication.validate_publication_directory(export_dir)
 
 
 class TestValidatePublicationRegionAndSourceAccounting:
-    def test_region_drift_rejected(
-        self, tmp_path: Path
-    ) -> None:
+    def test_region_drift_rejected(self, tmp_path: Path) -> None:
         from osm_polygon_sentence_relevance.contracts.errors import ExportError
 
         export_dir, _p, _g, _l = _build_minimal_export(tmp_path)
@@ -529,21 +496,15 @@ class TestValidatePublicationRegionAndSourceAccounting:
             (export_dir / "manifest.json").read_text(encoding="utf-8")
         )
         # Push counts_by_region sum past row_count.
-        manifest["counts_by_region"]["a"] = (
-            manifest["counts_by_region"]["a"] + 99
-        )
+        manifest["counts_by_region"]["a"] = manifest["counts_by_region"]["a"] + 99
         (export_dir / "manifest.json").write_text(
             json.dumps(manifest, sort_keys=True, ensure_ascii=False) + "\n",
             encoding="utf-8",
         )
         with pytest.raises(ExportError):
-            validation_publication.validate_publication_directory(
-                export_dir
-            )
+            validation_publication.validate_publication_directory(export_dir)
 
-    def test_source_drift_rejected(
-        self, tmp_path: Path
-    ) -> None:
+    def test_source_drift_rejected(self, tmp_path: Path) -> None:
         from osm_polygon_sentence_relevance.contracts.errors import ExportError
 
         export_dir, _p, _g, _l = _build_minimal_export(tmp_path)
@@ -561,9 +522,7 @@ class TestValidatePublicationRegionAndSourceAccounting:
             encoding="utf-8",
         )
         with pytest.raises(ExportError):
-            validation_publication.validate_publication_directory(
-                export_dir
-            )
+            validation_publication.validate_publication_directory(export_dir)
 
 
 class TestValidatePublicationSHAEdgeCases:
@@ -581,9 +540,7 @@ class TestValidatePublicationSHAEdgeCases:
         f.write_bytes(payload)
         assert compute_asset_sha(f) == hashlib.sha256(payload).hexdigest().lower()
 
-    def test_first_parquet_row_on_empty_file(
-        self, tmp_path: Path
-    ) -> None:
+    def test_first_parquet_row_on_empty_file(self, tmp_path: Path) -> None:
         from osm_polygon_sentence_relevance.contracts.errors import ExportError
         from osm_polygon_sentence_relevance.output.validation_publication import (
             first_parquet_row,
@@ -604,9 +561,7 @@ class TestValidatePublicationSHAEdgeCases:
 
 
 class TestValidatePublicationExtendedCoverage:
-    def test_unreadable_asset_file(
-        self, tmp_path: Path
-    ) -> None:
+    def test_unreadable_asset_file(self, tmp_path: Path) -> None:
         from osm_polygon_sentence_relevance.contracts.errors import ExportError
         from osm_polygon_sentence_relevance.output.validation_publication import (
             compute_asset_sha,
@@ -615,9 +570,7 @@ class TestValidatePublicationExtendedCoverage:
         with pytest.raises(ExportError):
             compute_asset_sha(tmp_path / "missing.png")
 
-    def test_inventory_assets_dir_missing(
-        self, tmp_path: Path
-    ) -> None:
+    def test_inventory_assets_dir_missing(self, tmp_path: Path) -> None:
         from osm_polygon_sentence_relevance.contracts.errors import ExportError
         from osm_polygon_sentence_relevance.output.validation_publication import (
             load_asset_inventory,
@@ -655,9 +608,7 @@ class TestValidatePublicationExtendedCoverage:
         )
         assert schema_has_map_types(s) is True
 
-    def test_example_row_value_mismatch_specific(
-        self, tmp_path: Path
-    ) -> None:
+    def test_example_row_value_mismatch_specific(self, tmp_path: Path) -> None:
         from osm_polygon_sentence_relevance.contracts.errors import ExportError
 
         export_dir, _p, _g, _l = _build_minimal_export(tmp_path)
@@ -673,26 +624,18 @@ class TestValidatePublicationExtendedCoverage:
             encoding="utf-8",
         )
         with pytest.raises(ExportError):
-            validation_publication.validate_publication_directory(
-                export_dir
-            )
+            validation_publication.validate_publication_directory(export_dir)
 
-    def test_extra_asset_file_on_disk(
-        self, tmp_path: Path
-    ) -> None:
+    def test_extra_asset_file_on_disk(self, tmp_path: Path) -> None:
         from osm_polygon_sentence_relevance.contracts.errors import ExportError
 
         export_dir, _p, _g, _l = _build_minimal_export(tmp_path)
         # Add an asset file that is not listed in the manifest.
         (export_dir / "assets" / "extra.png").write_bytes(b"x")
         with pytest.raises(ExportError):
-            validation_publication.validate_publication_directory(
-                export_dir
-            )
+            validation_publication.validate_publication_directory(export_dir)
 
-    def test_asset_bytes_mismatch(
-        self, tmp_path: Path
-    ) -> None:
+    def test_asset_bytes_mismatch(self, tmp_path: Path) -> None:
         from osm_polygon_sentence_relevance.contracts.errors import ExportError
 
         export_dir, _p, _g, _l = _build_minimal_export(tmp_path)
@@ -708,119 +651,85 @@ class TestValidatePublicationExtendedCoverage:
             encoding="utf-8",
         )
         with pytest.raises(ExportError):
-            validation_publication.validate_publication_directory(
-                export_dir
-            )
+            validation_publication.validate_publication_directory(export_dir)
 
 
 class TestValidatePublicationPathShapeBranches:
-    def test_assets_dir_is_a_file(
-        self, tmp_path: Path
-    ) -> None:
+    def test_assets_dir_is_a_file(self, tmp_path: Path) -> None:
         from osm_polygon_sentence_relevance.contracts.errors import ExportError
 
         export_dir, _p, _g, _l = _build_minimal_export(tmp_path)
         import shutil
+
         shutil.rmtree(export_dir / "assets")
         (export_dir / "assets").write_bytes(b"")
         with pytest.raises(ExportError):
-            validation_publication.validate_publication_directory(
-                export_dir
-            )
+            validation_publication.validate_publication_directory(export_dir)
 
-    def test_parquet_path_is_a_directory(
-        self, tmp_path: Path
-    ) -> None:
+    def test_parquet_path_is_a_directory(self, tmp_path: Path) -> None:
         from osm_polygon_sentence_relevance.contracts.errors import ExportError
 
         export_dir, _p, _g, _l = _build_minimal_export(tmp_path)
         (export_dir / "sentences.parquet").unlink()
         (export_dir / "sentences.parquet").mkdir()
         with pytest.raises(ExportError):
-            validation_publication.validate_publication_directory(
-                export_dir
-            )
+            validation_publication.validate_publication_directory(export_dir)
 
-    def test_manifest_path_is_a_directory(
-        self, tmp_path: Path
-    ) -> None:
+    def test_manifest_path_is_a_directory(self, tmp_path: Path) -> None:
         from osm_polygon_sentence_relevance.contracts.errors import ExportError
 
         export_dir, _p, _g, _l = _build_minimal_export(tmp_path)
         (export_dir / "manifest.json").unlink()
         (export_dir / "manifest.json").mkdir()
         with pytest.raises(ExportError):
-            validation_publication.validate_publication_directory(
-                export_dir
-            )
+            validation_publication.validate_publication_directory(export_dir)
 
-    def test_card_path_is_a_directory(
-        self, tmp_path: Path
-    ) -> None:
+    def test_card_path_is_a_directory(self, tmp_path: Path) -> None:
         from osm_polygon_sentence_relevance.contracts.errors import ExportError
 
         export_dir, _p, _g, _l = _build_minimal_export(tmp_path)
         (export_dir / "README.md").unlink()
         (export_dir / "README.md").mkdir()
         with pytest.raises(ExportError):
-            validation_publication.validate_publication_directory(
-                export_dir
-            )
+            validation_publication.validate_publication_directory(export_dir)
 
-    def test_assets_path_does_not_exist(
-        self, tmp_path: Path
-    ) -> None:
+    def test_assets_path_does_not_exist(self, tmp_path: Path) -> None:
         from osm_polygon_sentence_relevance.contracts.errors import ExportError
 
         export_dir, _p, _g, _l = _build_minimal_export(tmp_path)
         import shutil
+
         shutil.rmtree(export_dir / "assets")
         with pytest.raises(ExportError):
-            validation_publication.validate_publication_directory(
-                export_dir
-            )
+            validation_publication.validate_publication_directory(export_dir)
 
-    def test_parquet_path_does_not_exist(
-        self, tmp_path: Path
-    ) -> None:
+    def test_parquet_path_does_not_exist(self, tmp_path: Path) -> None:
         from osm_polygon_sentence_relevance.contracts.errors import ExportError
 
         export_dir, _p, _g, _l = _build_minimal_export(tmp_path)
         (export_dir / "sentences.parquet").unlink()
         with pytest.raises(ExportError):
-            validation_publication.validate_publication_directory(
-                export_dir
-            )
+            validation_publication.validate_publication_directory(export_dir)
 
-    def test_card_path_does_not_exist(
-        self, tmp_path: Path
-    ) -> None:
+    def test_card_path_does_not_exist(self, tmp_path: Path) -> None:
         from osm_polygon_sentence_relevance.contracts.errors import ExportError
 
         export_dir, _p, _g, _l = _build_minimal_export(tmp_path)
         (export_dir / "README.md").unlink()
         with pytest.raises(ExportError):
-            validation_publication.validate_publication_directory(
-                export_dir
-            )
+            validation_publication.validate_publication_directory(export_dir)
 
-    def test_manifest_path_does_not_exist(
-        self, tmp_path: Path
-    ) -> None:
+    def test_manifest_path_does_not_exist(self, tmp_path: Path) -> None:
         from osm_polygon_sentence_relevance.contracts.errors import ExportError
 
         export_dir, _p, _g, _l = _build_minimal_export(tmp_path)
         (export_dir / "manifest.json").unlink()
         with pytest.raises(ExportError):
-            validation_publication.validate_publication_directory(
-                export_dir
-            )
+            validation_publication.validate_publication_directory(export_dir)
 
 
 class TestValidatePublicationRegionDisagree:
-    def test_region_drift_without_sum_change(
-        self, tmp_path: Path
-    ) -> None:
+    def test_region_drift_without_sum_change(self, tmp_path: Path) -> None:
         from osm_polygon_sentence_relevance.contracts.errors import ExportError
 
         export_dir, _p, _g, _l = _build_minimal_export(tmp_path)
@@ -836,13 +745,9 @@ class TestValidatePublicationRegionDisagree:
             encoding="utf-8",
         )
         with pytest.raises(ExportError):
-            validation_publication.validate_publication_directory(
-                export_dir
-            )
+            validation_publication.validate_publication_directory(export_dir)
 
-    def test_parquet_unreadable(
-        self, tmp_path: Path
-    ) -> None:
+    def test_parquet_unreadable(self, tmp_path: Path) -> None:
         from osm_polygon_sentence_relevance.contracts.errors import ExportError
 
         export_dir, _p, _g, _l = _build_minimal_export(tmp_path)
@@ -850,13 +755,9 @@ class TestValidatePublicationRegionDisagree:
         # raises.
         (export_dir / "sentences.parquet").write_bytes(b"not-a-parquet")
         with pytest.raises(ExportError):
-            validation_publication.validate_publication_directory(
-                export_dir
-            )
+            validation_publication.validate_publication_directory(export_dir)
 
-    def test_example_row_specific_column_drift(
-        self, tmp_path: Path
-    ) -> None:
+    def test_example_row_specific_column_drift(self, tmp_path: Path) -> None:
         from osm_polygon_sentence_relevance.contracts.errors import ExportError
 
         export_dir, _p, _g, _l = _build_minimal_export(tmp_path)
@@ -873,13 +774,9 @@ class TestValidatePublicationRegionDisagree:
             encoding="utf-8",
         )
         with pytest.raises(ExportError):
-            validation_publication.validate_publication_directory(
-                export_dir
-            )
+            validation_publication.validate_publication_directory(export_dir)
 
-    def test_assets_value_not_dict(
-        self, tmp_path: Path
-    ) -> None:
+    def test_assets_value_not_dict(self, tmp_path: Path) -> None:
         from osm_polygon_sentence_relevance.contracts.errors import ExportError
 
         export_dir, _p, _g, _l = _build_minimal_export(tmp_path)
@@ -893,13 +790,9 @@ class TestValidatePublicationRegionDisagree:
             encoding="utf-8",
         )
         with pytest.raises(ExportError):
-            validation_publication.validate_publication_directory(
-                export_dir
-            )
+            validation_publication.validate_publication_directory(export_dir)
 
-    def test_assets_entry_missing_sha(
-        self, tmp_path: Path
-    ) -> None:
+    def test_assets_entry_missing_sha(self, tmp_path: Path) -> None:
         from osm_polygon_sentence_relevance.contracts.errors import ExportError
 
         export_dir, _p, _g, _l = _build_minimal_export(tmp_path)
@@ -914,15 +807,11 @@ class TestValidatePublicationRegionDisagree:
             encoding="utf-8",
         )
         with pytest.raises(ExportError):
-            validation_publication.validate_publication_directory(
-                export_dir
-            )
+            validation_publication.validate_publication_directory(export_dir)
 
 
 class TestValidatePublicationAssetInventory:
-    def test_load_asset_inventory_skips_directories(
-        self, tmp_path: Path
-    ) -> None:
+    def test_load_asset_inventory_skips_directories(self, tmp_path: Path) -> None:
         from osm_polygon_sentence_relevance.output.validation_publication import (
             load_asset_inventory,
         )
@@ -938,9 +827,7 @@ class TestValidatePublicationAssetInventory:
 
 
 class TestValidatePublicationAssetHardening:
-    def test_assets_sha_mismatch_raises(
-        self, tmp_path: Path
-    ) -> None:
+    def test_assets_sha_mismatch_raises(self, tmp_path: Path) -> None:
         """The validator must reject when the manifest's recorded SHA
         doesn't match the actual asset bytes."""
         from osm_polygon_sentence_relevance.contracts.errors import ExportError
@@ -958,13 +845,9 @@ class TestValidatePublicationAssetHardening:
             encoding="utf-8",
         )
         with pytest.raises(ExportError):
-            validation_publication.validate_publication_directory(
-                export_dir
-            )
+            validation_publication.validate_publication_directory(export_dir)
 
-    def test_assets_name_mismatch_raises(
-        self, tmp_path: Path
-    ) -> None:
+    def test_assets_name_mismatch_raises(self, tmp_path: Path) -> None:
         """Manifest name does not match on-disk file extension."""
         from osm_polygon_sentence_relevance.contracts.errors import ExportError
 
@@ -985,13 +868,9 @@ class TestValidatePublicationAssetHardening:
             encoding="utf-8",
         )
         with pytest.raises(ExportError):
-            validation_publication.validate_publication_directory(
-                export_dir
-            )
+            validation_publication.validate_publication_directory(export_dir)
 
-    def test_accounting_drift_language_sum(
-        self, tmp_path: Path
-    ) -> None:
+    def test_accounting_drift_language_sum(self, tmp_path: Path) -> None:
         """Even if the per-language check passes, the row-difference
         check should reject."""
         from osm_polygon_sentence_relevance.contracts.errors import ExportError
@@ -1009,9 +888,7 @@ class TestValidatePublicationAssetHardening:
             encoding="utf-8",
         )
         with pytest.raises(ExportError):
-            validation_publication.validate_publication_directory(
-                export_dir
-            )
+            validation_publication.validate_publication_directory(export_dir)
 
 
 class TestValidatePublicationHelpers:
@@ -1029,9 +906,7 @@ class TestValidatePublicationHelpers:
             encoding="utf-8",
         )
         with pytest.raises(ExportError):
-            validation_publication.validate_publication_directory(
-                export_dir
-            )
+            validation_publication.validate_publication_directory(export_dir)
 
     def test_asset_entry_non_string_sha(self, tmp_path: Path) -> None:
         from osm_polygon_sentence_relevance.contracts.errors import ExportError
@@ -1047,13 +922,9 @@ class TestValidatePublicationHelpers:
             encoding="utf-8",
         )
         with pytest.raises(ExportError):
-            validation_publication.validate_publication_directory(
-                export_dir
-            )
+            validation_publication.validate_publication_directory(export_dir)
 
-    def test_blank_segmentation_revision_rejected(
-        self, tmp_path: Path
-    ) -> None:
+    def test_blank_segmentation_revision_rejected(self, tmp_path: Path) -> None:
         from osm_polygon_sentence_relevance.contracts.errors import ExportError
 
         export_dir, _p, _g, _l = _build_minimal_export(tmp_path)
@@ -1066,13 +937,9 @@ class TestValidatePublicationHelpers:
             encoding="utf-8",
         )
         with pytest.raises(ExportError):
-            validation_publication.validate_publication_directory(
-                export_dir
-            )
+            validation_publication.validate_publication_directory(export_dir)
 
-    def test_passing_in_explicit_scratch_dir(
-        self, tmp_path: Path
-    ) -> None:
+    def test_passing_in_explicit_scratch_dir(self, tmp_path: Path) -> None:
         """When *scratch_dir* is provided, the validator must use it
         instead of creating a temporary one."""
         export_dir, _p, _g, _l = _build_minimal_export(tmp_path)
@@ -1087,6 +954,7 @@ class TestValidatePublicationHelpers:
 class TestValidatePublicationTypeChecks:
     def test_path_type_validation(self) -> None:
         from osm_polygon_sentence_relevance.contracts.errors import ExportError
+
         with pytest.raises((TypeError, ExportError)):
             validation_publication.validate_publication_directory(42)
 
@@ -1103,9 +971,7 @@ class TestValidatePublicationTypeChecks:
             encoding="utf-8",
         )
         with pytest.raises(ExportError):
-            validation_publication.validate_publication_directory(
-                export_dir
-            )
+            validation_publication.validate_publication_directory(export_dir)
 
 
 class TestValidatePublicationContractExtensions:
@@ -1119,9 +985,7 @@ class TestValidatePublicationContractExtensions:
         export_dir, _p, _g, _l = _build_minimal_export(tmp_path)
         (export_dir / "extra.txt").write_text("nope")
         with pytest.raises(ExportError, match="contract"):
-            validation_publication.validate_publication_directory(
-                export_dir
-            )
+            validation_publication.validate_publication_directory(export_dir)
 
     def test_missing_parquet_rejected(self, tmp_path: Path) -> None:
         from osm_polygon_sentence_relevance.contracts.errors import ExportError
@@ -1129,9 +993,7 @@ class TestValidatePublicationContractExtensions:
         export_dir, _p, _g, _l = _build_minimal_export(tmp_path)
         (export_dir / "sentences.parquet").unlink()
         with pytest.raises(ExportError, match="Missing required artefact"):
-            validation_publication.validate_publication_directory(
-                export_dir
-            )
+            validation_publication.validate_publication_directory(export_dir)
 
     def test_parquet_sha_mismatch_rejected(self, tmp_path: Path) -> None:
         from osm_polygon_sentence_relevance.contracts.errors import ExportError
@@ -1146,21 +1008,15 @@ class TestValidatePublicationContractExtensions:
             encoding="utf-8",
         )
         with pytest.raises(ExportError, match="sha"):
-            validation_publication.validate_publication_directory(
-                export_dir
-            )
+            validation_publication.validate_publication_directory(export_dir)
 
-    def test_manifest_json_decode_error_rejected(
-        self, tmp_path: Path
-    ) -> None:
+    def test_manifest_json_decode_error_rejected(self, tmp_path: Path) -> None:
         from osm_polygon_sentence_relevance.contracts.errors import ExportError
 
         export_dir, _p, _g, _l = _build_minimal_export(tmp_path)
         (export_dir / "manifest.json").write_text("not-json")
         with pytest.raises(ExportError, match="Manifest is not readable"):
-            validation_publication.validate_publication_directory(
-                export_dir
-            )
+            validation_publication.validate_publication_directory(export_dir)
 
     def test_manifest_not_object_rejected(self, tmp_path: Path) -> None:
         from osm_polygon_sentence_relevance.contracts.errors import ExportError
@@ -1168,9 +1024,7 @@ class TestValidatePublicationContractExtensions:
         export_dir, _p, _g, _l = _build_minimal_export(tmp_path)
         (export_dir / "manifest.json").write_text("[1, 2, 3]")
         with pytest.raises(ExportError, match="Manifest must be a JSON object"):
-            validation_publication.validate_publication_directory(
-                export_dir
-            )
+            validation_publication.validate_publication_directory(export_dir)
 
     def test_language_counts_disagree_rejected(self, tmp_path: Path) -> None:
         from osm_polygon_sentence_relevance.contracts.errors import ExportError
@@ -1188,13 +1042,9 @@ class TestValidatePublicationContractExtensions:
             encoding="utf-8",
         )
         with pytest.raises(ExportError, match="counts_by_language disagrees"):
-            validation_publication.validate_publication_directory(
-                export_dir
-            )
+            validation_publication.validate_publication_directory(export_dir)
 
-    def test_symlink_to_contract_file_rejected(
-        self, tmp_path: Path
-    ) -> None:
+    def test_symlink_to_contract_file_rejected(self, tmp_path: Path) -> None:
         """A symlink at the root whose target is a contract file must
         be rejected as a symlink (rather than as a missing file)."""
         from osm_polygon_sentence_relevance.contracts.errors import ExportError
@@ -1208,13 +1058,9 @@ class TestValidatePublicationContractExtensions:
         # contract check sees the symlink, not an extra file.
         link.symlink_to(tmp_path.parent / "some_other_file.bin")
         with pytest.raises(ExportError, match="symlink"):
-            validation_publication.validate_publication_directory(
-                export_dir
-            )
+            validation_publication.validate_publication_directory(export_dir)
 
-    def test_profile_build_failure_wrapped(
-        self, tmp_path: Path, monkeypatch
-    ) -> None:
+    def test_profile_build_failure_wrapped(self, tmp_path: Path, monkeypatch) -> None:
         """If ``build_dataset_profile`` raises, the validator must
         re-raise as ``ExportError`` with the original cause."""
         from osm_polygon_sentence_relevance.contracts.errors import ExportError
@@ -1223,14 +1069,10 @@ class TestValidatePublicationContractExtensions:
         def _broken(*args, **kwargs):
             raise validation_publication.ProfileError("synthetic profile error")
 
-        monkeypatch.setattr(
-            validation_publication, "build_dataset_profile", _broken
-        )
+        monkeypatch.setattr(validation_publication, "build_dataset_profile", _broken)
         export_dir, _p, _g, _l = _build_minimal_export(tmp_path)
         with pytest.raises(ExportError, match="Could not rebuild profile"):
-            validation_publication.validate_publication_directory(
-                export_dir
-            )
+            validation_publication.validate_publication_directory(export_dir)
 
     def test_stale_card_text_rejected(self, tmp_path: Path) -> None:
         """When the on-disk README differs from the deterministic
@@ -1240,22 +1082,16 @@ class TestValidatePublicationContractExtensions:
         export_dir, _p, _g, _l = _build_minimal_export(tmp_path)
         (export_dir / "README.md").write_text("not the rendered card", encoding="utf-8")
         with pytest.raises(ExportError, match="stale|deterministic"):
-            validation_publication.validate_publication_directory(
-                export_dir
-            )
+            validation_publication.validate_publication_directory(export_dir)
 
-    def test_unexpected_subdirectory_rejected(
-        self, tmp_path: Path
-    ) -> None:
+    def test_unexpected_subdirectory_rejected(self, tmp_path: Path) -> None:
         """An extra directory at the root is rejected as 'unexpected'."""
         from osm_polygon_sentence_relevance.contracts.errors import ExportError
 
         export_dir, _p, _g, _l = _build_minimal_export(tmp_path)
         (export_dir / "extra-dir").mkdir()
         with pytest.raises(ExportError, match="unexpected subdirectory"):
-            validation_publication.validate_publication_directory(
-                export_dir
-            )
+            validation_publication.validate_publication_directory(export_dir)
 
     def test_card_unreadable_oserror(self, tmp_path: Path) -> None:
         """Replacing the card with a directory triggers the OSError path."""
@@ -1269,9 +1105,7 @@ class TestValidatePublicationContractExtensions:
         # validator entry point. We rely on the contract-level
         # rejection to surface the problem.
         with pytest.raises(ExportError):
-            validation_publication.validate_publication_directory(
-                export_dir
-            )
+            validation_publication.validate_publication_directory(export_dir)
 
     def test_assets_set_mismatch_rejected(self, tmp_path: Path) -> None:
         """The on-disk asset set differs from the manifest's."""
@@ -1290,6 +1124,20 @@ class TestValidatePublicationContractExtensions:
             encoding="utf-8",
         )
         with pytest.raises(ExportError, match="Asset set"):
-            validation_publication.validate_publication_directory(
-                export_dir
-            )
+            validation_publication.validate_publication_directory(export_dir)
+
+    def test_manifest_repo_id_not_string(self) -> None:
+        """``_derive_asset_base_url`` returns None when repo_id is not a string."""
+        from osm_polygon_sentence_relevance.output.validation_publication import (
+            _derive_asset_base_url,
+        )
+
+        # Non-string repo_id.
+        assert _derive_asset_base_url({"dataset_repo_id": 12345}) is None
+        # Empty string repo_id.
+        assert _derive_asset_base_url({"dataset_repo_id": ""}) is None
+        # Missing key entirely.
+        assert _derive_asset_base_url({}) is None
+        # Valid repo_id yields the HF CDN URL.
+        url = _derive_asset_base_url({"dataset_repo_id": "owner/name"})
+        assert url == "https://huggingface.co/datasets/owner/name/resolve/main/assets"

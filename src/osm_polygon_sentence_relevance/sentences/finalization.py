@@ -60,10 +60,7 @@ def convert_osm_tags_to_list_of_struct(
         #    column comes from an Arrow RecordBatch)
         if all(isinstance(x, tuple) and len(x) == 2 for x in value):
             pairs = [(k, v) for k, v in value]
-        elif all(
-            isinstance(x, Mapping) and "key" in x and "value" in x
-            for x in value
-        ):
+        elif all(isinstance(x, Mapping) and "key" in x and "value" in x for x in value):
             pairs = [
                 (cast(Mapping[str, str], x)["key"], cast(Mapping[str, str], x)["value"])
                 for x in value

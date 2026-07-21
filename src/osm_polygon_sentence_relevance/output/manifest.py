@@ -197,4 +197,3 @@ __all__ = [
     "merge_profile_into_manifest",
     "write_manifest",
 ]
-
