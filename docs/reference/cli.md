@@ -6,6 +6,21 @@ Console command (installed via `uv sync`):
 osm-polygon-sentence-relevance
 ```
 
+The Afghanistan labeling proof of concept has a separate focused entry point:
+
+```text
+osm-polygon-label-sentences {label,finalize,publish}
+```
+
+`label` requires immutable input/model/source revisions, a persistent work
+directory, the selected inference engine and version, and a positive batch
+size. It checkpoints each validated batch and prints JSON containing completed
+and total rows, interruption status, elapsed seconds, and input SHA-256.
+`finalize` refuses partial labels and creates the labeled Parquet, manifest,
+concise data-derived README, and two plots. `publish` revalidates those five
+files and uploads them to the existing dataset in one commit. No command
+accepts a token or creates a repository.
+
 ## Usage
 
 ```text
