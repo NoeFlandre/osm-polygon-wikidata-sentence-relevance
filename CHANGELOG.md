@@ -8,6 +8,12 @@ pre-1.0 package.
 
 ### Added
 
+- Resumable Afghanistan LLM labeling with independent land-use/land-cover and
+  polygon-relevance decisions, strict structured output, vLLM-first CUDA
+  serving with a llama.cpp fallback, factual timing/ETA, and atomic labels.
+- Automatic labeled-dataset finalization, data-derived card statistics and
+  plots, closed-layout validation, and single-commit Hugging Face publication.
+
 - Bounded, resumable per-shard processing for Grid'5000 CUDA allocations,
   backed by identity-bound remote checkpoints.
 - Deterministic dataset profiles, generated dataset cards, geographic and
@@ -40,7 +46,7 @@ pre-1.0 package.
 
 - Superseded diagnostic, audit, full-snapshot, and hardware-probe workflows.
 - Historical operational incident notes and obsolete launcher documentation.
-- Repository creation, sentence classification, and parallel shard processing
+- Repository creation, general multi-region classification, and parallel shard processing
   remain outside the product scope; CLI publishing to an existing repository
   is supported.
 

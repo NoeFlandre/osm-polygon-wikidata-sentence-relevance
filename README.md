@@ -63,8 +63,15 @@ aggregation remain identical with or without `--work-dir`. See
 **Not implemented (out of scope):**
 
 - Hugging Face dataset repository creation.
-- Sentence classification or labelling.
 - Concurrency (parallel shard segmentation).
+
+An Afghanistan-only labeling proof of concept is available through
+`osm-polygon-label-sentences`. It produces independent land-use/land-cover and
+target-polygon relevance labels with exact evidence excerpts. Label batches are
+atomic, resumable, identity-bound, and timed; only a complete validated run can
+generate its factual dataset card and publish to the existing Hub dataset.
+Production inference uses the Grid'5000 CUDA workflow documented in
+[`docs/guides/grid5000.md`](docs/guides/grid5000.md).
 
 ## Development setup
 

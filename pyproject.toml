@@ -79,6 +79,7 @@ osm_polygon_sentence_relevance = ["py.typed"]
 
 [project.scripts]
 osm-polygon-sentence-relevance = "osm_polygon_sentence_relevance.application.cli:main"
+osm-polygon-label-sentences = "osm_polygon_sentence_relevance.labeling.cli:main"
 
 
 [tool.pytest.ini_options]
@@ -184,4 +185,10 @@ ignore_missing_imports = true
 # huggingface_hub is only imported lazily inside acquire_dataset_snapshot.
 # It is an optional extra; stubs are not guaranteed in the base env.
 module = "huggingface_hub.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# Publication plots are part of the optional hub extra and imported lazily.
+# Their absence from the base environment must not weaken typing elsewhere.
+module = ["matplotlib.*", "numpy.*"]
 ignore_missing_imports = true
