@@ -956,13 +956,21 @@ Each row is produced by the following fixed sequence:
    and section order is retained.
 2. **Model segmentation.** Sentence boundaries are inferred with
    `{_escape_md_inline_profile(profile.segmentation_model)}` at revision
-   `{_escape_md_inline_profile(profile.segmentation_revision)}`. The model is not asked to rewrite text.
-3. **Boundary repair.** A conservative residual-boundary repair separates
-   high-confidence punctuation boundaries still embedded in a model segment;
-   terminal punctuation stays with the preceding sentence. Short
-   abbreviations, lowercase continuations, numeric values, and URL query strings
-   are preserved. Arabic-tagged period boundaries must continue in
-   Arabic script.
+   `{_escape_md_inline_profile(profile.segmentation_revision)}`. It receives the full section text and its language code, predicts boundary probabilities, and returns slices of the original text at the selected offsets. The model is not asked to rewrite text: it does not generate or paraphrase sentences.
+3. **Boundary repair.** This conservative residual-boundary repair is a
+   deterministic second pass that looks only inside each model-produced
+   slice. The marks `?`, `!`, `؟`, `。`, `！`, `？`, `।`, or `॥`
+   are boundaries when the next non-space character is a letter. A period is
+   split only when both sides contain at least 12 characters, the preceding
+   letter-token is longer than two characters, and the next letter is not a
+   lowercase continuation. Arabic-tagged period boundaries must additionally
+   continue in Arabic script; terminal punctuation stays with the preceding sentence,
+   together with any immediately closing quote or bracket.
+
+   For example, `Delegation arrived. They left.` becomes two rows. The guards
+   preserve short abbreviations (`Dr. Smith`), numeric values (`10.5`),
+   lowercase continuations (`approx. five`), and URL query strings
+   (`https://example.org/?q=x`).
 4. **Normalization.** Each segment is trimmed, normalized to Unicode NFC,
    stripped of configured zero-width characters (`U+200B`, `U+2060`,
    `U+FEFF`) and leading MediaWiki edit markers, then has control characters
@@ -977,9 +985,14 @@ Each row is produced by the following fixed sequence:
    all contributors in `duplicate_sources`, with Wikipedia as the canonical
    row.
 7. **Publication audit.** Publication scans every normalized sentence with
-   the same residual-boundary predicate and refuses non-zero results. It also
-   verifies the schema, Parquet hash, generated statistics, example row, and
-   plot hashes before release.
+   the same deterministic rules and counts any boundary candidate still found
+   inside a row. This audit does not run the model again: it verifies that the
+   model-plus-repair output contains no boundary the repair itself considers
+   unambiguous. A publishable release must therefore record exactly `0`
+   residual candidates in both the manifest and card. This is a regression
+   guard; it does not claim that every ambiguous boundary is linguistically perfect.
+   The validator also checks the schema, Parquet hash, generated statistics,
+   example row, and plot hashes before release.
 
 ## Real example row (from the export)
 
