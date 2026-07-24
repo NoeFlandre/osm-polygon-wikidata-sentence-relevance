@@ -70,12 +70,20 @@ normalized text.
 `normalize_sentence` preserves case, punctuation, accents, ZWNJ, and ZWJ.
 It does **not** lowercase text.
 
-In `segmentation.py._prepare_section`, `sentence_text_raw` is the
-**trimmed** sentence segment emitted by the segmenter — it is *not* the
-complete section input. The full section text is consumed once by the
-segmenter, and the segmenter's emitted string is what becomes
-`sentence_text_raw`. Its `sentence_text_normalized` is
-`normalize_sentence(sentence_text_raw)`.
+In `segmentation.py._prepare_section`, the full section text is consumed once
+by the segmenter. A conservative residual-boundary pass then separates only
+high-confidence punctuation boundaries still embedded in a model segment:
+universal question/exclamation and CJK/Indic terminators, plus an
+Arabic-script period followed by an Arabic letter when both clauses are
+substantive and the preceding token is not a short abbreviation. This repair
+is not a standalone tokenizer and does not apply period heuristics to other
+languages.
+
+`sentence_text_raw` is the **trimmed** result after that boundary pass — it is
+*not* the complete section input. Its `sentence_text_normalized` is
+`normalize_sentence(sentence_text_raw)`. Before publication, the finalized
+Parquet is scanned independently using the same high-confidence predicate;
+publication is refused unless the residual-boundary count is zero.
 
 Context policy:
 

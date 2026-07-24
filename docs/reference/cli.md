@@ -50,7 +50,7 @@ usage: osm-polygon-sentence-relevance [-h]
 | `--input-dataset-revision` | yes | — | Input dataset revision. In Hub mode a mutable name (e.g. `main`) is resolved to an immutable commit SHA. |
 | `--pipeline-version` | yes | — | Pipeline version recorded into the output metadata. |
 | `--batch-size` | no | `128` | Batch size for the segmenter (must be a positive integer). |
-| `--sat-model` | no | `sat-3l-sm` | wtpsplit SaT model name. |
+| `--sat-model` | no | `sat-12l-sm` | wtpsplit SaT model name. |
 | `--device` | no | `auto` | Accelerator for SaT inference. One of `auto`, `cpu`, `cuda`, `mps`. `auto` (default) prefers CUDA when available, otherwise MPS, otherwise CPU. Explicit `cuda` or `mps` fail with exit code `1` when the requested backend is unavailable; the CLI never silently downgrades. |
 | `--input-source-dataset-id` | no | — | Optional Hugging Face dataset ID of the upstream source for a local input snapshot. Only valid with `--input-root`; populates the source provenance recorded in the manifest and dataset card without triggering any network request. |
 | `--overwrite` | no | off | Overwrite an existing non-empty output directory. |

@@ -907,6 +907,7 @@ language, and content hash.
 - **Input sentence occurrences:** {profile.input_occurrence_count}
 - **Duplicates removed:** {profile.duplicates_removed}
 - **Cross-source duplicate groups:** {profile.cross_source_duplicate_groups}
+- **High-confidence residual boundary violations:** {profile.residual_boundary_violations}
 - **Unique polygons:** {profile.unique_polygons}
 - **Unique Wikidata entities:** {profile.unique_wikidata_entities}
 - **Unique documents:** {profile.unique_documents}
@@ -1009,8 +1010,9 @@ labelled relevance, similarity or classification dataset.
 
 - Extraction depends on upstream OSM / Wikimedia availability,
   coverage and language balance.
-- Sentence segmentation uses an automatic multilingual model and may
-  mis-segment short or mixed-script text.
+- Sentence segmentation uses an automatic multilingual model. Publication
+  rejects high-confidence residual boundaries, but ambiguous short or
+  mixed-script text can still be imperfect.
 - Deduplication is exact, not semantic, and does not imply relevance.
 
 ## Licensing

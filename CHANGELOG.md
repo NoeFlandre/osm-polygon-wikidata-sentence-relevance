@@ -27,6 +27,9 @@ pre-1.0 package.
 
 ### Changed
 
+- Production sentence segmentation now defaults to the multilingual
+  `sat-12l-sm` model. A conservative post-model repair separates only
+  high-confidence residual punctuation boundaries before sentence indexing.
 - Checkpointing, dataset-card statistics, rendering, profiling, and plotting
   now have focused internal owners behind stable public facades.
 - Production operations use only the bounded streaming build and deterministic
@@ -35,6 +38,9 @@ pre-1.0 package.
 
 ### Fixed
 
+- Publication now rescans every normalized sentence and refuses an export with
+  any high-confidence residual sentence boundary; the factual count is recorded
+  in the manifest and generated dataset card.
 - Resumable builds validate source-file identities, schemas, hashes, modes, and
   run metadata before reuse.
 - Hugging Face publication uses a Viewer-compatible `osm_tags` representation

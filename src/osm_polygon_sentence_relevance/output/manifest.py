@@ -160,6 +160,7 @@ def merge_profile_into_manifest(
     merged["sentence_length_min"] = profile.sentence_length_min
     merged["sentence_length_mean"] = profile.sentence_length_mean
     merged["sentence_length_max"] = profile.sentence_length_max
+    merged["residual_boundary_violations"] = profile.residual_boundary_violations
     if dataset_repo_id is not None:
         merged["dataset_repo_id"] = dataset_repo_id
     # Example row in schema-column order for stable comparison.

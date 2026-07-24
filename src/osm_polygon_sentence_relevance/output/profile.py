@@ -32,6 +32,9 @@ from osm_polygon_sentence_relevance.output.plots import (
     render_geographic_coverage_png,
     render_language_distribution_png,
 )
+from osm_polygon_sentence_relevance.sentences.boundaries import (
+    find_high_confidence_boundaries,
+)
 
 # Profile / card schema version. Bump only for incompatible profile changes.
 PROFILE_VERSION = 1
@@ -121,6 +124,7 @@ class DatasetProfile:
     input_occurrence_count: int = 0
     duplicates_removed: int = 0
     cross_source_duplicate_groups: int = 0
+    residual_boundary_violations: int = 0
 
     def __post_init__(self) -> None:
         for name in (
@@ -196,6 +200,7 @@ class DatasetProfile:
             "input_occurrence_count": self.input_occurrence_count,
             "duplicates_removed": self.duplicates_removed,
             "cross_source_duplicate_groups": self.cross_source_duplicate_groups,
+            "residual_boundary_violations": self.residual_boundary_violations,
         }
 
 
@@ -371,6 +376,7 @@ def build_dataset_profile(
     region_counts: dict[str, int] = {}
     input_occurrence_count = 0
     cross_source_duplicate_groups = 0
+    residual_boundary_violations = 0
 
     connection = sqlite3.connect(database)
     try:
@@ -443,6 +449,9 @@ def build_dataset_profile(
                 if values["polygon_name"][i]:
                     polygon_names += 1
                 text = values["sentence_text_normalized"][i]
+                residual_boundary_violations += len(
+                    find_high_confidence_boundaries(text, language)
+                )
                 length = len(text)
                 sentence_lengths_total += length
                 if sentence_length_min is None or length < sentence_length_min:
@@ -531,6 +540,7 @@ def build_dataset_profile(
         input_occurrence_count=input_occurrence_count,
         duplicates_removed=input_occurrence_count - row_count,
         cross_source_duplicate_groups=cross_source_duplicate_groups,
+        residual_boundary_violations=residual_boundary_violations,
     )
 
 

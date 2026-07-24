@@ -111,7 +111,9 @@ re-verify local snapshots.
 ## SaT model name and optional model-weight behavior
 
 The default segmenter is `wtpsplit`'s multilingual SaT, model name
-`sat-3l-sm`. Installing the `segmentation` extra brings:
+`sat-12l-sm`. This quality-first default uses the strongest general
+supervised-mixture SaT model; the faster `sat-3l-sm` remains available as an
+explicit override. Installing the `segmentation` extra brings:
 
 - the `wtpsplit` SaT adapter, and
 - its required PyTorch runtime (`torch>=2.2,<3`).

@@ -46,6 +46,8 @@ from osm_polygon_sentence_relevance.output.profile import (
 
 def _build_minimal_export(
     tmp_path: Path,
+    *,
+    residual_boundary: bool = False,
 ) -> tuple[Path, DatasetProfile, bytes, bytes]:
     """Build sentences.parquet + manifest.json + assets + README.
 
@@ -55,6 +57,11 @@ def _build_minimal_export(
     """
     rows = []
     for idx in range(6):
+        text = f"Row {idx} text."
+        language = "en"
+        if residual_boundary and idx == 0:
+            text = "هذه جملة عربية طويلة بما يكفي. وهذه جملة ثانية طويلة بما يكفي."
+            language = "ar"
         rows.append(
             {
                 "sentence_id": hashlib.sha256(f"s{idx}".encode()).hexdigest(),
@@ -63,15 +70,15 @@ def _build_minimal_export(
                 "document_id": f"doc{idx}",
                 "article_id": None,
                 "source": "wikipedia" if idx % 2 == 0 else "wikivoyage",
-                "language": "en",
+                "language": language,
                 "site": "en.wikipedia.org",
                 "page_title": f"Page {idx}",
                 "section_id": "0",
                 "section_index": 0,
                 "section_path": ["Lead"],
                 "sentence_index": idx,
-                "sentence_text_raw": f"Row {idx} text.",
-                "sentence_text_normalized": f"Row {idx} text.",
+                "sentence_text_raw": text,
+                "sentence_text_normalized": text,
                 "previous_sentence": None,
                 "next_sentence": None,
                 "url": f"https://en.wikipedia.org/wiki/Page_{idx}",
@@ -209,6 +216,21 @@ class TestValidatePublicationHappyPath:
         assert isinstance(result, validation_publication.ValidatedPublication)
         assert result.asset_count == 2
         assert result.profile_row_count == profile.row_count
+
+    def test_rejects_high_confidence_residual_sentence_boundary(
+        self, tmp_path: Path
+    ) -> None:
+        export_dir, profile, _geo, _lang = _build_minimal_export(
+            tmp_path,
+            residual_boundary=True,
+        )
+        assert profile.residual_boundary_violations == 1
+
+        with pytest.raises(
+            ExportError,
+            match="high-confidence residual sentence boundary",
+        ):
+            validation_publication.validate_publication_directory(export_dir)
 
     @pytest.mark.parametrize(
         "field",

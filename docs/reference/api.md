@@ -73,7 +73,7 @@ All canonical modules live under
   plus its required PyTorch runtime; the SaT model itself is
   constructed lazily and its weights are downloaded separately on
   first model construction).
-  Constructor signature: `SaTSentenceSegmenter(model_name="sat-3l-sm",
+  Constructor signature: `SaTSentenceSegmenter(model_name="sat-12l-sm",
   *, model_factory=None, model_kwargs=None, split_kwargs=None,
   device="auto", caps=None)`. The device is resolved **exactly once**
   per segmenter, immediately before model construction. The complete
