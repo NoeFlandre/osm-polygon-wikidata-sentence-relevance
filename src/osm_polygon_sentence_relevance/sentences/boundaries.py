@@ -45,6 +45,17 @@ def _preceding_word(text: str, terminal_index: int) -> str:
     return text[cursor + 1 : end]
 
 
+def _is_url_query_mark(text: str, terminal_index: int) -> bool:
+    """Return whether ``text[terminal_index]`` is a URL query delimiter."""
+
+    token_start = terminal_index - 1
+    while token_start >= 0 and not text[token_start].isspace():
+        token_start -= 1
+    prefix = text[token_start + 1 : terminal_index].casefold()
+    unwrapped = prefix.lstrip("([{<\"'")
+    return "://" in prefix or unwrapped.startswith("www.")
+
+
 def find_high_confidence_boundaries(text: str, language: str) -> tuple[int, ...]:
     """Return exclusive offsets for unambiguous residual boundaries.
 
@@ -63,6 +74,8 @@ def find_high_confidence_boundaries(text: str, language: str) -> tuple[int, ...]
         is_universal = character in _UNIVERSAL_TERMINALS
         is_arabic_period = character == "." and arabic_periods
         if not is_universal and not is_arabic_period:
+            continue
+        if character == "?" and _is_url_query_mark(text, index):
             continue
 
         boundary_end = index + 1

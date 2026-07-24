@@ -112,5 +112,18 @@ def test_ambiguous_boundary_candidates_are_not_repaired() -> None:
     assert find_high_confidence_boundaries("A? B", "en") == ()
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Reference https://www.youtube.com/watch?v=5F8SREfehZ4",
+        "Reference http://example.org/path?q=value followed by prose",
+        "Reference www.example.org/search?q=value followed by prose",
+    ],
+)
+def test_question_mark_inside_url_is_not_a_sentence_boundary(text: str) -> None:
+    assert find_high_confidence_boundaries(text, "en") == ()
+    assert refine_sentence_boundaries((text,), "en") == (text,)
+
+
 def test_empty_model_segment_is_preserved_for_shared_drop_accounting() -> None:
     assert refine_sentence_boundaries(("",), "en") == ("",)
