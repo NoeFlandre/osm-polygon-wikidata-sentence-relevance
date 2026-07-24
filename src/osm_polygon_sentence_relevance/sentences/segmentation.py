@@ -16,6 +16,9 @@ from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
 from osm_polygon_sentence_relevance.contracts.errors import SegmentationError
+from osm_polygon_sentence_relevance.sentences.boundaries import (
+    refine_sentence_boundaries,
+)
 from osm_polygon_sentence_relevance.sentences.preprocessing import normalize_sentence
 
 
@@ -75,7 +78,7 @@ def segment_one_section(
     prepares the returned group via :func:`_prepare_section`.
     """
     (group,) = split_validated_batch(segmenter, [text], [language])
-    return _prepare_section(group)
+    return _prepare_section(group, language)
 
 
 def segment_sections_batch(
@@ -92,10 +95,13 @@ def segment_sections_batch(
     :class:`SegmentationError`.
     """
     groups = split_validated_batch(segmenter, texts, languages)
-    return tuple(_prepare_section(group) for group in groups)
+    return tuple(
+        _prepare_section(group, language)
+        for group, language in zip(groups, languages, strict=True)
+    )
 
 
-def _prepare_section(segments: Sequence[str]) -> PreparedSection:
+def _prepare_section(segments: Sequence[str], language: str) -> PreparedSection:
     """Apply the shared preparation rules to one segmenter group.
 
     Trims each raw segment's surrounding whitespace, drops and counts
@@ -107,7 +113,8 @@ def _prepare_section(segments: Sequence[str]) -> PreparedSection:
     dropped_empty_raw = 0
     dropped_empty_normalized = 0
 
-    for raw in segments:
+    refined_segments = refine_sentence_boundaries(segments, language)
+    for raw in refined_segments:
         stripped = raw.strip()
         if stripped == "":
             dropped_empty_raw += 1
@@ -126,7 +133,7 @@ def _prepare_section(segments: Sequence[str]) -> PreparedSection:
 
     return PreparedSection(
         sentences=tuple(prepared),
-        emitted_segment_count=len(segments),
+        emitted_segment_count=len(refined_segments),
         dropped_empty_raw_count=dropped_empty_raw,
         dropped_empty_normalized_count=dropped_empty_normalized,
     )

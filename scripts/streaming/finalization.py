@@ -274,7 +274,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--source-commit", required=True)
     parser.add_argument("--input-revision", required=True)
     parser.add_argument("--pipeline-version", default="0.1.0")
-    parser.add_argument("--model-name", default="sat-3l-sm")
+    parser.add_argument("--model-name", default="sat-12l-sm")
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--cache-dir", required=True)
     parser.add_argument("--scratch-dir", required=True)

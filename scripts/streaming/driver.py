@@ -140,7 +140,7 @@ class DriverConfig:
     offload_local_cache_dir: Path
     max_disk_bytes: int
     pipeline_version: str = "v1"
-    model_name: str = "sat-3l-sm"
+    model_name: str = "sat-12l-sm"
     batch_size: int = 128
 
 
@@ -162,7 +162,7 @@ class StreamDriver:
         offload_local_cache_dir: Path,
         max_disk_bytes: int,
         pipeline_version: str = "v1",
-        model_name: str = "sat-3l-sm",
+        model_name: str = "sat-12l-sm",
         batch_size: int = 128,
         local_input_root: Path | None = None,
     ) -> None:
@@ -488,7 +488,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--input-root")
     parser.add_argument("--max-disk-bytes", type=int, default=1 << 30)
     parser.add_argument("--pipeline-version", default="v1")
-    parser.add_argument("--model-name", default="sat-3l-sm")
+    parser.add_argument("--model-name", default="sat-12l-sm")
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--device", choices=["cuda"], default="cuda")
 

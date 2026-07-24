@@ -12,7 +12,7 @@ Run from the project root::
     PYTHONPATH=src .venv/bin/python scripts/render_assets.py \\
         --input-parquet /tmp/afghanistan-main/sentences.parquet \\
         --output-dir /tmp/afghanistan-publication \\
-        --segmentation-model segment-any-text/sat-3l-sm \\
+        --segmentation-model segment-any-text/sat-12l-sm \\
         --segmentation-revision <pinned-model-revision> \\
         --source-commit <data-producing-source-commit>
 """

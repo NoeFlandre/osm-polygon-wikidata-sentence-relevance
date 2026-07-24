@@ -392,7 +392,7 @@ class TestPublicSegmenterDoesNotMisplace:
         with pytest.raises(SegmentationError) as exc:
             seg.split_batch(["a|b"], ["en"])
         msg = str(exc.value)
-        assert "sat-3l-sm" in msg
+        assert "sat-12l-sm" in msg
 
 
 class TestAutoDeviceResolutionPreservesAccelerator:

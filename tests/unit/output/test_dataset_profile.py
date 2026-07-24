@@ -138,6 +138,40 @@ class TestBuildDatasetProfile:
         assert profile.input_occurrence_count == 62
         assert profile.duplicates_removed == 2
         assert profile.cross_source_duplicate_groups == 1
+        assert profile.residual_boundary_violations == 0
+
+    def test_profile_counts_high_confidence_residual_boundaries(
+        self, afghanistan_parquet: tuple[Path, str, int], tmp_path: Path
+    ) -> None:
+        from osm_polygon_sentence_relevance.contracts.schemas import (
+            OUTPUT_SENTENCE_SCHEMA,
+        )
+
+        parquet_path, _sha, _count = afghanistan_parquet
+        table = pq.read_table(parquet_path)
+        rows = table.to_pylist()
+        rows[0]["language"] = "ar"
+        rows[0]["sentence_text_raw"] = (
+            "هذه جملة عربية طويلة بما يكفي. وهذه جملة ثانية طويلة بما يكفي."
+        )
+        rows[0]["sentence_text_normalized"] = rows[0]["sentence_text_raw"]
+        rewritten = pa.Table.from_pylist(
+            rows,
+            schema=OUTPUT_SENTENCE_SCHEMA,
+        ).replace_schema_metadata(table.schema.metadata)
+        pq.write_table(rewritten, parquet_path)
+        sha = hashlib.sha256(parquet_path.read_bytes()).hexdigest()
+
+        profile = build_dataset_profile(
+            parquet_path=parquet_path,
+            parquet_sha256=sha,
+            segmentation_model="sat-12l-sm",
+            segmentation_revision="abc1234",
+            source_commit="HEAD",
+            scratch_dir=tmp_path,
+        )
+
+        assert profile.residual_boundary_violations == 1
 
     def test_profile_has_lat_lon_extents(
         self, afghanistan_parquet: tuple[Path, str, int], tmp_path: Path

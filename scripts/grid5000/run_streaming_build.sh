@@ -45,7 +45,7 @@ args=(
     --work-dir "${WORK_DIR}"
     --batch-size "${BATCH_SIZE}"
     --pipeline-version "0.1.0"
-    --model-name "sat-3l-sm"
+    --model-name "sat-12l-sm"
     --device cuda
     --max-disk-bytes 5368709120
 )

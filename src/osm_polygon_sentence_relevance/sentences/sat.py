@@ -100,7 +100,7 @@ class SaTSentenceSegmenter:
 
     def __init__(
         self,
-        model_name: str = "sat-3l-sm",
+        model_name: str = "sat-12l-sm",
         *,
         model_factory: Callable[[str], object] | None = None,
         model_kwargs: Mapping[str, object] | None = None,

@@ -70,7 +70,7 @@ class TestSaTLazyConstruction:
     def test_correct_default_model_name(self):
         seg = SaTSentenceSegmenter(model_factory=make_factory(), caps=caps_cpu_only)
         seg.split_batch(["A."], ["en"])
-        assert FakeSaTModel.constructed[0].model_name == "sat-3l-sm"
+        assert FakeSaTModel.constructed[0].model_name == "sat-12l-sm"
 
     def test_custom_model_name_and_constructor_kwargs(self):
         seg = SaTSentenceSegmenter(

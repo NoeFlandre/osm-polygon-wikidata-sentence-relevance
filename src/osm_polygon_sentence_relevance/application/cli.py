@@ -62,7 +62,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--batch-size", type=int, default=128, help="Batch size for segmenter"
     )
     parser.add_argument(
-        "--sat-model", default="sat-3l-sm", help="wtpsplit SaT model name"
+        "--sat-model", default="sat-12l-sm", help="wtpsplit SaT model name"
     )
     parser.add_argument(
         "--device",

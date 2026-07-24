@@ -113,6 +113,7 @@ _REQUIRED_MANIFEST_KEYS: frozenset[str] = frozenset(
         "sentence_length_min",
         "sentence_length_mean",
         "sentence_length_max",
+        "residual_boundary_violations",
     }
 )
 
@@ -404,6 +405,17 @@ def validate_publication_directory(
     finally:
         if scratch_dir is None:
             scratch_ctx.cleanup()
+
+    if profile.residual_boundary_violations:
+        raise ExportError(
+            "Publication contains "
+            f"{profile.residual_boundary_violations} high-confidence residual "
+            "sentence boundary violation(s)"
+        )
+    if manifest["residual_boundary_violations"] != 0:
+        raise ExportError(
+            "Manifest residual_boundary_violations must be zero for publication"
+        )
 
     # Re-attach the assets to the profile from the manifest so the
     # card renderer has them (the manifest is the source of truth for
