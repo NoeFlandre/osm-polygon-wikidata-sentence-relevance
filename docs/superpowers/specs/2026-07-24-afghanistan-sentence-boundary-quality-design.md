@@ -17,9 +17,10 @@ Add a conservative post-model boundary repair for residual, high-confidence
 boundaries. It keeps terminal punctuation on the preceding sentence and
 splits only when both sides are substantive. Universal sentence marks
 (`?`, `!`, Arabic question mark, CJK full stops, and Indic danda) are
-recognized. A period is recognized only for Arabic-script languages when it
-is followed by an Arabic-script clause; short abbreviation-like prefixes and
-numeric continuations are not split.
+recognized. A period is recognized when it is a high-confidence inter-clause
+boundary. Short abbreviation-like prefixes,
+lowercase and numeric continuations, and URL query delimiters are not split.
+Arabic-script language tags additionally require an Arabic-script continuation.
 
 This is intentionally not a general rule-based sentence tokenizer. SaT remains
 authoritative, and the repair handles only obvious false negatives.

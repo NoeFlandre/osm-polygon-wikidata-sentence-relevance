@@ -48,8 +48,24 @@ def test_arabic_abbreviation_and_decimal_are_not_split() -> None:
     assert refine_sentence_boundaries((text,), "ar") == (text,)
 
 
-def test_period_repair_is_not_applied_to_non_arabic_language() -> None:
+def test_period_repair_handles_model_false_negatives_in_cased_scripts() -> None:
     text = "Dr. Smith met the delegation. They left together."
+    assert refine_sentence_boundaries((text,), "en") == (
+        "Dr. Smith met the delegation.",
+        "They left together.",
+    )
+
+
+def test_period_repair_handles_model_false_negatives_in_uncased_scripts() -> None:
+    text = "ഒന്നാമത്തെ വാക്യം ഇവിടെ അവസാനിക്കുന്നു. രണ്ടാമത്തെ വാക്യം ഇവിടെ ആരംഭിക്കുന്നു."
+    assert refine_sentence_boundaries((text,), "ml") == (
+        "ഒന്നാമത്തെ വാക്യം ഇവിടെ അവസാനിക്കുന്നു.",
+        "രണ്ടാമത്തെ വാക്യം ഇവിടെ ആരംഭിക്കുന്നു.",
+    )
+
+
+def test_period_repair_preserves_lowercase_continuations() -> None:
+    text = "The measured value was approx. five metres from the boundary."
     assert refine_sentence_boundaries((text,), "en") == (text,)
 
 
@@ -80,6 +96,10 @@ def test_audit_finds_only_residual_high_confidence_boundaries() -> None:
     assert len(find_high_confidence_boundaries(ARABIC_REGRESSION, "ar")) == 2
     assert find_high_confidence_boundaries("د. محمد وصل.", "ar") == ()
     assert find_high_confidence_boundaries("One sentence.", "en") == ()
+    assert find_high_confidence_boundaries(
+        "The delegation arrived safely. They left together.",
+        "en",
+    )
 
 
 @pytest.mark.parametrize(
