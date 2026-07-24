@@ -52,6 +52,7 @@ class RunIdentity:
     engine: str
     engine_version: str
     batch_size: int
+    row_limit: int = 0
 
     def to_dict(self) -> dict[str, str | int]:
         """Return the stable JSON representation."""

@@ -9,15 +9,22 @@ osm-polygon-sentence-relevance
 The Afghanistan labeling proof of concept has a separate focused entry point:
 
 ```text
-osm-polygon-label-sentences {label,finalize,publish}
+osm-polygon-label-sentences {probe,label,finalize,publish}
 ```
 
+`probe` sends deterministic representative rows to an OpenAI-compatible
+endpoint and validates the exact structured response contract without writing
+checkpoints. The Grid'5000 payload uses it before selecting an engine.
 `label` requires immutable input/model/source revisions, a persistent work
 directory, the selected inference engine and version, and a positive batch
 size. It checkpoints each validated batch and prints JSON containing completed
-and total rows, interruption status, elapsed seconds, and input SHA-256.
+and total rows, interruption status, elapsed seconds, and input SHA-256. The
+label and finalize subcommands share a row-limit option: a positive value
+selects a deterministic representative canary, while zero (the default) means
+the complete input.
 `finalize` refuses partial labels and creates the labeled Parquet, manifest,
-concise data-derived README, and two plots. `publish` revalidates those five
+concise data-derived README, and two plots. Its row limit must match the label
+run identity. `publish` revalidates those five
 files and uploads them to the existing dataset in one commit. No command
 accepts a token or creates a repository.
 

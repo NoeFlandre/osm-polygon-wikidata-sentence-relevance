@@ -7,12 +7,14 @@ ROOT = Path(__file__).resolve().parents[3]
 RETAINED_SHELL = {
     "_finalize_persist.sh",
     "run_afghanistan_labeling.sh",
+    "run_afghanistan_labeling_job.sh",
     "run_streaming_build.sh",
     "run_streaming_build_job.sh",
     "run_streaming_finalization.sh",
     "run_streaming_finalization_job.sh",
     "submit_streaming_build.sh",
     "submit_streaming_finalization.sh",
+    "submit_afghanistan_labeling.sh",
 }
 
 

@@ -41,7 +41,12 @@ def test_sends_closed_json_schema_and_preserves_order() -> None:
 
     assert [json.loads(output)["value"] for output in outputs] == ["first", "second"]
     assert all(payload["temperature"] == 0 for payload in captured)
-    assert all(payload["max_tokens"] == 96 for payload in captured)
+    assert all(payload["max_tokens"] == 384 for payload in captured)
+    assert all(payload["seed"] == 0 for payload in captured)
+    assert all(
+        payload["chat_template_kwargs"] == {"enable_thinking": False}
+        for payload in captured
+    )
     schema = captured[0]["response_format"]["json_schema"]["schema"]  # type: ignore[index]
     assert schema == LABEL_RESPONSE_JSON_SCHEMA
 

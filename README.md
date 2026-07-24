@@ -68,8 +68,10 @@ aggregation remain identical with or without `--work-dir`. See
 An Afghanistan-only labeling proof of concept is available through
 `osm-polygon-label-sentences`. It produces independent land-use/land-cover and
 target-polygon relevance labels with exact evidence excerpts. Label batches are
-atomic, resumable, identity-bound, and timed; only a complete validated run can
-generate its factual dataset card and publish to the existing Hub dataset.
+atomic, resumable, identity-bound, and timed. Grid'5000 canaries select
+deterministic representative rows, validate real structured inference before
+labeling, and never publish; only a complete validated run can generate its
+factual dataset card and publish to the existing Hub dataset.
 Production inference uses the Grid'5000 CUDA workflow documented in
 [`docs/guides/grid5000.md`](docs/guides/grid5000.md).
 

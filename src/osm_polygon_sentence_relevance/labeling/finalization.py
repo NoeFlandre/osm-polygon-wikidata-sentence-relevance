@@ -15,6 +15,7 @@ from typing import Any
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from .canary import select_canary_rows
 from .checkpoint import CheckpointStore
 
 
@@ -119,6 +120,13 @@ def _render_card(
         count = counts.get(key, 0)
         return f"{count:,} ({count / row_count * 100:.2f}%)"
 
+    scope = (
+        f"This is a representative **{row_count:,}-row canary** selected "
+        "deterministically for source and language coverage."
+        if identity.get("row_limit", 0)
+        else "This release labels the complete Afghanistan input."
+    )
+
     return f"""---
 license: apache-2.0
 task_categories:
@@ -135,7 +143,7 @@ configs:
 
 # Afghanistan polygon sentence relevance labels
 
-This proof of concept contains **{row_count:,} labeled sentences** from the Afghanistan-only sentence dataset. Each row independently records whether its target sentence is relevant to land use or land cover and whether it is relevant to its associated OSM polygon.
+This proof of concept contains **{row_count:,} labeled sentences** from the Afghanistan-only sentence dataset. {scope} Each row independently records whether its target sentence is relevant to land use or land cover and whether it is relevant to its associated OSM polygon.
 
 ## Label summary
 
@@ -173,7 +181,7 @@ def finalize_labeled_dataset(
         raise LabelFinalizationError(
             "input Parquet SHA-256 does not match run identity"
         )
-    table = pq.read_table(input_path)
+    table = select_canary_rows(pq.read_table(input_path), store.identity.row_limit)
     regions = set(table["region"].to_pylist())
     if regions != {"afghanistan"}:
         raise LabelFinalizationError(

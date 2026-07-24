@@ -76,7 +76,9 @@ class OpenAICompatibleEngine:
             "model": self.model,
             "messages": messages,
             "temperature": 0,
-            "max_tokens": 96,
+            "max_tokens": 384,
+            "seed": 0,
+            "chat_template_kwargs": {"enable_thinking": False},
             "response_format": {
                 "type": "json_schema",
                 "json_schema": {
