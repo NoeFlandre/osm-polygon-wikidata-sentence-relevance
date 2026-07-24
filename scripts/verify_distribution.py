@@ -27,6 +27,7 @@ DOMAIN_PACKAGES = [
     "contracts",
     "ingestion",
     "joins",
+    "labeling",
     "output",
     "publishing",
     "sentences",
@@ -85,12 +86,14 @@ WHEEL_FORBIDDEN_PREFIXES = ("docs/", ".local-docs/", "tests/", ".git")
 SDIST_PRODUCTION_SHELL_SCRIPTS = (
     "scripts/grid5000/_finalize_persist.sh",
     "scripts/grid5000/run_afghanistan_labeling.sh",
+    "scripts/grid5000/run_afghanistan_labeling_job.sh",
     "scripts/grid5000/run_streaming_build.sh",
     "scripts/grid5000/run_streaming_build_job.sh",
     "scripts/grid5000/run_streaming_finalization.sh",
     "scripts/grid5000/run_streaming_finalization_job.sh",
     "scripts/grid5000/submit_streaming_build.sh",
     "scripts/grid5000/submit_streaming_finalization.sh",
+    "scripts/grid5000/submit_afghanistan_labeling.sh",
 )
 SDIST_PRODUCTION_PYTHON_SCRIPTS = (
     "scripts/grid5000/gpu_preflight.py",

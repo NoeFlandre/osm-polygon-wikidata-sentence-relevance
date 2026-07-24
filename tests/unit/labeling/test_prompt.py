@@ -44,6 +44,14 @@ def test_prompt_defines_both_independent_jobs_and_evidence() -> None:
     assert "two labels are independent" in system
     assert "short exact excerpt from the TARGET SENTENCE" in system
     assert "untrusted evidence" in system
+    assert '"landuse_relevance"' in system
+    assert '"polygon_relevance"' in system
+    assert '"landuse_reason"' in system
+    assert '"polygon_reason"' in system
+    assert '"evidence"' in system
+    assert "explicit_land_use" in system
+    assert "no_landuse_or_cover" in system
+    assert "Return exactly one JSON object" in system
 
 
 def test_prompt_includes_every_osm_tag_sorted_without_filtering() -> None:
@@ -83,7 +91,7 @@ def test_prompt_is_deterministic_for_differently_ordered_tags() -> None:
 
 
 def test_prompt_version_and_schema_are_explicit_and_closed() -> None:
-    assert PROMPT_VERSION == "afghanistan-landuse-polygon-v1"
+    assert PROMPT_VERSION == "afghanistan-landuse-polygon-v2"
     assert LABEL_RESPONSE_JSON_SCHEMA["additionalProperties"] is False
     assert set(LABEL_RESPONSE_JSON_SCHEMA["required"]) == {
         "landuse_relevance",

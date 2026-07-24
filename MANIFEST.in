@@ -18,6 +18,8 @@ include scripts/verify_distribution.py
 include scripts/grid5000/gpu_preflight.py
 include scripts/grid5000/_finalize_persist.sh
 include scripts/grid5000/run_afghanistan_labeling.sh
+include scripts/grid5000/run_afghanistan_labeling_job.sh
+include scripts/grid5000/submit_afghanistan_labeling.sh
 include scripts/grid5000/run_streaming_build.sh
 include scripts/grid5000/run_streaming_build_job.sh
 include scripts/grid5000/run_streaming_finalization.sh

@@ -23,7 +23,7 @@ def test_guide_contains_only_supported_frontend_entrypoints() -> None:
         assert obsolete not in text
 
 
-def test_guide_has_exactly_two_canonical_submission_commands() -> None:
+def test_guide_has_exactly_three_canonical_submission_commands() -> None:
     commands = [
         line.strip()
         for line in _text().splitlines()
@@ -32,6 +32,7 @@ def test_guide_has_exactly_two_canonical_submission_commands() -> None:
     assert commands == [
         '"${REPO_ROOT}/scripts/grid5000/submit_streaming_build.sh" \\',
         '"${REPO_ROOT}/scripts/grid5000/submit_streaming_finalization.sh" \\',
+        '"${REPO_ROOT}/scripts/grid5000/submit_afghanistan_labeling.sh" \\',
     ]
 
 

@@ -84,6 +84,97 @@ def test_label_command_runs_and_reports_resumable_result(
     assert output["input_sha256"] == digest
 
 
+def test_probe_command_validates_real_prompt_response_without_checkpoint(
+    tmp_path: Path, capsys
+) -> None:
+    source = tmp_path / "sentences.parquet"
+    _input(source)
+
+    rc = main(
+        [
+            "probe",
+            "--input-parquet",
+            str(source),
+            "--engine",
+            "vllm",
+            "--sample-size",
+            "1",
+        ],
+        engine_factory=lambda args: Engine(),
+    )
+
+    assert rc == 0
+    assert json.loads(capsys.readouterr().out) == {
+        "engine": "vllm",
+        "validated_responses": 1,
+    }
+    assert not (tmp_path / "work").exists()
+
+
+def test_label_row_limit_selects_a_partial_representative_run(
+    tmp_path: Path, capsys
+) -> None:
+    source = tmp_path / "sentences.parquet"
+    pq.write_table(
+        pa.Table.from_pylist(
+            [
+                {
+                    "sentence_id": f"s{index}",
+                    "sentence_text_raw": "text",
+                    "previous_sentence": None,
+                    "next_sentence": None,
+                    "polygon_name": "Place",
+                    "region": "afghanistan",
+                    "osm_primary_tag": "place=city",
+                    "osm_tags": [{"key": "place", "value": "city"}],
+                    "language": language,
+                    "page_title": "Place",
+                    "section_path": ["History"],
+                    "source": source_name,
+                }
+                for index, (language, source_name) in enumerate(
+                    [
+                        ("en", "wikipedia"),
+                        ("fa", "wikipedia"),
+                        ("ps", "wikipedia"),
+                        ("fr", "wikivoyage"),
+                    ]
+                )
+            ]
+        ),
+        source,
+    )
+    rc = main(
+        [
+            "label",
+            "--input-parquet",
+            str(source),
+            "--work-dir",
+            str(tmp_path / "work"),
+            "--input-dataset-revision",
+            "a" * 40,
+            "--model-revision",
+            "b" * 40,
+            "--model-file-sha256",
+            "c" * 64,
+            "--source-commit",
+            "d" * 40,
+            "--engine",
+            "vllm",
+            "--engine-version",
+            "0.21.0",
+            "--batch-size",
+            "2",
+            "--row-limit",
+            "2",
+        ],
+        engine_factory=lambda args: Engine(),
+    )
+
+    assert rc == 0
+    assert json.loads(capsys.readouterr().out)["total"] == 2
+
+
 def test_label_command_rejects_mutable_or_malformed_revisions(
     tmp_path: Path, capsys
 ) -> None:

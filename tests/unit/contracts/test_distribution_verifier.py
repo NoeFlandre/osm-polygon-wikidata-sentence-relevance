@@ -19,12 +19,14 @@ SCRIPT = ROOT / "scripts" / "verify_distribution.py"
 PRODUCTION_SHELL_SCRIPTS = [
     "scripts/grid5000/_finalize_persist.sh",
     "scripts/grid5000/run_afghanistan_labeling.sh",
+    "scripts/grid5000/run_afghanistan_labeling_job.sh",
     "scripts/grid5000/run_streaming_build.sh",
     "scripts/grid5000/run_streaming_build_job.sh",
     "scripts/grid5000/run_streaming_finalization.sh",
     "scripts/grid5000/run_streaming_finalization_job.sh",
     "scripts/grid5000/submit_streaming_build.sh",
     "scripts/grid5000/submit_streaming_finalization.sh",
+    "scripts/grid5000/submit_afghanistan_labeling.sh",
 ]
 PRODUCTION_PYTHON_SCRIPTS = [
     "scripts/grid5000/gpu_preflight.py",
@@ -71,6 +73,7 @@ def _make_fake_wheel(
         "contracts",
         "ingestion",
         "joins",
+        "labeling",
         "output",
         "publishing",
         "sentences",
@@ -170,6 +173,7 @@ class TestVerifierRejectsMissingFacade:
                 "contracts",
                 "ingestion",
                 "joins",
+                "labeling",
                 "output",
                 "publishing",
                 "sentences",

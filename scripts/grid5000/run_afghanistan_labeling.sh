@@ -4,8 +4,8 @@
 set -euo pipefail
 umask 077
 
-if [ "$#" -ne 11 ]; then
-    echo "run_afghanistan_labeling: exactly eleven arguments are required" >&2
+if [ "$#" -ne 12 ]; then
+    echo "run_afghanistan_labeling: exactly twelve arguments are required" >&2
     exit 2
 fi
 
@@ -20,11 +20,17 @@ INPUT_REVISION="$8"; readonly INPUT_REVISION
 SOURCE_COMMIT="$9"; readonly SOURCE_COMMIT
 DATASET_ID="${10}"; readonly DATASET_ID
 BATCH_SIZE="${11}"; readonly BATCH_SIZE
+ROW_LIMIT="${12}"; readonly ROW_LIMIT
 
 : "${OAR_JOB_ID:?run_afghanistan_labeling requires an OAR allocation}"
 case "${OAR_JOB_ID}" in (*[!0-9]*|'') echo "run_afghanistan_labeling: invalid OAR job ID" >&2; exit 2;; esac
 command -v nvidia-smi >/dev/null || { echo "run_afghanistan_labeling: CUDA tooling unavailable" >&2; exit 1; }
 nvidia-smi -L >/dev/null || { echo "run_afghanistan_labeling: no visible CUDA GPU" >&2; exit 1; }
+if ! [[ "${BATCH_SIZE}" =~ ^[1-9][0-9]*$ ]] || \
+   ! [[ "${ROW_LIMIT}" =~ ^(0|[1-9][0-9]*)$ ]]; then
+    echo "run_afghanistan_labeling: batch size and row limit are invalid" >&2
+    exit 2
+fi
 
 case "${MODEL_FILE}" in (*Qwen3.6-27B-Q4_K_M.gguf) ;; (*) echo "run_afghanistan_labeling: expected pinned Q4_K_M model file" >&2; exit 2;; esac
 test -f "${INPUT_PARQUET}" || { echo "run_afghanistan_labeling: input Parquet missing" >&2; exit 2; }
@@ -36,6 +42,8 @@ test -x "${LABEL_CLI}" || { echo "run_afghanistan_labeling: labeling CLI missing
 MODEL_SHA256=$(sha256sum "${MODEL_FILE}" | awk '{print $1}')
 readonly MODEL_SHA256
 PORT=8000; readonly PORT
+MODEL_REPO_ID="unsloth/Qwen3.6-27B-MTP-GGUF"; readonly MODEL_REPO_ID
+CONCURRENCY=32; readonly CONCURRENCY
 SERVER_PID=""
 
 cleanup() {
@@ -61,18 +69,31 @@ health() {
     return 1
 }
 
+probe_engine() {
+    "${LABEL_CLI}" probe \
+        --input-parquet "${INPUT_PARQUET}" \
+        --engine "$1" \
+        --concurrency 4 \
+        --sample-size 4 \
+        --endpoint "http://127.0.0.1:${PORT}/v1/chat/completions" \
+        >"${WORK_DIR}.$1.probe.json" \
+        2>"${WORK_DIR}.$1.probe.stderr.log"
+}
+
 ENGINE=""
 ENGINE_VERSION=""
 if command -v vllm >/dev/null; then
     vllm serve "${MODEL_FILE}" \
         --tokenizer "${TOKENIZER_DIR}" \
         --hf-config-path "${TOKENIZER_DIR}" \
+        --served-model-name "${MODEL_REPO_ID}" \
         --host 127.0.0.1 --port "${PORT}" \
         --max-model-len 4096 --gpu-memory-utilization 0.92 \
+        --generation-config vllm \
         --enable-prefix-caching \
         >"${WORK_DIR}.vllm.stdout.log" 2>"${WORK_DIR}.vllm.stderr.log" &
     SERVER_PID=$!
-    if health; then
+    if health && probe_engine vllm; then
         ENGINE=vllm
         ENGINE_VERSION=$(vllm --version | head -1)
     else
@@ -83,11 +104,12 @@ fi
 
 if [ -z "${ENGINE}" ]; then
     command -v llama-server >/dev/null || { echo "run_afghanistan_labeling: vLLM canary failed and llama.cpp is unavailable" >&2; exit 1; }
-    llama-server --model "${MODEL_FILE}" --host 127.0.0.1 --port "${PORT}" \
+    llama-server --model "${MODEL_FILE}" --alias "${MODEL_REPO_ID}" \
+        --host 127.0.0.1 --port "${PORT}" \
         --ctx-size 4096 --n-gpu-layers 999 --parallel 32 \
         >"${WORK_DIR}.llama.stdout.log" 2>"${WORK_DIR}.llama.stderr.log" &
     SERVER_PID=$!
-    health || { echo "run_afghanistan_labeling: llama.cpp canary failed" >&2; exit 1; }
+    health && probe_engine llama.cpp || { echo "run_afghanistan_labeling: llama.cpp canary failed" >&2; exit 1; }
     ENGINE=llama.cpp
     ENGINE_VERSION=$(llama-server --version 2>&1 | head -1)
 fi
@@ -100,6 +122,7 @@ LABEL_RESULT="${WORK_DIR}.label-result.json"
     --model-revision "${MODEL_REVISION}" --model-file-sha256 "${MODEL_SHA256}" \
     --source-commit "${SOURCE_COMMIT}" --engine "${ENGINE}" \
     --engine-version "${ENGINE_VERSION}" --batch-size "${BATCH_SIZE}" \
+    --concurrency "${CONCURRENCY}" --row-limit "${ROW_LIMIT}" \
     --endpoint "http://127.0.0.1:${PORT}/v1/chat/completions" \
     >"${LABEL_RESULT}"
 
@@ -114,6 +137,11 @@ fi
     --input-dataset-revision "${INPUT_REVISION}" \
     --model-revision "${MODEL_REVISION}" --model-file-sha256 "${MODEL_SHA256}" \
     --source-commit "${SOURCE_COMMIT}" --engine "${ENGINE}" \
-    --engine-version "${ENGINE_VERSION}" --batch-size "${BATCH_SIZE}"
+    --engine-version "${ENGINE_VERSION}" --batch-size "${BATCH_SIZE}" \
+    --row-limit "${ROW_LIMIT}"
 
-"${LABEL_CLI}" publish --output-dir "${OUTPUT_DIR}" --dataset-id "${DATASET_ID}"
+if [ "${ROW_LIMIT}" -eq 0 ]; then
+    "${LABEL_CLI}" publish --output-dir "${OUTPUT_DIR}" --dataset-id "${DATASET_ID}"
+else
+    echo "Canary complete; publication intentionally skipped: ${OUTPUT_DIR}"
+fi

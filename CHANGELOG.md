@@ -13,6 +13,9 @@ pre-1.0 package.
   serving with a llama.cpp fallback, factual timing/ETA, and atomic labels.
 - Automatic labeled-dataset finalization, data-derived card statistics and
   plots, closed-layout validation, and single-commit Hugging Face publication.
+- A guarded, non-publishing Afghanistan labeling canary with deterministic
+  source/language coverage, real structured-inference probing, and
+  non-interactive high-memory Grid'5000 submission.
 
 - Bounded, resumable per-shard processing for Grid'5000 CUDA allocations,
   backed by identity-bound remote checkpoints.

@@ -10,15 +10,18 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
+import pyarrow as pa
 import pyarrow.parquet as pq
 
+from .canary import select_canary_rows
 from .checkpoint import CheckpointStore
 from .contracts import RunIdentity
 from .engine import LabelEngine, OpenAICompatibleEngine
 from .finalization import finalize_labeled_dataset
-from .prompt import PROMPT_VERSION
+from .prompt import PROMPT_VERSION, build_messages
 from .publication import publish_labeled_dataset
 from .runner import LabelingRunner, StopController
+from .validation import parse_label_response
 
 MODEL_REPO_ID = "unsloth/Qwen3.6-27B-MTP-GGUF"
 MODEL_FILE = "Qwen3.6-27B-Q4_K_M.gguf"
@@ -41,6 +44,21 @@ def _parser() -> argparse.ArgumentParser:
     )
     label.add_argument("--batch-size", type=int, default=128)
     label.add_argument("--concurrency", type=int, default=32)
+    label.add_argument(
+        "--row-limit",
+        type=int,
+        default=0,
+        help="Deterministic canary size; zero labels the complete input",
+    )
+
+    probe = sub.add_parser("probe", help="Validate one live inference engine")
+    probe.add_argument("--input-parquet", required=True)
+    probe.add_argument("--engine", required=True, choices=("vllm", "llama.cpp"))
+    probe.add_argument(
+        "--endpoint", default="http://127.0.0.1:8000/v1/chat/completions"
+    )
+    probe.add_argument("--concurrency", type=int, default=4)
+    probe.add_argument("--sample-size", type=int, default=4)
 
     finalize = sub.add_parser("finalize", help="Build validated labeled artifacts")
     finalize.add_argument("--input-parquet", required=True)
@@ -57,6 +75,7 @@ def _parser() -> argparse.ArgumentParser:
     ):
         finalize.add_argument(f"--{name}", required=True)
     finalize.add_argument("--batch-size", type=int, required=True)
+    finalize.add_argument("--row-limit", type=int, default=0)
 
     publish = sub.add_parser("publish", help="Validate and publish final artifacts")
     publish.add_argument("--output-dir", required=True)
@@ -71,6 +90,8 @@ def _hex(value: str, length: int, field: str) -> str:
 
 
 def _identity(args: argparse.Namespace, input_path: Path) -> RunIdentity:
+    if args.row_limit < 0:
+        raise ValueError("row limit must be non-negative")
     input_sha = hashlib.sha256(input_path.read_bytes()).hexdigest()
     return RunIdentity(
         input_sha256=input_sha,
@@ -84,6 +105,7 @@ def _identity(args: argparse.Namespace, input_path: Path) -> RunIdentity:
         engine=args.engine,
         engine_version=args.engine_version,
         batch_size=args.batch_size,
+        row_limit=args.row_limit,
     )
 
 
@@ -93,6 +115,61 @@ def _default_engine(args: argparse.Namespace) -> LabelEngine:
         model=MODEL_REPO_ID,
         concurrency=args.concurrency,
     )
+
+
+_PROMPT_COLUMNS = {
+    "sentence_id",
+    "sentence_text_raw",
+    "previous_sentence",
+    "next_sentence",
+    "polygon_name",
+    "region",
+    "osm_primary_tag",
+    "osm_tags",
+    "language",
+    "page_title",
+    "section_path",
+}
+
+
+def _load_afghanistan(path: Path) -> pa.Table:
+    table = pq.read_table(path)
+    if missing := _PROMPT_COLUMNS.difference(table.column_names):
+        raise ValueError(
+            f"input is missing required labeling columns: {sorted(missing)}"
+        )
+    if set(table["region"].to_pylist()) != {"afghanistan"}:
+        raise ValueError("labeling accepts only the Afghanistan proof-of-concept")
+    return table
+
+
+def _probe(args: argparse.Namespace, engine: LabelEngine) -> int:
+    table = _load_afghanistan(Path(args.input_parquet))
+    if args.sample_size < 1 or args.sample_size > table.num_rows:
+        raise ValueError("sample size must be within the input row count")
+    selected = (
+        table
+        if args.sample_size == table.num_rows
+        else select_canary_rows(table, args.sample_size)
+    )
+    prompt_inputs = [LabelingRunner._prompt(row) for row in selected.to_pylist()]
+    responses = engine.generate(
+        [build_messages(prompt_input) for prompt_input in prompt_inputs]
+    )
+    if len(responses) != len(prompt_inputs):
+        raise ValueError("engine response count does not match probe size")
+    for prompt_input, response in zip(prompt_inputs, responses, strict=True):
+        parse_label_response(response, target_sentence=prompt_input.sentence_text)
+    print(
+        json.dumps(
+            {
+                "engine": args.engine,
+                "validated_responses": len(responses),
+            },
+            sort_keys=True,
+        )
+    )
+    return 0
 
 
 def main(
@@ -114,6 +191,8 @@ def main(
                 )
             )
             return 0
+        if args.command == "probe":
+            return _probe(args, engine_factory(args))
         input_path = Path(args.input_parquet)
         identity = _identity(args, input_path)
         store = CheckpointStore(Path(args.work_dir), identity)
@@ -131,11 +210,10 @@ def main(
                 )
             )
             return 0
-        table = pq.read_table(input_path)
-        if set(table["region"].to_pylist()) != {"afghanistan"}:
-            raise ValueError(
-                "label command accepts only the Afghanistan proof-of-concept"
-            )
+        table = select_canary_rows(
+            _load_afghanistan(input_path),
+            args.row_limit,
+        )
         stop = StopController()
         stop.install()
         result = LabelingRunner(

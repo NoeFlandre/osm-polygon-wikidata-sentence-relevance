@@ -11,6 +11,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
+from osm_polygon_sentence_relevance.labeling.canary import select_canary_rows
 from osm_polygon_sentence_relevance.labeling.checkpoint import CheckpointStore
 from osm_polygon_sentence_relevance.labeling.contracts import (
     LabelRecord,
@@ -165,6 +166,77 @@ def test_refuses_partial_or_non_afghanistan_finalization(tmp_path: Path) -> None
             output_dir=tmp_path / "out2",
             dataset_repo_id="owner/dataset",
         )
+
+
+def test_finalizes_exact_deterministic_canary_subset(tmp_path: Path) -> None:
+    input_path = tmp_path / "input.parquet"
+    pq.write_table(
+        pa.Table.from_pylist(
+            [
+                {
+                    "sentence_id": f"s{index}",
+                    "region": "afghanistan",
+                    "language": language,
+                    "source": source,
+                    "sentence_text_raw": "text",
+                }
+                for index, (language, source) in enumerate(
+                    [
+                        ("en", "wikipedia"),
+                        ("fa", "wikipedia"),
+                        ("ps", "wikipedia"),
+                        ("fr", "wikivoyage"),
+                    ]
+                )
+            ]
+        ),
+        input_path,
+    )
+    digest = hashlib.sha256(input_path.read_bytes()).hexdigest()
+    identity = RunIdentity(
+        input_sha256=digest,
+        input_dataset_revision="b" * 40,
+        model_repo_id="unsloth/Qwen3.6-27B-MTP-GGUF",
+        model_revision="c" * 40,
+        model_file="Qwen3.6-27B-Q4_K_M.gguf",
+        model_file_sha256="d" * 64,
+        prompt_version="afghanistan-landuse-polygon-v2",
+        source_commit="e" * 40,
+        engine="vllm",
+        engine_version="0.21.0",
+        batch_size=2,
+        row_limit=2,
+    )
+    store = CheckpointStore(tmp_path / "work", identity)
+    selected = select_canary_rows(pq.read_table(input_path), 2)
+    store.write_batch(
+        0,
+        [
+            LabelRecord(
+                sentence_id,
+                LabelValue.NO,
+                LabelValue.YES,
+                "no_landuse_or_cover",
+                "direct_polygon_reference",
+                "text",
+            )
+            for sentence_id in selected["sentence_id"].to_pylist()
+        ],
+    )
+    store.write_timing({"total_wall_seconds": 1.0, "inference_seconds": 0.5})
+
+    result = finalize_labeled_dataset(
+        input_path=input_path,
+        store=store,
+        output_dir=tmp_path / "out",
+        dataset_repo_id="owner/dataset",
+    )
+
+    assert result.row_count == 2
+    assert (
+        "representative **2-row canary**"
+        in (result.directory / "README.md").read_text()
+    )
 
 
 def test_publication_is_one_commit_and_includes_all_artifacts(tmp_path: Path) -> None:
