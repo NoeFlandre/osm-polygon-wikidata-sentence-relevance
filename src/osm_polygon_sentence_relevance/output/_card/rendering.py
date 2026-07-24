@@ -945,11 +945,21 @@ is derived from the data.
 {full_language_table}
 </details>
 
-## Processing
+## Processing method
 
 Sentence boundaries were produced with
 `{_escape_md_inline_profile(profile.segmentation_model)}` at revision
-`{_escape_md_inline_profile(profile.segmentation_revision)}`.
+`{_escape_md_inline_profile(profile.segmentation_revision)}`. The exact
+implementation is available in the
+[GitHub source at the producing commit](https://github.com/NoeFlandre/osm-polygon-wikidata-sentence-relevance/tree/{_escape_md_inline_profile(profile.source_commit)}).
+
+After model inference, a conservative residual-boundary repair separates
+only high-confidence punctuation boundaries across writing systems. It
+preserves short abbreviations, lowercase continuations, numeric values,
+and URL query strings. For Arabic-tagged text, a period boundary must
+also continue in Arabic script. Publication scans every normalized sentence
+with the same predicate and refuses an artifact unless the residual count is
+zero.
 
 Each emitted segment has its surrounding whitespace trimmed and is
 then passed through a fixed-order normalisation pipeline:

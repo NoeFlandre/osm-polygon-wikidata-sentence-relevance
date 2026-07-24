@@ -289,7 +289,7 @@ class TestRenderDatasetCardFromProfile:
         assert "Input sentence occurrences" in card
         assert "Duplicates removed" in card
         assert card.count("## Dataset summary") == 1
-        assert card.count("## Processing") == 1
+        assert card.count("## Processing method") == 1
         assert "## Wikipedia and Wikivoyage coverage" not in card
         assert "## Provenance and revision tracking" not in card
         assert "## Reproducibility" not in card
@@ -501,6 +501,22 @@ class TestRenderDatasetCardFromProfile:
         assert profile.segmentation_revision in card
         assert profile.segmentation_model in card
         assert "**High-confidence residual boundary violations:** 0" in card
+
+    def test_processing_method_is_public_and_reproducible(self, tmp_path: Path) -> None:
+        profile = _build_minimal_profile(tmp_path)
+        card = render_dataset_card_from_profile(_with_assets(profile))
+
+        assert "## Processing method" in card
+        assert "conservative residual-boundary repair" in card
+        assert "abbreviations" in card
+        assert "lowercase continuations" in card
+        assert "numeric values" in card
+        assert "URL query strings" in card
+        assert "Publication scans every normalized sentence" in card
+        assert (
+            "https://github.com/NoeFlandre/"
+            "osm-polygon-wikidata-sentence-relevance/tree/HEAD"
+        ) in card
 
     def test_no_map_type_field_described(self, tmp_path: Path) -> None:
         profile = _build_minimal_profile(tmp_path)
