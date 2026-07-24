@@ -74,10 +74,11 @@ In `segmentation.py._prepare_section`, the full section text is consumed once
 by the segmenter. A conservative residual-boundary pass then separates only
 high-confidence punctuation boundaries still embedded in a model segment:
 universal question/exclamation and CJK/Indic terminators, plus an
-Arabic-script period followed by an Arabic letter when both clauses are
-substantive and the preceding token is not a short abbreviation. This repair
-is not a standalone tokenizer and does not apply period heuristics to other
-languages.
+inter-clause period when both sides are substantive. Period repair rejects
+short abbreviation-like prefixes, lowercase continuations, numeric
+continuations, and URL query delimiters; Arabic-script language tags also
+require the following clause to begin in Arabic script. This repair is not a
+standalone tokenizer.
 
 `sentence_text_raw` is the **trimmed** result after that boundary pass — it is
 *not* the complete section input. Its `sentence_text_normalized` is

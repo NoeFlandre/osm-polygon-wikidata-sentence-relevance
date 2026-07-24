@@ -29,7 +29,9 @@ pre-1.0 package.
 
 - Production sentence segmentation now defaults to the multilingual
   `sat-12l-sm` model. A conservative post-model repair separates only
-  high-confidence residual punctuation boundaries before sentence indexing.
+  high-confidence residual punctuation boundaries across scripts before
+  sentence indexing, while preserving abbreviations, lowercase continuations,
+  numeric values, and URL query strings.
 - Checkpointing, dataset-card statistics, rendering, profiling, and plotting
   now have focused internal owners behind stable public facades.
 - Production operations use only the bounded streaming build and deterministic

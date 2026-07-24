@@ -23,6 +23,10 @@ def _is_letter(character: str) -> bool:
     return unicodedata.category(character).startswith("L")
 
 
+def _is_word_character(character: str) -> bool:
+    return unicodedata.category(character)[0] in {"L", "M"}
+
+
 def _is_arabic_letter(character: str) -> bool:
     codepoint = ord(character)
     in_arabic_block = (
@@ -40,7 +44,7 @@ def _preceding_word(text: str, terminal_index: int) -> str:
     while cursor >= 0 and text[cursor].isspace():
         cursor -= 1
     end = cursor + 1
-    while cursor >= 0 and _is_letter(text[cursor]):
+    while cursor >= 0 and _is_word_character(text[cursor]):
         cursor -= 1
     return text[cursor + 1 : end]
 
@@ -66,14 +70,14 @@ def find_high_confidence_boundaries(text: str, language: str) -> tuple[int, ...]
     if not isinstance(text, str) or not isinstance(language, str):
         raise TypeError("text and language must be strings")
 
-    arabic_periods = _primary_language(language) in _ARABIC_SCRIPT_LANGUAGES
+    arabic_language = _primary_language(language) in _ARABIC_SCRIPT_LANGUAGES
     boundaries: list[int] = []
     clause_start = 0
 
     for index, character in enumerate(text):
         is_universal = character in _UNIVERSAL_TERMINALS
-        is_arabic_period = character == "." and arabic_periods
-        if not is_universal and not is_arabic_period:
+        is_period = character == "."
+        if not is_universal and not is_period:
             continue
         if character == "?" and _is_url_query_mark(text, index):
             continue
@@ -89,13 +93,19 @@ def find_high_confidence_boundaries(text: str, language: str) -> tuple[int, ...]
 
         left = text[clause_start:boundary_end].strip()
         right = text[next_index:].strip()
-        if is_arabic_period:
-            if not _is_arabic_letter(text[next_index]):
+        if is_period:
+            if arabic_language and not _is_arabic_letter(text[next_index]):
                 continue
-            # Do not split initials/abbreviations such as ``د. محمد``.
+            # A lowercase continuation is much more likely to follow an
+            # abbreviation than to start a new sentence.  Uncased scripts
+            # report neither lower nor upper and remain eligible.
+            if text[next_index].islower():
+                continue
+            # Do not split initials/short titles such as ``د. محمد`` or
+            # ``Dr. Smith``.
             if len(_preceding_word(text, index)) <= 2:
                 continue
-            if len(left) < 20 or len(right) < 20:
+            if len(left) < 12 or len(right) < 12:
                 continue
         elif len(left) < 2 or len(right) < 2:
             continue
