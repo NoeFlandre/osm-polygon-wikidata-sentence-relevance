@@ -518,6 +518,29 @@ class TestRenderDatasetCardFromProfile:
             "osm-polygon-wikidata-sentence-relevance/tree/HEAD"
         ) in card
 
+    def test_processing_method_explains_the_pipeline_in_order(
+        self, tmp_path: Path
+    ) -> None:
+        profile = _build_minimal_profile(tmp_path)
+        card = render_dataset_card_from_profile(_with_assets(profile))
+
+        stages = (
+            "1. **Section input.**",
+            "2. **Model segmentation.**",
+            "3. **Boundary repair.**",
+            "4. **Normalization.**",
+            "5. **Context and identity.**",
+            "6. **Polygon-scoped deduplication.**",
+            "7. **Publication audit.**",
+        )
+        positions = [card.index(stage) for stage in stages]
+        assert positions == sorted(positions)
+        assert "Wikipedia or Wikivoyage section" in card
+        assert "section order is retained" in card
+        assert "terminal punctuation stays with the preceding sentence" in card
+        assert "The model is not asked to rewrite text" in card
+        assert card.count("Unicode NFC") == 1
+
     def test_no_map_type_field_described(self, tmp_path: Path) -> None:
         profile = _build_minimal_profile(tmp_path)
         card = render_dataset_card_from_profile(_with_assets(profile))
