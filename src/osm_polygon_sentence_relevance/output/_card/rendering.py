@@ -947,40 +947,39 @@ is derived from the data.
 
 ## Processing method
 
-Sentence boundaries were produced with
-`{_escape_md_inline_profile(profile.segmentation_model)}` at revision
-`{_escape_md_inline_profile(profile.segmentation_revision)}`. The exact
-implementation is available in the
+The exact implementation is available in the
 [GitHub source at the producing commit](https://github.com/NoeFlandre/osm-polygon-wikidata-sentence-relevance/tree/{_escape_md_inline_profile(profile.source_commit)}).
+Each row is produced by the following fixed sequence:
 
-After model inference, a conservative residual-boundary repair separates
-only high-confidence punctuation boundaries across writing systems. It
-preserves short abbreviations, lowercase continuations, numeric values,
-and URL query strings. For Arabic-tagged text, a period boundary must
-also continue in Arabic script. Publication scans every normalized sentence
-with the same predicate and refuses an artifact unless the residual count is
-zero.
-
-Each emitted segment has its surrounding whitespace trimmed and is
-then passed through a fixed-order normalisation pipeline:
-
-1. Unicode NFC normalisation.
-2. Removal of configured zero-width characters (`U+200B`, `U+2060`,
-   `U+FEFF`).
-3. Replacement of Unicode control characters with spaces.
-4. Whitespace collapse.
-5. Stripping of consecutive leading MediaWiki edit markers such as
-   `[label | target]`. A marker must start at the current leading
-   position, contain a pipe (`|`), and close with `]` within 120
-   characters. The check repeats until the next leading text is not a
-   valid marker, after which whitespace is collapsed again.
-
-Case, punctuation, accents and joiner characters are preserved.
-`sentence_id` is derived from `polygon_id`, language and the SHA-256 of
-the normalised text. Exact duplicates within that key are collapsed;
-Wikipedia is the canonical row when Wikipedia and Wikivoyage collide,
-while `duplicate_sources` retains all contributing sources. Adjacent
-sentences are context fields and do not affect identity.
+1. **Section input.** One Wikipedia or Wikivoyage section linked to an OSM
+   polygon is processed at a time. Its language is supplied to the segmenter,
+   and section order is retained.
+2. **Model segmentation.** Sentence boundaries are inferred with
+   `{_escape_md_inline_profile(profile.segmentation_model)}` at revision
+   `{_escape_md_inline_profile(profile.segmentation_revision)}`. The model is not asked to rewrite text.
+3. **Boundary repair.** A conservative residual-boundary repair separates
+   high-confidence punctuation boundaries still embedded in a model segment;
+   terminal punctuation stays with the preceding sentence. Short
+   abbreviations, lowercase continuations, numeric values, and URL query strings
+   are preserved. Arabic-tagged period boundaries must continue in
+   Arabic script.
+4. **Normalization.** Each segment is trimmed, normalized to Unicode NFC,
+   stripped of configured zero-width characters (`U+200B`, `U+2060`,
+   `U+FEFF`) and leading MediaWiki edit markers, then has control characters
+   replaced with spaces and whitespace collapsed. Case, punctuation, accents,
+   ZWNJ, and ZWJ are preserved.
+5. **Context and identity.** Sentences are indexed in section order;
+   `previous_sentence` and `next_sentence` are assigned after splitting.
+   `sentence_id` derives from `polygon_id`, language, and the SHA-256 of the
+   normalized text.
+6. **Polygon-scoped deduplication.** Exact normalized duplicates are collapsed
+   only within the same polygon and language. Cross-source collisions retain
+   all contributors in `duplicate_sources`, with Wikipedia as the canonical
+   row.
+7. **Publication audit.** Publication scans every normalized sentence with
+   the same residual-boundary predicate and refuses non-zero results. It also
+   verifies the schema, Parquet hash, generated statistics, example row, and
+   plot hashes before release.
 
 ## Real example row (from the export)
 
