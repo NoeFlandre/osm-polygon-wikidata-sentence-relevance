@@ -541,6 +541,30 @@ class TestRenderDatasetCardFromProfile:
         assert "The model is not asked to rewrite text" in card
         assert card.count("Unicode NFC") == 1
 
+    def test_model_boundary_and_publication_explanations_are_concrete(
+        self, tmp_path: Path
+    ) -> None:
+        profile = _build_minimal_profile(tmp_path)
+        card = render_dataset_card_from_profile(_with_assets(profile))
+
+        assert "full section text and its language code" in card
+        assert "boundary probabilities" in card
+        assert "returns slices of the original text" in card
+        assert "does not generate or paraphrase sentences" in card
+        assert "at least 12 characters" in card
+        assert "`?`, `!`, `؟`, `。`, `！`, `？`, `।`, or `॥`" in card
+        assert "`Delegation arrived. They left.`" in card
+        assert "`Dr. Smith`" in card
+        assert "`10.5`" in card
+        assert "`approx. five`" in card
+        assert "`https://example.org/?q=x`" in card
+        assert "This audit does not run the model again" in card
+        assert "A publishable release must therefore record exactly `0`" in card
+        assert (
+            "does not claim that every ambiguous boundary is linguistically perfect"
+            in card
+        )
+
     def test_no_map_type_field_described(self, tmp_path: Path) -> None:
         profile = _build_minimal_profile(tmp_path)
         card = render_dataset_card_from_profile(_with_assets(profile))
