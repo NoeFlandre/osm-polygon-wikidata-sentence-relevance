@@ -162,6 +162,14 @@ def test_job_wrapper_verifies_checkout_gpu_and_persists_logs() -> None:
     assert "run_afghanistan_labeling.sh" in text
 
 
+def test_job_wrapper_uses_run_root_llama_server_binary() -> None:
+    text = _text("run_afghanistan_labeling_job.sh")
+
+    assert 'LLAMA_SERVER_DIR="${RUN_ROOT}/llama-server-bin"' in text
+    assert '[ ! -x "${LLAMA_SERVER_DIR}/llama-server" ]' in text
+    assert 'export PATH="${LLAMA_SERVER_DIR}:${PATH}"' in text
+
+
 def test_job_wrapper_invokes_deadline_helper() -> None:
     text = _text("run_afghanistan_labeling_job.sh")
     assert "_deadline_helper.sh" in text

@@ -49,10 +49,13 @@ esac
 
 PYTHON="${REPO_ROOT}/.venv/bin/python"
 PAYLOAD="${REPO_ROOT}/scripts/grid5000/run_afghanistan_labeling.sh"
-if [ ! -x "${PYTHON}" ] || [ ! -x "${PAYLOAD}" ]; then
+LLAMA_SERVER_DIR="${RUN_ROOT}/llama-server-bin"
+if [ ! -x "${PYTHON}" ] || [ ! -x "${PAYLOAD}" ] || \
+   [ ! -x "${LLAMA_SERVER_DIR}/llama-server" ]; then
     echo "run_afghanistan_labeling_job: required executable is missing" >&2
     exit 1
 fi
+export PATH="${LLAMA_SERVER_DIR}:${PATH}"
 
 JOB_LOG_DIR="${LOG_ROOT}/${OAR_JOB_ID}"
 mkdir -m 0700 -- "${JOB_LOG_DIR}"
