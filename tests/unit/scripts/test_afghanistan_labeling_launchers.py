@@ -1,15 +1,104 @@
 from __future__ import annotations
 
 import os
+import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
 GRID = ROOT / "scripts" / "grid5000"
 GUIDES = ROOT / "docs" / "guides" / "grid5000.md"
+SCRIPT = ROOT / "scripts" / "grid5000" / "submit_afghanistan_labeling.sh"
+COMMIT = "a" * 40
+REVISION = "b" * 40
 
 
 def _text(name: str) -> str:
     return (GRID / name).read_text()
+
+
+def _run_submit(
+    root: Path,
+    work_dir: Path,
+    output_dir: Path | None = None,
+) -> subprocess.CompletedProcess[str]:
+    if output_dir is None:
+        output_dir = root / "output"
+
+    fake_bin = root / "bin"
+    fake_bin.mkdir(parents=True)
+    fake_call = root / "oarsub.calls"
+    call_count = root / "oarsub.call_count"
+
+    fake_bin.joinpath("oarsub").write_text(
+        f"#!/usr/bin/env bash\n"
+        f'printf "%s\\n" "$#" >> "{call_count}"\n'
+        f'printf "%s\\n" "$*" >> "{fake_call}"\n'
+        "echo 123456\n",
+    )
+    fake_bin.joinpath("oarsub").chmod(0o700)
+
+    run_root = root
+    repo_root = run_root / "repo"
+    hf_home = run_root / "hf_home"
+    log_root = run_root / "logs"
+    input_parquet = run_root / "input.parquet"
+    model_file = run_root / "model.gguf"
+    tokenizer_dir = run_root / "tokenizer"
+    repo_target = repo_root / "scripts" / "grid5000"
+    repo_target.mkdir(parents=True)
+    for item in (
+        GRID / "run_afghanistan_labeling_job.sh",
+        GRID / "run_afghanistan_labeling.sh",
+    ):
+        destination = repo_target / item.name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(item.read_bytes())
+        destination.chmod(item.stat().st_mode)
+    for required_dir in (
+        repo_root / "scripts" / "grid5000",
+        hf_home,
+        log_root,
+        tokenizer_dir,
+        work_dir.parent,
+        output_dir.parent,
+    ):
+        required_dir.mkdir(parents=True, exist_ok=True)
+    for required_file in (
+        input_parquet,
+        model_file,
+        tokenizer_dir / "README.md",
+        repo_root / "scripts" / "grid5000" / "_deadline_helper.sh",
+        repo_root / "scripts" / "grid5000" / "_checkout_guard.sh",
+    ):
+        required_file.parent.mkdir(parents=True, exist_ok=True)
+        required_file.write_text("ok")
+
+    result = subprocess.run(
+        [
+            "bash",
+            str(SCRIPT),
+            str(repo_root),
+            str(hf_home),
+            str(log_root),
+            str(input_parquet),
+            str(work_dir),
+            str(output_dir),
+            str(model_file),
+            str(tokenizer_dir),
+            REVISION,
+            REVISION,
+            COMMIT,
+            "NoeFlandre/osm-polygon-wikidata-sentence-relevance",
+            "128",
+            "0",
+            "16",
+        ],
+        env={**os.environ, "PATH": f"{fake_bin}:{os.environ['PATH']}"},
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    return result
 
 
 def test_labeling_launchers_are_executable() -> None:
@@ -87,3 +176,118 @@ def test_docs_include_canonical_full_run_args() -> None:
     assert '"NoeFlandre/osm-polygon-wikidata-sentence-relevance"' in text
     assert '"128" "0" "16"' in text
     assert '"0" "0" "16"' not in text
+
+
+def _is_under_root(root: Path, candidate: Path) -> bool:
+    env = {
+        **os.environ,
+        "SCRIPT_PATH": str(SCRIPT),
+        "ROOT_PATH": str(root),
+        "CANDIDATE_PATH": str(candidate),
+    }
+    completed = subprocess.run(
+        [
+            "bash",
+            "-lc",
+            'source "$SCRIPT_PATH"; '
+            'root="$(canonicalize_path "$ROOT_PATH")"; '
+            'candidate="$(canonicalize_path "$CANDIDATE_PATH")"; '
+            'is_under_root "$candidate" "$root";',
+        ],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    return completed.returncode == 0
+
+
+def test_submit_root_accepts_root_and_descendants(tmp_path: Path) -> None:
+    root = tmp_path / "run" / "root"
+    root.mkdir(parents=True)
+    nested = root / "nested" / "deep"
+    nested.mkdir(parents=True)
+    assert _is_under_root(root, root)
+    assert _is_under_root(root, root / "child")
+    assert _is_under_root(root, nested)
+
+
+def test_submit_root_rejects_sibling_like_prefix_or_traversal() -> None:
+    root = Path("/run/root")
+    sibling = Path("/run/root2")
+    traversal = Path("/run/root/../escape")
+    assert not _is_under_root(root, sibling)
+    assert not _is_under_root(root, traversal)
+
+
+def test_submit_root_rejects_symlink_or_broken_entries(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+
+    escape_link = root / "link-escape"
+    escape_link.symlink_to(outside)
+    broken = root / "link-broken"
+    broken.symlink_to(root / "does-not-exist")
+    assert not _is_under_root(root, escape_link)
+    assert _is_under_root(root, broken)
+
+
+def test_submit_root_accepts_paths_with_spaces_and_glob_chars(tmp_path: Path) -> None:
+    root = tmp_path / "run root"
+    root.mkdir(parents=True)
+    special = root / "with space [x] * ? file"
+    special.mkdir()
+    assert _is_under_root(root, special)
+
+
+def test_submit_helper_hits_oarsub_once_with_valid_paths(tmp_path: Path) -> None:
+    root = tmp_path / "runroot"
+    work_dir = root / "work"
+    output_dir = root / "output"
+    result = _run_submit(root, work_dir, output_dir)
+    call_count = root / "oarsub.call_count"
+    assert result.returncode == 0
+    assert result.stdout.strip() == "123456"
+    assert call_count.exists()
+    assert call_count.read_text().strip() == "9"
+    assert "submit_afghanistan_labeling: required" not in result.stderr
+
+
+def test_submit_helper_rejects_escaped_path_before_oarsub(tmp_path: Path) -> None:
+    root = tmp_path / "runroot"
+    outside = tmp_path / "outside"
+    outside.mkdir(parents=True, exist_ok=True)
+    work_dir = outside / "work"
+    output_dir = root / "output"
+    result = _run_submit(root, work_dir, output_dir)
+    assert result.returncode != 0
+    call_count = root / "oarsub.call_count"
+    assert not call_count.exists()
+    assert "path is outside the approved run root" in result.stderr
+    assert str(root) not in result.stderr
+
+
+def test_submit_helper_rejects_broken_symlink_before_oarsub(tmp_path: Path) -> None:
+    root = tmp_path / "runroot"
+    root.mkdir()
+    work_dir = root / "broken-work"
+    work_dir.symlink_to(root / "missing-work")
+    result = _run_submit(root, work_dir)
+    assert result.returncode != 0
+    assert not (root / "oarsub.call_count").exists()
+    assert "work directory must not be a symlink" in result.stderr
+
+
+def test_submit_helper_stable_error_output_on_rejected_path(tmp_path: Path) -> None:
+    root = tmp_path / "runroot"
+    work_dir = root / "../outside"
+    output_dir = root / "output"
+    result = _run_submit(root, work_dir, output_dir)
+    assert result.returncode != 0
+    assert (
+        "submit_afghanistan_labeling: path is outside the approved run root"
+        in result.stderr
+    )
+    assert "/runroot" not in result.stderr

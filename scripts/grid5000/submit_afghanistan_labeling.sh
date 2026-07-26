@@ -9,11 +9,6 @@
 set -euo pipefail
 umask 077
 
-if [ "$#" -ne 15 ]; then
-    echo "submit_afghanistan_labeling: exactly fifteen arguments are required" >&2
-    exit 2
-fi
-
 canonicalize_path() {
     local path="$1"
     if [ -L "${path}" ]; then
@@ -40,10 +35,21 @@ is_under_root() {
     local candidate="$1"
     local root="$2"
     case "${candidate}" in
-        "${root}"|"${root}/*") return 0;;
+        "${root}"|"${root}"/*) return 0;;
         *) return 1;;
     esac
 }
+
+# Permit focused shell tests to source the small path helpers without
+# executing a scheduler submission.
+if [ "${BASH_SOURCE[0]}" != "$0" ]; then
+    return 0
+fi
+
+if [ "$#" -ne 15 ]; then
+    echo "submit_afghanistan_labeling: exactly fifteen arguments are required" >&2
+    exit 2
+fi
 
 validate_path() {
     local path="$1"
@@ -52,13 +58,11 @@ validate_path() {
     local description="$4"
     local canonicalized
 
-    if [ ! -e "${path}" ]; then
-        if [ "${must_exist}" = "yes" ]; then
-            echo "submit_afghanistan_labeling: required ${description} is unavailable" >&2
-            exit 2
-        fi
-    elif [ "${allow_symlink}" != "yes" ] && [ -L "${path}" ]; then
+    if [ "${allow_symlink}" != "yes" ] && [ -L "${path}" ]; then
         echo "submit_afghanistan_labeling: ${description} must not be a symlink" >&2
+        exit 2
+    elif [ ! -e "${path}" ] && [ "${must_exist}" = "yes" ]; then
+        echo "submit_afghanistan_labeling: required ${description} is unavailable" >&2
         exit 2
     fi
 
@@ -100,7 +104,7 @@ LLAMA_PARALLEL="${15}"; readonly LLAMA_PARALLEL
 
 RUN_ROOT="${REPO_ROOT_CANON%/*}"
 
-for path in "${REPO_ROOT}" "${HF_HOME}" "${LOG_ROOT}" "${TOKENIZER_DIR}" "${INPUT_PARQUET}" "${WORK_DIR}" "${OUTPUT_DIR}" "${MODEL_FILE}" "${TOKENIZER_DIR}"; do
+for path in "${REPO_ROOT}" "${HF_HOME}" "${LOG_ROOT}" "${TOKENIZER_DIR}" "${INPUT_PARQUET}" "${WORK_DIR}" "${OUTPUT_DIR}" "${MODEL_FILE}"; do
     case "${path}" in
         /*) ;;
         *) echo "submit_afghanistan_labeling: path must be absolute" >&2
@@ -108,7 +112,7 @@ for path in "${REPO_ROOT}" "${HF_HOME}" "${LOG_ROOT}" "${TOKENIZER_DIR}" "${INPU
         ;;
     esac
     if ! is_under_root "${path}" "${RUN_ROOT}"; then
-        echo "submit_afghanistan_labeling: path is outside the approved run root: ${path}" >&2
+        echo "submit_afghanistan_labeling: path is outside the approved run root" >&2
         exit 2
     fi
 done
