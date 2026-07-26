@@ -116,7 +116,7 @@ def test_submitter_requests_one_fast_large_cuda_gpu_once() -> None:
     assert "gpu=1,walltime=12:00:00" in text
     assert "gpu_mem>=60000" in text
     assert " -q default" in text
-    assert " -t exotic" in text
+    assert " -t exotic" not in text
     assert " -t besteffort" not in text
     assert " -I" not in text
 
@@ -251,7 +251,7 @@ def test_submit_helper_hits_oarsub_once_with_valid_paths(tmp_path: Path) -> None
     assert result.returncode == 0
     assert result.stdout.strip() == "123456"
     assert call_count.exists()
-    assert call_count.read_text().strip() == "9"
+    assert call_count.read_text().strip() == "7"
     assert "submit_afghanistan_labeling: required" not in result.stderr
 
 

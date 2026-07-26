@@ -163,9 +163,8 @@ for value in "$@"; do
 done
 
 # Production / non-preemptible queue: the load is sustained and must not be
-# interrupted by another user's best-effort workload. The nantes site uses
-# the default queue (``-q default``) with the ``exotic`` type so the job
-# is scheduled on the production / non-preemptible node class. The
+# interrupted by another user's best-effort workload. The site default queue
+# is requested directly; no unsupported OAR job type is injected. The
 # ``-t besteffort`` marker is intentionally absent.
-exec oarsub -q default -t exotic -p "gpu_mem>=60000" \
+exec oarsub -q default -p "gpu_mem>=60000" \
     -l gpu=1,walltime=12:00:00 "${command_string}"
