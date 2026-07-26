@@ -1,11 +1,16 @@
 #!/usr/bin/env bash
 # Submit one non-interactive Afghanistan labeling run from a Grid'5000 frontend.
+#
+# The launcher's parallelism is a first-class positional argument. The
+# supported set is the small validated set {1, 2, 4, 8, 16, 32}; the wrapper
+# propagates it as the final argument so the payload can compute the total
+# context (parallel * 4096) and launch the real llama-server binary.
 
 set -euo pipefail
 umask 077
 
-if [ "$#" -ne 14 ]; then
-    echo "submit_afghanistan_labeling: exactly fourteen arguments are required" >&2
+if [ "$#" -ne 15 ]; then
+    echo "submit_afghanistan_labeling: exactly fifteen arguments are required" >&2
     exit 2
 fi
 
@@ -23,6 +28,7 @@ SOURCE_COMMIT="${11}"; readonly SOURCE_COMMIT
 DATASET_ID="${12}"; readonly DATASET_ID
 BATCH_SIZE="${13}"; readonly BATCH_SIZE
 ROW_LIMIT="${14}"; readonly ROW_LIMIT
+LLAMA_PARALLEL="${15}"; readonly LLAMA_PARALLEL
 
 for path in "${REPO_ROOT}" "${HF_HOME}" "${LOG_ROOT}" "${TOKENIZER_DIR}"; do
     case "${path}" in /*) ;; *) echo "submit_afghanistan_labeling: directory paths must be absolute" >&2; exit 2;; esac
@@ -57,6 +63,10 @@ if ! [[ "${DATASET_ID}" =~ ^[^/[:space:]]+/[^/[:space:]]+$ ]] || \
     echo "submit_afghanistan_labeling: dataset ID or numeric argument is invalid" >&2
     exit 2
 fi
+case "${LLAMA_PARALLEL}" in
+    1|2|4|8|16|32) ;;
+    *) echo "submit_afghanistan_labeling: LLAMA_PARALLEL must be one of 1, 2, 4, 8, 16, 32" >&2; exit 2;;
+esac
 
 WRAPPER="${REPO_ROOT}/scripts/grid5000/run_afghanistan_labeling_job.sh"
 if [ ! -x "${WRAPPER}" ] || ! command -v oarsub >/dev/null 2>&1; then
@@ -73,5 +83,7 @@ for value in "$@"; do
     command_string="${command_string} $(shell_quote "${value}")"
 done
 
-exec oarsub -q default -t exotic -p "gpu_mem>=60000" \
-    -l gpu=1,walltime=01:00:00 "${command_string}"
+# Production / non-preemptible queue; the load is sustained and must not be
+# interrupted by another user's best-effort workload.
+exec oarsub -t production -t exotic -p "gpu_mem>=60000" \
+    -l gpu=1,walltime=12:00:00 "${command_string}"

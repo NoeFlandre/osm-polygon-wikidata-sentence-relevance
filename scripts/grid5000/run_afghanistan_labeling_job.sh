@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
 # Scheduler-owned wrapper for one resumable Afghanistan labeling allocation.
+#
+# The wrapper translates the front-end arguments into the bounded payload
+# contract. The parallelism argument is propagated as the final positional
+# argument so the payload can derive the total context and launch the real
+# llama-server binary directly.
 
 set -euo pipefail
 umask 077
@@ -9,14 +14,15 @@ if ! [[ "${OAR_JOB_ID}" =~ ^[0-9]+$ ]]; then
     echo "run_afghanistan_labeling_job: OAR_JOB_ID must be numeric" >&2
     exit 2
 fi
-if [ "$#" -ne 14 ]; then
-    echo "run_afghanistan_labeling_job: exactly fourteen arguments are required" >&2
+if [ "$#" -ne 15 ]; then
+    echo "run_afghanistan_labeling_job: exactly fifteen arguments are required" >&2
     exit 2
 fi
 
 REPO_ROOT="$1"; readonly REPO_ROOT
 LOG_ROOT="$3"; readonly LOG_ROOT
 EXPECTED_SOURCE_COMMIT="${11}"; readonly EXPECTED_SOURCE_COMMIT
+LLAMA_PARALLEL="${15}"; readonly LLAMA_PARALLEL
 
 if [ "$(git -C "${REPO_ROOT}" rev-parse HEAD)" != "${EXPECTED_SOURCE_COMMIT}" ]; then
     echo "run_afghanistan_labeling_job: checkout commit mismatch" >&2
@@ -26,6 +32,11 @@ if [ -n "$(git -C "${REPO_ROOT}" status --porcelain)" ]; then
     echo "run_afghanistan_labeling_job: checkout is dirty" >&2
     exit 1
 fi
+
+case "${LLAMA_PARALLEL}" in
+    1|2|4|8|16|32) ;;
+    *) echo "run_afghanistan_labeling_job: LLAMA_PARALLEL must be one of 1, 2, 4, 8, 16, 32" >&2; exit 2;;
+esac
 
 PYTHON="${REPO_ROOT}/.venv/bin/python"
 PAYLOAD="${REPO_ROOT}/scripts/grid5000/run_afghanistan_labeling.sh"
@@ -43,7 +54,7 @@ mkdir -m 0700 -- "${JOB_LOG_DIR}"
 
 set +e
 "${PAYLOAD}" "${REPO_ROOT}" "$4" "$5" "$6" "$7" "$8" "$9" \
-    "${10}" "${11}" "${12}" "${13}" "${14}" \
+    "${10}" "${11}" "${12}" "${13}" "${14}" "${LLAMA_PARALLEL}" \
     >"${JOB_LOG_DIR}/labeling.stdout.log" \
     2>"${JOB_LOG_DIR}/labeling.stderr.log"
 labeling_rc=$?

@@ -20,9 +20,13 @@ def _identity() -> RunIdentity:
         model_file_sha256="d" * 64,
         prompt_version="afghanistan-landuse-polygon-v1",
         source_commit="e" * 40,
-        engine="vllm",
-        engine_version="0.21.0",
+        engine="llama.cpp",
+        engine_version="1",
         batch_size=2,
+        llama_parallel=16,
+        llama_per_slot_context=4096,
+        llama_total_context=65536,
+        request_concurrency=16,
     )
 
 

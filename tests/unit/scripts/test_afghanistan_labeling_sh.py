@@ -14,17 +14,18 @@ def test_payload_requires_oar_and_cuda_without_fallback() -> None:
     assert "CUDA_VISIBLE_DEVICES=" not in text
 
 
-def test_payload_attempts_vllm_then_llama_cpp_only_on_failed_canary() -> None:
+def test_payload_launches_llama_server_directly() -> None:
     text = SCRIPT.read_text()
-    assert text.index("vllm serve") < text.index("llama-server")
-    assert '--hf-config-path "${TOKENIZER_DIR}"' in text
-    assert '--served-model-name "${MODEL_REPO_ID}"' in text
+    # No vLLM attempt; the test for the legacy fallback is intentionally gone.
+    assert "vllm serve" not in text
+    assert "vllm --version" not in text
+    assert "ENGINE=vllm" not in text
+    assert "ENGINE=llama.cpp" in text
+    assert '--hf-config-path "${TOKENIZER_DIR}"' not in text
+    assert '--served-model-name "${MODEL_REPO_ID}"' not in text
     assert '--alias "${MODEL_REPO_ID}"' in text
-    assert "--generation-config vllm" in text
     assert "health" in text
     assert text.index("probe_engine") < text.index('"${LABEL_CLI}" label')
-    assert "ENGINE=vllm" in text
-    assert "ENGINE=llama.cpp" in text
 
 
 def test_payload_runs_label_finalize_publish_in_order() -> None:
@@ -49,8 +50,10 @@ def test_payload_uses_q4_k_m_and_pinned_local_files() -> None:
 
 def test_payload_supports_nonpublishing_representative_canary() -> None:
     text = SCRIPT.read_text()
-    assert "exactly twelve arguments" in text
+    assert "exactly thirteen arguments" in text
     assert 'ROW_LIMIT="${12}"' in text
     assert '--row-limit "${ROW_LIMIT}"' in text
-    assert '--concurrency "${CONCURRENCY}"' in text
+    assert 'LLAMA_PARALLEL="${13}"' in text
+    assert '--llama-parallel "${LLAMA_PARALLEL}"' in text
+    assert "LLAMA_TOTAL_CONTEXT=$((LLAMA_PARALLEL * LLAMA_PER_SLOT_CONTEXT))" in text
     assert "Canary complete; publication intentionally skipped" in text

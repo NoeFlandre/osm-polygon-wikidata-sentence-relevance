@@ -1,11 +1,17 @@
 #!/usr/bin/env bash
 # Run/resume Afghanistan labeling inside an allocated CUDA OAR job.
+#
+# The payload launches the real llama-server binary directly with the
+# validated parallelism and total context. There is no vLLM attempt, no
+# wrapper script, and no reliance on PYTHONPATH or sitecustomize. The
+# client concurrency is pinned to the parallel slot count so the request
+# stream cannot outpace the server's bounded slots.
 
 set -euo pipefail
 umask 077
 
-if [ "$#" -ne 12 ]; then
-    echo "run_afghanistan_labeling: exactly twelve arguments are required" >&2
+if [ "$#" -ne 13 ]; then
+    echo "run_afghanistan_labeling: exactly thirteen arguments are required" >&2
     exit 2
 fi
 
@@ -21,6 +27,7 @@ SOURCE_COMMIT="$9"; readonly SOURCE_COMMIT
 DATASET_ID="${10}"; readonly DATASET_ID
 BATCH_SIZE="${11}"; readonly BATCH_SIZE
 ROW_LIMIT="${12}"; readonly ROW_LIMIT
+LLAMA_PARALLEL="${13}"; readonly LLAMA_PARALLEL
 
 : "${OAR_JOB_ID:?run_afghanistan_labeling requires an OAR allocation}"
 case "${OAR_JOB_ID}" in (*[!0-9]*|'') echo "run_afghanistan_labeling: invalid OAR job ID" >&2; exit 2;; esac
@@ -31,6 +38,13 @@ if ! [[ "${BATCH_SIZE}" =~ ^[1-9][0-9]*$ ]] || \
     echo "run_afghanistan_labeling: batch size and row limit are invalid" >&2
     exit 2
 fi
+case "${LLAMA_PARALLEL}" in
+    1|2|4|8|16|32) ;;
+    *) echo "run_afghanistan_labeling: LLAMA_PARALLEL must be one of 1, 2, 4, 8, 16, 32" >&2; exit 2;;
+esac
+LLAMA_PER_SLOT_CONTEXT=4096; readonly LLAMA_PER_SLOT_CONTEXT
+LLAMA_TOTAL_CONTEXT=$((LLAMA_PARALLEL * LLAMA_PER_SLOT_CONTEXT)); readonly LLAMA_TOTAL_CONTEXT
+REQUEST_CONCURRENCY="${LLAMA_PARALLEL}"; readonly REQUEST_CONCURRENCY
 
 case "${MODEL_FILE}" in (*Qwen3.6-27B-Q4_K_M.gguf) ;; (*) echo "run_afghanistan_labeling: expected pinned Q4_K_M model file" >&2; exit 2;; esac
 test -f "${INPUT_PARQUET}" || { echo "run_afghanistan_labeling: input Parquet missing" >&2; exit 2; }
@@ -43,7 +57,6 @@ MODEL_SHA256=$(sha256sum "${MODEL_FILE}" | awk '{print $1}')
 readonly MODEL_SHA256
 PORT=8000; readonly PORT
 MODEL_REPO_ID="unsloth/Qwen3.6-27B-MTP-GGUF"; readonly MODEL_REPO_ID
-CONCURRENCY=32; readonly CONCURRENCY
 SERVER_PID=""
 
 cleanup() {
@@ -72,48 +85,36 @@ health() {
 probe_engine() {
     "${LABEL_CLI}" probe \
         --input-parquet "${INPUT_PARQUET}" \
-        --engine "$1" \
-        --concurrency 4 \
-        --sample-size 4 \
+        --engine llama.cpp \
         --endpoint "http://127.0.0.1:${PORT}/v1/chat/completions" \
-        >"${WORK_DIR}.$1.probe.json" \
-        2>"${WORK_DIR}.$1.probe.stderr.log"
+        --sample-size 4 \
+        --llama-parallel "${LLAMA_PARALLEL}" \
+        --llama-per-slot-context "${LLAMA_PER_SLOT_CONTEXT}" \
+        --llama-total-context "${LLAMA_TOTAL_CONTEXT}" \
+        --request-concurrency "${REQUEST_CONCURRENCY}" \
+        >"${WORK_DIR}.llama.probe.json" \
+        2>"${WORK_DIR}.llama.probe.stderr.log"
 }
 
-ENGINE=""
-ENGINE_VERSION=""
-if command -v vllm >/dev/null; then
-    vllm serve "${MODEL_FILE}" \
-        --tokenizer "${TOKENIZER_DIR}" \
-        --hf-config-path "${TOKENIZER_DIR}" \
-        --served-model-name "${MODEL_REPO_ID}" \
-        --host 127.0.0.1 --port "${PORT}" \
-        --max-model-len 4096 --gpu-memory-utilization 0.92 \
-        --generation-config vllm \
-        --enable-prefix-caching \
-        >"${WORK_DIR}.vllm.stdout.log" 2>"${WORK_DIR}.vllm.stderr.log" &
-    SERVER_PID=$!
-    if health && probe_engine vllm; then
-        ENGINE=vllm
-        ENGINE_VERSION=$(vllm --version | head -1)
-    else
-        cleanup
-        SERVER_PID=""
-    fi
+command -v llama-server >/dev/null || { echo "run_afghanistan_labeling: llama-server is unavailable" >&2; exit 1; }
+llama-server --model "${MODEL_FILE}" --alias "${MODEL_REPO_ID}" \
+    --host 127.0.0.1 --port "${PORT}" \
+    --ctx-size "${LLAMA_TOTAL_CONTEXT}" --parallel "${LLAMA_PARALLEL}" \
+    --n-gpu-layers 999 \
+    >"${WORK_DIR}.llama.stdout.log" 2>"${WORK_DIR}.llama.stderr.log" &
+SERVER_PID=$!
+if ! health; then
+    echo "run_afghanistan_labeling: llama-server failed to become healthy" >&2
+    exit 1
 fi
-
-if [ -z "${ENGINE}" ]; then
-    command -v llama-server >/dev/null || { echo "run_afghanistan_labeling: vLLM canary failed and llama.cpp is unavailable" >&2; exit 1; }
-    llama-server --model "${MODEL_FILE}" --alias "${MODEL_REPO_ID}" \
-        --host 127.0.0.1 --port "${PORT}" \
-        --ctx-size 4096 --n-gpu-layers 999 --parallel 32 \
-        >"${WORK_DIR}.llama.stdout.log" 2>"${WORK_DIR}.llama.stderr.log" &
-    SERVER_PID=$!
-    health && probe_engine llama.cpp || { echo "run_afghanistan_labeling: llama.cpp canary failed" >&2; exit 1; }
-    ENGINE=llama.cpp
-    ENGINE_VERSION=$(llama-server --version 2>&1 | head -1)
+if ! probe_engine; then
+    echo "run_afghanistan_labeling: llama.cpp canary failed" >&2
+    exit 1
 fi
-readonly ENGINE ENGINE_VERSION
+ENGINE=llama.cpp
+readonly ENGINE
+ENGINE_VERSION=$(llama-server --version 2>&1 | head -1)
+readonly ENGINE_VERSION
 
 LABEL_RESULT="${WORK_DIR}.label-result.json"
 "${LABEL_CLI}" label \
@@ -122,7 +123,12 @@ LABEL_RESULT="${WORK_DIR}.label-result.json"
     --model-revision "${MODEL_REVISION}" --model-file-sha256 "${MODEL_SHA256}" \
     --source-commit "${SOURCE_COMMIT}" --engine "${ENGINE}" \
     --engine-version "${ENGINE_VERSION}" --batch-size "${BATCH_SIZE}" \
-    --concurrency "${CONCURRENCY}" --row-limit "${ROW_LIMIT}" \
+    --concurrency "${REQUEST_CONCURRENCY}" \
+    --llama-parallel "${LLAMA_PARALLEL}" \
+    --llama-per-slot-context "${LLAMA_PER_SLOT_CONTEXT}" \
+    --llama-total-context "${LLAMA_TOTAL_CONTEXT}" \
+    --request-concurrency "${REQUEST_CONCURRENCY}" \
+    --row-limit "${ROW_LIMIT}" \
     --endpoint "http://127.0.0.1:${PORT}/v1/chat/completions" \
     >"${LABEL_RESULT}"
 
@@ -138,7 +144,11 @@ fi
     --model-revision "${MODEL_REVISION}" --model-file-sha256 "${MODEL_SHA256}" \
     --source-commit "${SOURCE_COMMIT}" --engine "${ENGINE}" \
     --engine-version "${ENGINE_VERSION}" --batch-size "${BATCH_SIZE}" \
-    --row-limit "${ROW_LIMIT}"
+    --row-limit "${ROW_LIMIT}" \
+    --llama-parallel "${LLAMA_PARALLEL}" \
+    --llama-per-slot-context "${LLAMA_PER_SLOT_CONTEXT}" \
+    --llama-total-context "${LLAMA_TOTAL_CONTEXT}" \
+    --request-concurrency "${REQUEST_CONCURRENCY}"
 
 if [ "${ROW_LIMIT}" -eq 0 ]; then
     "${LABEL_CLI}" publish --output-dir "${OUTPUT_DIR}" --dataset-id "${DATASET_ID}"

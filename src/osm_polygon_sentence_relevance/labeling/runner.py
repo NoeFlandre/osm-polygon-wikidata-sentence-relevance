@@ -2,19 +2,55 @@
 
 from __future__ import annotations
 
+import json
 import signal
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import cast
 
 import pyarrow as pa
 
 from .checkpoint import CheckpointStore
-from .contracts import LabelRecord
+from .contracts import LabelRecord, SentenceLabel
 from .engine import LabelEngine
 from .prompt import PromptInput, build_messages
-from .validation import parse_label_response
+from .repair import BoundedRepair, Messages, RepairEngine, RepairStats
+from .validation import LabelValidationError
+
+
+def _passthrough_engine(
+    initial_response: str, fallback_engine: RepairEngine
+) -> RepairEngine:
+    """Return an engine that emits ``initial_response`` first then delegates to ``fallback_engine``.
+
+    The first invocation returns the original batched response verbatim so
+    the strict validator runs on the model's actual output. Subsequent
+    invocations are routed to ``fallback_engine`` so the bounded repair can
+    issue a single-prompt request. The fallback engine is expected to call
+    the production server with the repaired message; the response is
+    validated against the same strict schema.
+    """
+
+    state = {"called": 0}
+
+    def call(messages: Sequence[Messages]) -> list[str]:
+        state["called"] += 1
+        if state["called"] == 1:
+            return [initial_response]
+        return fallback_engine(messages)
+
+    return call
+
+
+def _batched_to_single_engine(engine: LabelEngine) -> RepairEngine:
+    """Adapt a batched :class:`LabelEngine` to a single-message :class:`RepairEngine`."""
+
+    def call(messages: Sequence[Messages]) -> list[str]:
+        return list(engine.generate(list(messages)))
+
+    return call
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,6 +62,7 @@ class RunResult:
     interrupted: bool
     elapsed_seconds: float
     inference_seconds: float
+    repair_stats: RepairStats
 
 
 class StopController:
@@ -57,6 +94,9 @@ class LabelingRunner:
         batch_size: int,
         stop_requested: Callable[[], bool] | None = None,
         clock: Callable[[], float] = time.monotonic,
+        repair: BoundedRepair | None = None,
+        repair_log_path: Path | None = None,
+        repair_max_attempts: int = 1,
     ) -> None:
         if isinstance(batch_size, bool) or batch_size < 1:
             raise ValueError("batch_size must be a positive integer")
@@ -67,6 +107,57 @@ class LabelingRunner:
         self.batch_size = batch_size
         self.stop_requested = stop_requested or (lambda: False)
         self.clock = clock
+        self.repair = repair or BoundedRepair(max_attempts=repair_max_attempts)
+        self.repair_log_path = repair_log_path
+
+    def _log_repair_event(self, entry: dict[str, object]) -> None:
+        if self.repair_log_path is None:
+            return
+        sanitized = {
+            key: ("<redacted>" if key in {"prompt", "response"} else value)
+            for key, value in entry.items()
+        }
+        self.repair_log_path.parent.mkdir(parents=True, exist_ok=True)
+        with self.repair_log_path.open("a", encoding="utf-8") as stream:
+            stream.write(json.dumps(sanitized, sort_keys=True, separators=(",", ":")))
+            stream.write("\n")
+
+    def _label_one(
+        self,
+        *,
+        engine_callable: RepairEngine,
+        messages: Messages,
+        target_sentence: str,
+        sentence_id: str,
+    ) -> SentenceLabel:
+        initial_failures_before = self.repair.stats.initial_failures
+        try:
+            label = self.repair.call(
+                engine=engine_callable,
+                messages=list(messages),
+                target_sentence=target_sentence,
+            )
+        except LabelValidationError as exc:
+            self._log_repair_event(
+                {
+                    "sentence_id": sentence_id,
+                    "reason": str(exc),
+                    "attempt": 0,
+                    "event": "label_repair_initial_failure",
+                }
+            )
+            raise
+        # Log the resolved state for any row whose initial response was
+        # rejected, regardless of whether the repair succeeded.
+        if self.repair.stats.initial_failures > initial_failures_before:
+            self._log_repair_event(
+                {
+                    "sentence_id": sentence_id,
+                    "event": "label_repair_recovered",
+                    "attempts": self.repair.stats.to_dict(),
+                }
+            )
+        return label
 
     @staticmethod
     def _prompt(row: dict[str, object]) -> PromptInput:
@@ -119,10 +210,23 @@ class LabelingRunner:
             if len(responses) != len(rows):
                 raise ValueError("engine response count does not match request count")
             records: list[LabelRecord] = []
-            for prompt_input, raw in zip(prompt_inputs, responses, strict=True):
-                label = parse_label_response(
-                    raw, target_sentence=prompt_input.sentence_text
-                )
+            fallback = _batched_to_single_engine(self.engine)
+            for prompt_input, response, messages in zip(
+                prompt_inputs,
+                responses,
+                [build_messages(prompt_input) for prompt_input in prompt_inputs],
+                strict=True,
+            ):
+                try:
+                    label = self._label_one(
+                        engine_callable=_passthrough_engine(response, fallback),
+                        messages=messages,
+                        target_sentence=prompt_input.sentence_text,
+                        sentence_id=prompt_input.sentence_id,
+                    )
+                except LabelValidationError:
+                    # Fail the batch: do not write partial results.
+                    raise
                 records.append(
                     LabelRecord(
                         sentence_id=prompt_input.sentence_id,
@@ -141,7 +245,7 @@ class LabelingRunner:
                 completed=len(completed), total=table.num_rows, elapsed_seconds=elapsed
             )
         total_elapsed = max(0.0, self.clock() - started)
-        timing: dict[str, float | int | bool] = {
+        timing: dict[str, float | int | bool | dict[str, object]] = {
             "completed": len(completed),
             "total": table.num_rows,
             "interrupted": interrupted,
@@ -150,6 +254,7 @@ class LabelingRunner:
                 0.0, total_elapsed - inference_seconds
             ),
             "total_wall_seconds": total_elapsed,
+            "repair_stats": dict[str, object](self.repair.stats.to_dict()),
         }
         self.store.write_timing(timing)
         return RunResult(
@@ -158,6 +263,7 @@ class LabelingRunner:
             interrupted=interrupted,
             elapsed_seconds=total_elapsed,
             inference_seconds=inference_seconds,
+            repair_stats=self.repair.stats,
         )
 
 

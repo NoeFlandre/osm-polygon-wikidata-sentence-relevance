@@ -16,15 +16,63 @@ import pyarrow.parquet as pq
 from .canary import select_canary_rows
 from .checkpoint import CheckpointStore
 from .contracts import RunIdentity
-from .engine import LabelEngine, OpenAICompatibleEngine
+from .engine import LabelEngine
 from .finalization import finalize_labeled_dataset
 from .prompt import PROMPT_VERSION, build_messages
 from .publication import publish_labeled_dataset
+from .repair import BoundedRepair
 from .runner import LabelingRunner, StopController
+from .runtime import (
+    MIN_PER_SLOT_CONTEXT,
+    SUPPORTED_LLAMA_PARALLEL,
+    RuntimePlan,
+    build_runtime_plan,
+    resolve_engine_factory,
+)
 from .validation import parse_label_response
 
 MODEL_REPO_ID = "unsloth/Qwen3.6-27B-MTP-GGUF"
 MODEL_FILE = "Qwen3.6-27B-Q4_K_M.gguf"
+DEFAULT_LLAMA_PARALLEL = 16
+
+
+def _add_server_config_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--llama-parallel",
+        type=int,
+        default=DEFAULT_LLAMA_PARALLEL,
+        help=(
+            "Number of parallel llama-server slots. Must be one of "
+            f"{', '.join(str(value) for value in SUPPORTED_LLAMA_PARALLEL)}."
+        ),
+    )
+    parser.add_argument(
+        "--llama-per-slot-context",
+        type=int,
+        default=MIN_PER_SLOT_CONTEXT,
+        help=(
+            "Per-slot context size. Must be at least "
+            f"{MIN_PER_SLOT_CONTEXT}; total context is parallel * per-slot."
+        ),
+    )
+    parser.add_argument(
+        "--llama-total-context",
+        type=int,
+        default=None,
+        help=(
+            "Optional total context. When omitted, derived as "
+            "parallel * per-slot-context."
+        ),
+    )
+    parser.add_argument(
+        "--request-concurrency",
+        type=int,
+        default=None,
+        help=(
+            "Client concurrency. Defaults to the parallel slot count and is "
+            "capped to it."
+        ),
+    )
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -37,13 +85,22 @@ def _parser() -> argparse.ArgumentParser:
     label.add_argument("--model-revision", required=True)
     label.add_argument("--model-file-sha256", required=True)
     label.add_argument("--source-commit", required=True)
-    label.add_argument("--engine", required=True, choices=("vllm", "llama.cpp"))
+    label.add_argument("--engine", required=True, choices=("llama.cpp",))
     label.add_argument("--engine-version", required=True)
     label.add_argument(
         "--endpoint", default="http://127.0.0.1:8000/v1/chat/completions"
     )
     label.add_argument("--batch-size", type=int, default=128)
-    label.add_argument("--concurrency", type=int, default=32)
+    label.add_argument(
+        "--concurrency",
+        type=int,
+        default=DEFAULT_LLAMA_PARALLEL,
+        help=(
+            "Client concurrency. Defaults to the parallel slot count; "
+            "the server identity will pin it."
+        ),
+    )
+    _add_server_config_args(label)
     label.add_argument(
         "--row-limit",
         type=int,
@@ -53,12 +110,12 @@ def _parser() -> argparse.ArgumentParser:
 
     probe = sub.add_parser("probe", help="Validate one live inference engine")
     probe.add_argument("--input-parquet", required=True)
-    probe.add_argument("--engine", required=True, choices=("vllm", "llama.cpp"))
+    probe.add_argument("--engine", required=True, choices=("llama.cpp",))
     probe.add_argument(
         "--endpoint", default="http://127.0.0.1:8000/v1/chat/completions"
     )
-    probe.add_argument("--concurrency", type=int, default=4)
     probe.add_argument("--sample-size", type=int, default=4)
+    _add_server_config_args(probe)
 
     finalize = sub.add_parser("finalize", help="Build validated labeled artifacts")
     finalize.add_argument("--input-parquet", required=True)
@@ -76,6 +133,7 @@ def _parser() -> argparse.ArgumentParser:
         finalize.add_argument(f"--{name}", required=True)
     finalize.add_argument("--batch-size", type=int, required=True)
     finalize.add_argument("--row-limit", type=int, default=0)
+    _add_server_config_args(finalize)
 
     publish = sub.add_parser("publish", help="Validate and publish final artifacts")
     publish.add_argument("--output-dir", required=True)
@@ -89,10 +147,37 @@ def _hex(value: str, length: int, field: str) -> str:
     return value
 
 
-def _identity(args: argparse.Namespace, input_path: Path) -> RunIdentity:
+def _resolve_runtime_plan(args: argparse.Namespace) -> "RuntimePlan":
+    plan = build_runtime_plan(
+        parallel=args.llama_parallel,
+        per_slot_context=args.llama_per_slot_context,
+    )
+    if args.llama_total_context is not None and (
+        args.llama_total_context != plan.total_context
+    ):
+        raise ValueError(
+            "llama total context must equal parallel times per-slot context"
+        )
+    if args.request_concurrency is not None and (
+        args.request_concurrency < 1 or args.request_concurrency > plan.parallel
+    ):
+        raise ValueError(
+            "request concurrency must be between 1 and the parallel slot count"
+        )
+    return plan
+
+
+def _identity(
+    args: argparse.Namespace, input_path: Path, plan: "RuntimePlan"
+) -> RunIdentity:
     if args.row_limit < 0:
         raise ValueError("row limit must be non-negative")
     input_sha = hashlib.sha256(input_path.read_bytes()).hexdigest()
+    request_concurrency = (
+        args.request_concurrency
+        if args.request_concurrency is not None
+        else plan.parallel
+    )
     return RunIdentity(
         input_sha256=input_sha,
         input_dataset_revision=_hex(args.input_dataset_revision, 40, "input revision"),
@@ -106,15 +191,17 @@ def _identity(args: argparse.Namespace, input_path: Path) -> RunIdentity:
         engine_version=args.engine_version,
         batch_size=args.batch_size,
         row_limit=args.row_limit,
+        llama_parallel=plan.parallel,
+        llama_per_slot_context=plan.per_slot_context,
+        llama_total_context=plan.total_context,
+        request_concurrency=request_concurrency,
     )
 
 
-def _default_engine(args: argparse.Namespace) -> LabelEngine:
-    return OpenAICompatibleEngine(
-        endpoint=args.endpoint,
-        model=MODEL_REPO_ID,
-        concurrency=args.concurrency,
-    )
+def _default_engine_factory(args: argparse.Namespace) -> LabelEngine:
+    plan = _resolve_runtime_plan(args)
+    factory = resolve_engine_factory(plan)
+    return factory(endpoint=args.endpoint, model=MODEL_REPO_ID)
 
 
 _PROMPT_COLUMNS = {
@@ -175,13 +262,16 @@ def _probe(args: argparse.Namespace, engine: LabelEngine) -> int:
 def main(
     argv: Sequence[str] | None = None,
     *,
-    engine_factory: Callable[[argparse.Namespace], LabelEngine] = _default_engine,
+    engine_factory: Callable[
+        [argparse.Namespace], LabelEngine
+    ] = _default_engine_factory,
     publish_fn: Callable[..., Any] = publish_labeled_dataset,
 ) -> int:
     """Run one explicit labeling operation."""
 
     try:
         args = _parser().parse_args(argv)
+        plan = _resolve_runtime_plan(args)
         if args.command == "publish":
             result = publish_fn(Path(args.output_dir), args.dataset_id)
             print(
@@ -194,7 +284,7 @@ def main(
         if args.command == "probe":
             return _probe(args, engine_factory(args))
         input_path = Path(args.input_parquet)
-        identity = _identity(args, input_path)
+        identity = _identity(args, input_path, plan)
         store = CheckpointStore(Path(args.work_dir), identity)
         if args.command == "finalize":
             result = finalize_labeled_dataset(
@@ -216,11 +306,14 @@ def main(
         )
         stop = StopController()
         stop.install()
+        repair_log_path = Path(args.work_dir) / "repair.log"
         result = LabelingRunner(
             engine=engine_factory(args),
             store=store,
             batch_size=args.batch_size,
             stop_requested=stop,
+            repair=BoundedRepair(max_attempts=1),
+            repair_log_path=repair_log_path,
         ).run(table)
         print(
             json.dumps(
@@ -230,6 +323,7 @@ def main(
                     "interrupted": result.interrupted,
                     "elapsed_seconds": result.elapsed_seconds,
                     "input_sha256": identity.input_sha256,
+                    "repair_stats": result.repair_stats.to_dict(),
                 },
                 sort_keys=True,
             )

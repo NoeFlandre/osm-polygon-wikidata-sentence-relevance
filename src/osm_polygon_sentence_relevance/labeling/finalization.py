@@ -105,6 +105,40 @@ def _distribution(values: list[str]) -> dict[str, int]:
     return dict(sorted(Counter(values).items()))
 
 
+def _server_config(identity: dict[str, Any]) -> dict[str, int]:
+    """Return the public, content-free server configuration for the manifest."""
+
+    return {
+        "llama_parallel": int(identity["llama_parallel"]),
+        "llama_per_slot_context": int(identity["llama_per_slot_context"]),
+        "llama_total_context": int(identity["llama_total_context"]),
+        "request_concurrency": int(identity["request_concurrency"]),
+    }
+
+
+def _manifest(
+    *,
+    dataset_repo_id: str,
+    parquet_sha256: str,
+    artifact_sha256: dict[str, str],
+    statistics: dict[str, Any],
+    identity: dict[str, Any],
+    timing: dict[str, Any],
+) -> dict[str, Any]:
+    """Build the publication manifest with explicit server configuration."""
+
+    return {
+        "schema_version": 1,
+        "dataset_repo_id": dataset_repo_id,
+        "parquet_sha256": parquet_sha256,
+        "artifact_sha256": artifact_sha256,
+        "statistics": statistics,
+        "run_identity": identity,
+        "server_config": _server_config(identity),
+        "timing": timing,
+    }
+
+
 def _render_card(
     *,
     dataset_repo_id: str,
@@ -255,15 +289,14 @@ def finalize_labeled_dataset(
                 "assets/positive_languages.png",
             )
         }
-        manifest = {
-            "schema_version": 1,
-            "dataset_repo_id": dataset_repo_id,
-            "parquet_sha256": _sha256(parquet_path),
-            "artifact_sha256": artifact_sha256,
-            "statistics": stats,
-            "run_identity": store.identity.to_dict(),
-            "timing": timing,
-        }
+        manifest = _manifest(
+            dataset_repo_id=dataset_repo_id,
+            parquet_sha256=_sha256(parquet_path),
+            artifact_sha256=artifact_sha256,
+            statistics=stats,
+            identity=store.identity.to_dict(),
+            timing=timing,
+        )
         (staging / "manifest.json").write_text(
             json.dumps(manifest, indent=2, sort_keys=True) + "\n"
         )
@@ -302,6 +335,19 @@ def validate_labeled_publication(directory: Path) -> ValidatedLabeledPublication
     artifact_sha256 = manifest.get("artifact_sha256")
     if not isinstance(artifact_sha256, dict):
         raise LabelFinalizationError("artifact SHA-256 manifest is missing")
+    server_config = manifest.get("server_config")
+    if not isinstance(server_config, dict):
+        raise LabelFinalizationError("server_config manifest is missing")
+    for key in (
+        "llama_parallel",
+        "llama_per_slot_context",
+        "llama_total_context",
+        "request_concurrency",
+    ):
+        if key not in server_config:
+            raise LabelFinalizationError(
+                f"server_config is missing required field: {key}"
+            )
     for name in (
         "sentences.parquet",
         "assets/label_distribution.png",

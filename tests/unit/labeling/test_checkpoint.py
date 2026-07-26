@@ -28,9 +28,13 @@ def _identity() -> RunIdentity:
         model_file_sha256="d" * 64,
         prompt_version="afghanistan-landuse-polygon-v1",
         source_commit="e" * 40,
-        engine="vllm",
-        engine_version="0.21.0",
+        engine="llama.cpp",
+        engine_version="1",
         batch_size=128,
+        llama_parallel=16,
+        llama_per_slot_context=4096,
+        llama_total_context=65536,
+        request_concurrency=16,
     )
 
 
@@ -61,7 +65,7 @@ def test_writes_and_loads_atomic_checkpoint(tmp_path: Path) -> None:
 
 def test_resume_rejects_identity_mismatch(tmp_path: Path) -> None:
     CheckpointStore(tmp_path, _identity()).write_batch(0, [_record()])
-    changed = replace(_identity(), engine="llama.cpp")
+    changed = replace(_identity(), engine_version="different")
     with pytest.raises(CheckpointError, match="identity"):
         CheckpointStore(tmp_path, changed).load_all()
 

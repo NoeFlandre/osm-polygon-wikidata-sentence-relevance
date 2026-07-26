@@ -69,7 +69,7 @@ def test_label_command_runs_and_reports_resumable_result(
             "--source-commit",
             "d" * 40,
             "--engine",
-            "vllm",
+            "llama.cpp",
             "--engine-version",
             "0.21.0",
             "--batch-size",
@@ -96,7 +96,7 @@ def test_probe_command_validates_real_prompt_response_without_checkpoint(
             "--input-parquet",
             str(source),
             "--engine",
-            "vllm",
+            "llama.cpp",
             "--sample-size",
             "1",
         ],
@@ -105,7 +105,7 @@ def test_probe_command_validates_real_prompt_response_without_checkpoint(
 
     assert rc == 0
     assert json.loads(capsys.readouterr().out) == {
-        "engine": "vllm",
+        "engine": "llama.cpp",
         "validated_responses": 1,
     }
     assert not (tmp_path / "work").exists()
@@ -160,7 +160,7 @@ def test_label_row_limit_selects_a_partial_representative_run(
             "--source-commit",
             "d" * 40,
             "--engine",
-            "vllm",
+            "llama.cpp",
             "--engine-version",
             "0.21.0",
             "--batch-size",
@@ -196,7 +196,7 @@ def test_label_command_rejects_mutable_or_malformed_revisions(
             "--source-commit",
             "bad",
             "--engine",
-            "vllm",
+            "llama.cpp",
             "--engine-version",
             "x",
             "--batch-size",

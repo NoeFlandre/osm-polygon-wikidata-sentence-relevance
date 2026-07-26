@@ -23,8 +23,10 @@ def test_labeling_launchers_are_executable() -> None:
 def test_submitter_requests_one_fast_large_cuda_gpu_once() -> None:
     text = _text("submit_afghanistan_labeling.sh")
     assert text.count("exec oarsub ") == 1
-    assert "gpu=1,walltime=01:00:00" in text
+    assert "gpu=1,walltime=12:00:00" in text
     assert "gpu_mem>=60000" in text
+    assert " -t production" in text
+    assert " -t exotic" in text
     assert " -I" not in text
 
 
@@ -43,10 +45,23 @@ def test_job_wrapper_translates_submit_arguments_to_payload_contract() -> None:
     normalized = " ".join(text.replace("\\", "").split())
     expected = (
         '"${PAYLOAD}" "${REPO_ROOT}" "$4" "$5" "$6" "$7" "$8" "$9" '
-        '"${10}" "${11}" "${12}" "${13}" "${14}"'
+        '"${10}" "${11}" "${12}" "${13}" "${14}" "${LLAMA_PARALLEL}"'
     )
     assert expected in normalized
     assert '"${PAYLOAD}" "$@"' not in text
+
+
+def test_submitter_propagates_llama_parallel_positional() -> None:
+    text = _text("submit_afghanistan_labeling.sh")
+    assert 'LLAMA_PARALLEL="${15}"' in text
+    assert "exactly fifteen arguments" in text
+    assert "1|2|4|8|16|32" in text
+
+
+def test_job_wrapper_validates_llama_parallel_set() -> None:
+    text = _text("run_afghanistan_labeling_job.sh")
+    assert 'LLAMA_PARALLEL="${15}"' in text
+    assert "1|2|4|8|16|32" in text
 
 
 def test_canary_launch_contract_never_publishes() -> None:

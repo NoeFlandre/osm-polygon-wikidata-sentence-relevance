@@ -39,9 +39,13 @@ def _identity(input_sha256: str = "a" * 64) -> RunIdentity:
         model_file_sha256="d" * 64,
         prompt_version="afghanistan-landuse-polygon-v1",
         source_commit="e" * 40,
-        engine="vllm",
-        engine_version="0.21.0",
+        engine="llama.cpp",
+        engine_version="1",
         batch_size=2,
+        llama_parallel=16,
+        llama_per_slot_context=4096,
+        llama_total_context=65536,
+        request_concurrency=16,
     )
 
 
@@ -202,10 +206,14 @@ def test_finalizes_exact_deterministic_canary_subset(tmp_path: Path) -> None:
         model_file_sha256="d" * 64,
         prompt_version="afghanistan-landuse-polygon-v2",
         source_commit="e" * 40,
-        engine="vllm",
-        engine_version="0.21.0",
+        engine="llama.cpp",
+        engine_version="1",
         batch_size=2,
         row_limit=2,
+        llama_parallel=16,
+        llama_per_slot_context=4096,
+        llama_total_context=65536,
+        request_concurrency=16,
     )
     store = CheckpointStore(tmp_path / "work", identity)
     selected = select_canary_rows(pq.read_table(input_path), 2)
