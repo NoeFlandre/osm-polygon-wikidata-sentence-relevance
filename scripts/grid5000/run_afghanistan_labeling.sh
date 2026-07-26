@@ -113,7 +113,7 @@ if ! probe_engine; then
 fi
 ENGINE=llama.cpp
 readonly ENGINE
-ENGINE_VERSION=$(llama-server --version 2>&1 | head -1)
+ENGINE_VERSION=$(llama-server --version 2>&1 | sed -n '1p')
 readonly ENGINE_VERSION
 
 LABEL_RESULT="${WORK_DIR}.label-result.json"

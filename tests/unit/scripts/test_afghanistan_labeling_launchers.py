@@ -209,6 +209,13 @@ def test_canary_launch_contract_never_publishes() -> None:
     assert '"${LABEL_CLI}" publish' in text
 
 
+def test_payload_reads_engine_version_without_sigpipe() -> None:
+    text = _text("run_afghanistan_labeling.sh")
+
+    assert "llama-server --version 2>&1 | head" not in text
+    assert "llama-server --version 2>&1 | sed -n '1p'" in text
+
+
 def test_docs_include_canonical_full_run_args() -> None:
     text = GUIDES.read_text()
     assert '"NoeFlandre/osm-polygon-wikidata-sentence-relevance"' in text
