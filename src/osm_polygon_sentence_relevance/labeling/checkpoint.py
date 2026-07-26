@@ -202,9 +202,7 @@ class CheckpointStore:
             ).encode(),
         )
 
-    def write_timing(
-        self, payload: dict[str, object]
-    ) -> None:
+    def write_timing(self, payload: dict[str, object]) -> None:
         """Atomically persist the final timing summary."""
 
         _atomic_bytes(

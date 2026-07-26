@@ -19,16 +19,16 @@ if [ "$#" -ne 15 ]; then
     exit 2
 fi
 
-REPO_ROOT="$1"; readonly REPO_ROOT
+REPO_ROOT="$(cd "$1" && pwd -P)"; readonly REPO_ROOT
 LOG_ROOT="$3"; readonly LOG_ROOT
 EXPECTED_SOURCE_COMMIT="${11}"; readonly EXPECTED_SOURCE_COMMIT
 LLAMA_PARALLEL="${15}"; readonly LLAMA_PARALLEL
+RUN_ROOT="$(cd "${REPO_ROOT}/.." && pwd -P)"; readonly RUN_ROOT
 
 # ``$2`` is the HF cache and ``$5`` is the persistent work directory; the
-# approved run root is the work directory because that is where the
-# Grid'5000 deployment places the ``.venv`` symlink that backs the
-# labelling CLI. Sourcing the guard here means the validation logic can
-# also be tested in isolation.
+# approved run root is the repository parent directory on persistent storage.
+# Sourcing the guard here means the validation logic can also be tested in
+# isolation.
 # shellcheck source=scripts/grid5000/_checkout_guard.sh
 . "$(dirname "${BASH_SOURCE[0]}")/_checkout_guard.sh"
 WORK_DIR="$5"
@@ -37,7 +37,7 @@ if [ "$(git -C "${REPO_ROOT}" rev-parse HEAD)" != "${EXPECTED_SOURCE_COMMIT}" ];
     echo "run_afghanistan_labeling_job: checkout commit mismatch" >&2
     exit 1
 fi
-if ! validate_clean_checkout "${REPO_ROOT}" "${WORK_DIR:-}"; then
+if ! validate_clean_checkout "${REPO_ROOT}" "${RUN_ROOT}"; then
     echo "run_afghanistan_labeling_job: checkout failed the strict clean-checkout guard" >&2
     exit 1
 fi
@@ -63,14 +63,14 @@ mkdir -m 0700 -- "${JOB_LOG_DIR}"
 
 set +e
 # Wrap the payload in the deadline helper so a 12-hour OAR allocation
-# gives the labelling CLI 11h40m and a 10-minute grace before SIGKILL.
+# gives the labelling CLI 700m (11h40m) and a 10-minute grace before SIGKILL.
 # The labelling CLI handles SIGINT by writing ``interrupted=true`` and
 # exiting 0 so the helper propagates 0 and the next allocation can
 # resume from the same checkpoint directory.
 #
 # shellcheck source=scripts/grid5000/_deadline_helper.sh
 . "$(dirname "${BASH_SOURCE[0]}")/_deadline_helper.sh"
-deadline_helper_run 11h 10m "${PAYLOAD}" \
+deadline_helper_run 700m 10m "${PAYLOAD}" \
     "${REPO_ROOT}" "$4" "$5" "$6" "$7" "$8" "$9" \
     "${10}" "${11}" "${12}" "${13}" "${14}" "${LLAMA_PARALLEL}" \
     >"${JOB_LOG_DIR}/labeling.stdout.log" \

@@ -167,6 +167,35 @@ def test_helper_accepts_durations_with_and_without_unit() -> None:
     assert parse_bad("abc")
 
 
+def test_helper_executes_timeout_with_spaces_and_shell_metacharacters_quoted(
+    tmp_path: Path,
+) -> None:
+    """The timeout executable path must be safely quoted before execution."""
+
+    hostile_dir = tmp_path / "hostile timeout directory"
+    hostile_dir.mkdir()
+    hostile_timeout = hostile_dir / "fake timeout path $HOME$(touch)"
+    marker = tmp_path / "quoted-hostile-timeout-marker.log"
+    hostile_timeout.write_text(
+        "#!/usr/bin/env bash\n"
+        f"printf '%s\\n' \"${{1}}:${{2}}\" >> '{marker}'\n"
+        "shift 2\n"
+        '"$@"\n'
+    )
+    hostile_timeout.chmod(0o755)
+
+    child = _make_dummy_child(tmp_path, behaviour="early", duration=0.0)
+    result = _with_timeout(
+        tmp_path,
+        duration="60s",
+        grace="10s",
+        child=child,
+        timeout_bin=str(hostile_timeout),
+    )
+    assert "exit=0" in result.stdout, result.stdout + result.stderr
+    assert marker.exists(), marker.read_text()
+
+
 def test_helper_propagates_child_exit_zero_on_early_completion(
     tmp_path: Path, timeout_bin: str
 ) -> None:

@@ -5,6 +5,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
 GRID = ROOT / "scripts" / "grid5000"
+GUIDES = ROOT / "docs" / "guides" / "grid5000.md"
 
 
 def _text(name: str) -> str:
@@ -46,10 +47,9 @@ def test_job_wrapper_invokes_deadline_helper() -> None:
     text = _text("run_afghanistan_labeling_job.sh")
     assert "_deadline_helper.sh" in text
     assert "deadline_helper_run" in text
-    # The wrapper must give the labeling CLI 11h and a 10m grace window
+    # The wrapper must give the labeling CLI 700m and a 10m grace window.
     # so it can checkpoint before OAR's final TERM/KILL window.
-    assert "11h" in text
-    assert "10m" in text
+    assert "700m 10m" in text
 
 
 def test_job_wrapper_translates_submit_arguments_to_payload_contract() -> None:
@@ -80,3 +80,10 @@ def test_canary_launch_contract_never_publishes() -> None:
     text = _text("run_afghanistan_labeling.sh")
     assert 'if [ "${ROW_LIMIT}" -eq 0 ]; then' in text
     assert '"${LABEL_CLI}" publish' in text
+
+
+def test_docs_include_canonical_full_run_args() -> None:
+    text = GUIDES.read_text()
+    assert '"NoeFlandre/osm-polygon-wikidata-sentence-relevance"' in text
+    assert '"128" "0" "16"' in text
+    assert '"0" "0" "16"' not in text
