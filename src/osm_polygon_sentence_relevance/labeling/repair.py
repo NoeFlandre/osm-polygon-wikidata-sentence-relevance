@@ -1,8 +1,10 @@
-"""Bounded repair attempt for invalid model responses.
+"""Bounded repair attempts for invalid model responses.
 
 The production labeling pipeline uses a closed JSON schema and an exact-substring
 evidence rule. When a model response fails validation, the runner offers the
-model one bounded repair attempt before failing the batch. The repair message
+model a small bounded sequence of repair attempts before failing the batch. Each
+attempt receives a distinct numbered instruction so deterministic decoding does
+not repeat an identical request. The repair message
 retains the original prompt and tells the model the exact rule that failed so
 it can produce a corrected response. The replacement is validated against the
 same strict contract; no silent fallback to an empty evidence or a relaxed
@@ -44,6 +46,7 @@ def _build_repair_messages(
     messages: Messages,
     target_sentence: str,
     reason: str,
+    attempt: int = 1,
 ) -> Messages:
     """Return a copy of ``messages`` with a one-shot repair instruction appended."""
 
@@ -54,7 +57,7 @@ def _build_repair_messages(
             {
                 "role": "user",
                 "content": (
-                    "Your previous response was rejected because "
+                    f"Repair attempt {attempt}: your previous response was rejected because "
                     f"{reason}. "
                     "Re-emit the JSON object with the corrections:\n"
                     f"- TARGET SENTENCE for substring matching: {target_sentence!r}\n"
@@ -99,7 +102,7 @@ class RepairStats:
 
 
 class BoundedRepair:
-    """Apply one bounded repair attempt and validate the replacement strictly."""
+    """Apply bounded repair attempts and validate every replacement strictly."""
 
     def __init__(self, *, max_attempts: int = _MAX_REPAIR_ATTEMPTS) -> None:
         if max_attempts < 1:
@@ -140,7 +143,7 @@ class BoundedRepair:
         for _attempt in range(1, self.max_attempts + 1):
             reason = _failure_reason(last_error)
             repair_messages = _build_repair_messages(
-                messages_copy, target_sentence, reason
+                messages_copy, target_sentence, reason, _attempt
             )
             raw = _invoke_engine(engine, repair_messages)
             try:

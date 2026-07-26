@@ -593,6 +593,48 @@ def test_bounded_repair_caps_attempts() -> None:
         )
 
 
+def test_bounded_repair_changes_instruction_between_attempts() -> None:
+    from osm_polygon_sentence_relevance.labeling.repair import (
+        BoundedRepair,
+        RepairExhausted,
+    )
+
+    prompts: list[str] = []
+
+    def engine(messages: list[list[dict[str, str]]]) -> list[str]:
+        prompts.append(messages[0][-1]["content"])
+        return [
+            json.dumps(
+                {
+                    "landuse_relevance": "yes",
+                    "polygon_relevance": "yes",
+                    "landuse_reason": "explicit_land_use",
+                    "polygon_reason": "direct_polygon_reference",
+                    "evidence": "bogus",
+                }
+            )
+        ]
+
+    with pytest.raises(RepairExhausted):
+        BoundedRepair(max_attempts=3).call(
+            engine=engine,
+            messages=[
+                {"role": "system", "content": "label"},
+                {"role": "user", "content": "farming valley"},
+            ],
+            target_sentence="farming valley",
+        )
+
+    assert len(prompts) == 4
+    assert len(set(prompts[1:])) == 3
+
+
+def test_production_cli_uses_three_bounded_repair_attempts() -> None:
+    from osm_polygon_sentence_relevance.labeling import cli
+
+    assert "BoundedRepair(max_attempts=3)" in Path(cli.__file__).read_text()
+
+
 # ---------------------------------------------------------------------------
 # 11. Repair counts are tracked factually; no raw prompt or response content
 #     is written to public logs.

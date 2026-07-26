@@ -312,7 +312,7 @@ def main(
             store=store,
             batch_size=args.batch_size,
             stop_requested=stop,
-            repair=BoundedRepair(max_attempts=1),
+            repair=BoundedRepair(max_attempts=3),
             repair_log_path=repair_log_path,
         ).run(table)
         print(
