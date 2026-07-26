@@ -28,7 +28,13 @@ if [ "$(git -C "${REPO_ROOT}" rev-parse HEAD)" != "${EXPECTED_SOURCE_COMMIT}" ];
     echo "run_afghanistan_labeling_job: checkout commit mismatch" >&2
     exit 1
 fi
-if [ -n "$(git -C "${REPO_ROOT}" status --porcelain)" ]; then
+# ``--ignored=no`` keeps the wrapper strict about tracked changes while
+# tolerating build artifacts and the runtime ``.venv`` virtual environment
+# (which is excluded via ``.gitignore`` in normal clones but appears as an
+# untracked entry in the Grid'5000 deployment because the symlink is created
+# by the front-end adapter, not by ``uv venv``). Tracked modifications or
+# staged changes still fail closed.
+if [ -n "$(git -C "${REPO_ROOT}" status --porcelain --untracked-files=no --ignored=no)" ]; then
     echo "run_afghanistan_labeling_job: checkout is dirty" >&2
     exit 1
 fi
