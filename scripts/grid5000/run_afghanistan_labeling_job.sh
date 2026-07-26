@@ -24,18 +24,21 @@ LOG_ROOT="$3"; readonly LOG_ROOT
 EXPECTED_SOURCE_COMMIT="${11}"; readonly EXPECTED_SOURCE_COMMIT
 LLAMA_PARALLEL="${15}"; readonly LLAMA_PARALLEL
 
+# ``$2`` is the HF cache and ``$5`` is the persistent work directory; the
+# approved run root is the work directory because that is where the
+# Grid'5000 deployment places the ``.venv`` symlink that backs the
+# labelling CLI. Sourcing the guard here means the validation logic can
+# also be tested in isolation.
+# shellcheck source=scripts/grid5000/_checkout_guard.sh
+. "$(dirname "${BASH_SOURCE[0]}")/_checkout_guard.sh"
+WORK_DIR="$5"
+
 if [ "$(git -C "${REPO_ROOT}" rev-parse HEAD)" != "${EXPECTED_SOURCE_COMMIT}" ]; then
     echo "run_afghanistan_labeling_job: checkout commit mismatch" >&2
     exit 1
 fi
-# ``--ignored=no`` keeps the wrapper strict about tracked changes while
-# tolerating build artifacts and the runtime ``.venv`` virtual environment
-# (which is excluded via ``.gitignore`` in normal clones but appears as an
-# untracked entry in the Grid'5000 deployment because the symlink is created
-# by the front-end adapter, not by ``uv venv``). Tracked modifications or
-# staged changes still fail closed.
-if [ -n "$(git -C "${REPO_ROOT}" status --porcelain --untracked-files=no --ignored=no)" ]; then
-    echo "run_afghanistan_labeling_job: checkout is dirty" >&2
+if ! validate_clean_checkout "${REPO_ROOT}" "${WORK_DIR:-}"; then
+    echo "run_afghanistan_labeling_job: checkout failed the strict clean-checkout guard" >&2
     exit 1
 fi
 
@@ -59,7 +62,16 @@ mkdir -m 0700 -- "${JOB_LOG_DIR}"
     2>"${JOB_LOG_DIR}/gpu_preflight.stderr.log"
 
 set +e
-"${PAYLOAD}" "${REPO_ROOT}" "$4" "$5" "$6" "$7" "$8" "$9" \
+# Wrap the payload in the deadline helper so a 12-hour OAR allocation
+# gives the labelling CLI 11h40m and a 10-minute grace before SIGKILL.
+# The labelling CLI handles SIGINT by writing ``interrupted=true`` and
+# exiting 0 so the helper propagates 0 and the next allocation can
+# resume from the same checkpoint directory.
+#
+# shellcheck source=scripts/grid5000/_deadline_helper.sh
+. "$(dirname "${BASH_SOURCE[0]}")/_deadline_helper.sh"
+deadline_helper_run 11h 10m "${PAYLOAD}" \
+    "${REPO_ROOT}" "$4" "$5" "$6" "$7" "$8" "$9" \
     "${10}" "${11}" "${12}" "${13}" "${14}" "${LLAMA_PARALLEL}" \
     >"${JOB_LOG_DIR}/labeling.stdout.log" \
     2>"${JOB_LOG_DIR}/labeling.stderr.log"

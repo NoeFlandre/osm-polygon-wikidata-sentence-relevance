@@ -96,7 +96,15 @@ def _store(path: Path, input_path: Path, *, complete: bool = True) -> Checkpoint
             )
         )
     store.write_batch(0, records)
-    store.write_timing({"total_wall_seconds": 12.5, "inference_seconds": 10.0})
+    store.write_timing(
+        {
+            "total_wall_seconds": 12.5,
+            "initial_inference_seconds": 10.0,
+            "repair_inference_seconds": 0.0,
+            "inference_seconds": 10.0,
+            "checkpoint_and_validation_seconds": 2.5,
+        }
+    )
     return store
 
 
@@ -231,7 +239,15 @@ def test_finalizes_exact_deterministic_canary_subset(tmp_path: Path) -> None:
             for sentence_id in selected["sentence_id"].to_pylist()
         ],
     )
-    store.write_timing({"total_wall_seconds": 1.0, "inference_seconds": 0.5})
+    store.write_timing(
+        {
+            "total_wall_seconds": 1.0,
+            "initial_inference_seconds": 0.5,
+            "repair_inference_seconds": 0.0,
+            "inference_seconds": 0.5,
+            "checkpoint_and_validation_seconds": 0.5,
+        }
+    )
 
     result = finalize_labeled_dataset(
         input_path=input_path,
@@ -261,6 +277,9 @@ def test_publication_is_one_commit_and_includes_all_artifacts(tmp_path: Path) ->
     readbacks: list[tuple[str, str]] = []
 
     class Api:
+        def list_repo_files(self, **kwargs: object) -> list[str]:
+            return [".gitattributes"]
+
         def create_commit(self, **kwargs: object) -> object:
             calls.append(kwargs)
             return SimpleNamespace(oid="f" * 40, commit_url="https://example/commit")
@@ -301,6 +320,9 @@ def test_publication_rejects_invalid_independent_readback(tmp_path: Path) -> Non
     invalid_readback.mkdir()
 
     class Api:
+        def list_repo_files(self, **kwargs: object) -> list[str]:
+            return []
+
         def create_commit(self, **kwargs: object) -> object:
             return SimpleNamespace(oid="f" * 40, commit_url="https://example/commit")
 
@@ -329,6 +351,9 @@ def test_publication_default_hub_integration_verifies_exact_commit(
     downloads: list[dict[str, object]] = []
 
     class Api:
+        def list_repo_files(self, **kwargs: object) -> list[str]:
+            return [".gitattributes"]
+
         def create_commit(self, **kwargs: object) -> object:
             return SimpleNamespace(oid="f" * 40, commit_url="https://example/commit")
 
@@ -339,6 +364,7 @@ def test_publication_default_hub_integration_verifies_exact_commit(
     fake_hub = types.ModuleType("huggingface_hub")
     fake_hub.HfApi = Api  # type: ignore[attr-defined]
     fake_hub.CommitOperationAdd = lambda **kwargs: kwargs  # type: ignore[attr-defined]
+    fake_hub.CommitOperationDelete = lambda **kwargs: kwargs  # type: ignore[attr-defined]
     fake_hub.snapshot_download = snapshot_download  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "huggingface_hub", fake_hub)
 
@@ -356,6 +382,7 @@ def test_publication_default_hub_integration_verifies_exact_commit(
                 "README.md",
                 "assets/label_distribution.png",
                 "assets/positive_languages.png",
+                ".gitattributes",
             ],
         }
     ]
@@ -377,6 +404,9 @@ def test_publication_rejects_blank_target_and_remote_failures(tmp_path: Path) ->
         )
 
     class FailingApi:
+        def list_repo_files(self, **kwargs: object) -> list[str]:
+            return []
+
         def create_commit(self, **kwargs: object) -> object:
             raise OSError("remote failed")
 

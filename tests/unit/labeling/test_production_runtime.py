@@ -308,7 +308,13 @@ def test_manifest_includes_server_config_section() -> None:
         artifact_sha256={"sentences.parquet": "0" * 64},
         statistics={"row_count": 128},
         identity=identity,
-        timing={"total_wall_seconds": 1.0, "inference_seconds": 0.5},
+        timing={
+            "total_wall_seconds": 1.0,
+            "initial_inference_seconds": 0.5,
+            "repair_inference_seconds": 0.0,
+            "inference_seconds": 0.5,
+            "checkpoint_and_validation_seconds": 0.5,
+        },
     )
     assert manifest["server_config"] == {
         "llama_parallel": 16,
@@ -644,36 +650,6 @@ def test_repair_counts_are_tracked_and_redacted() -> None:
     # No raw prompt or response content should be exposed via the stats.
     raw = str(stats.to_dict())
     assert sensitive not in raw
-
-
-def test_repair_log_lines_omit_prompt_and_response_content() -> None:
-    from osm_polygon_sentence_relevance.labeling.repair import (
-        BoundedRepair,
-        sanitize_for_log,
-    )
-
-    redacted = sanitize_for_log(
-        {
-            "prompt": "secret prompt",
-            "response": '{"landuse_relevance": "yes"}',
-            "sentence_id": "s1",
-            "reason": "exact substring",
-        }
-    )
-    assert redacted["prompt"] == "<redacted>"
-    assert redacted["response"] == "<redacted>"
-    assert redacted["sentence_id"] == "s1"
-    assert redacted["reason"] == "exact substring"
-
-    repair = BoundedRepair(max_attempts=2)
-    log = repair.log_redacted_failure(
-        sentence_id="s1",
-        reason="exact substring",
-        attempt=1,
-    )
-    assert "secret" not in str(log)
-    assert log["sentence_id"] == "s1"
-    assert log["reason"] == "exact substring"
 
 
 # ---------------------------------------------------------------------------

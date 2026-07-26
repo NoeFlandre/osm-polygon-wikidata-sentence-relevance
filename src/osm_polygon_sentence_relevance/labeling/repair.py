@@ -11,10 +11,8 @@ schema is permitted.
 
 from __future__ import annotations
 
-import json
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from typing import Any
 
 from .contracts import SentenceLabel
 from .validation import LabelValidationError, parse_label_response
@@ -100,18 +98,6 @@ class RepairStats:
         }
 
 
-def sanitize_for_log(payload: Mapping[str, object]) -> dict[str, object]:
-    """Return a log-safe copy of ``payload`` with prompt/response content redacted."""
-
-    redacted: dict[str, object] = {}
-    for key, value in payload.items():
-        if key in {"prompt", "response", "raw_response", "raw_request"}:
-            redacted[key] = "<redacted>"
-        else:
-            redacted[key] = value
-    return redacted
-
-
 class BoundedRepair:
     """Apply one bounded repair attempt and validate the replacement strictly."""
 
@@ -124,24 +110,6 @@ class BoundedRepair:
     @property
     def stats(self) -> RepairStats:
         return self._stats
-
-    def log_redacted_failure(
-        self,
-        *,
-        sentence_id: str,
-        reason: str,
-        attempt: int,
-    ) -> dict[str, object]:
-        """Return a redacted log entry describing one failed repair attempt."""
-
-        return sanitize_for_log(
-            {
-                "sentence_id": sentence_id,
-                "reason": reason,
-                "attempt": attempt,
-                "event": "label_repair",
-            }
-        )
 
     def call(
         self,
@@ -207,74 +175,10 @@ class BoundedRepair:
         raise RepairExhausted("model failed to produce a valid response")
 
 
-def repair_response(
-    raw: str,
-    *,
-    target_sentence: str,
-    engine: RepairEngine,
-    messages: Messages,
-    max_attempts: int = _MAX_REPAIR_ATTEMPTS,
-) -> tuple[SentenceLabel, RepairStats]:
-    """Convenience wrapper that returns the label and the repair stats."""
-
-    repair = BoundedRepair(max_attempts=max_attempts)
-    label = repair.call(
-        engine=engine, messages=messages, target_sentence=target_sentence
-    )
-    return label, repair.stats
-
-
-def repair_response_payload_to_dict(
-    label: SentenceLabel,
-    stats: RepairStats,
-) -> dict[str, object]:
-    """Return a JSON-safe mapping of one repair outcome."""
-
-    return {
-        "label": {
-            "landuse_relevance": label.landuse_relevance.value,
-            "polygon_relevance": label.polygon_relevance.value,
-            "landuse_reason": label.landuse_reason,
-            "polygon_reason": label.polygon_reason,
-            "evidence": label.evidence,
-        },
-        "stats": stats.to_dict(),
-    }
-
-
-def _coerce_for_json(value: Any) -> Any:
-    """Best-effort conversion to a JSON-serialisable value."""
-
-    if isinstance(value, dict):
-        return {str(key): _coerce_for_json(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_coerce_for_json(item) for item in value]
-    if isinstance(value, (str, int, float, bool)) or value is None:
-        return value
-    return str(value)
-
-
-def repair_response_json(
-    label: SentenceLabel,
-    stats: RepairStats,
-) -> str:
-    """Render a JSON-safe string for diagnostics; never includes raw content."""
-
-    return json.dumps(
-        _coerce_for_json(repair_response_payload_to_dict(label, stats)),
-        sort_keys=True,
-        separators=(",", ":"),
-    )
-
-
 __all__ = [
     "BoundedRepair",
     "RepairEngine",
     "RepairExhausted",
     "RepairStats",
     "Messages",
-    "repair_response",
-    "repair_response_json",
-    "repair_response_payload_to_dict",
-    "sanitize_for_log",
 ]

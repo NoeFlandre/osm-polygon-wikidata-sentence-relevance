@@ -116,6 +116,26 @@ def _server_config(identity: dict[str, Any]) -> dict[str, int]:
     }
 
 
+def _validate_split_timing(timing: dict[str, Any]) -> None:
+    """Ensure the persisted timing uses the split inference schema."""
+
+    if "initial_inference_seconds" not in timing:
+        raise LabelFinalizationError("timing is missing initial_inference_seconds")
+    if "repair_inference_seconds" not in timing:
+        raise LabelFinalizationError("timing is missing repair_inference_seconds")
+    if "inference_seconds" not in timing:
+        raise LabelFinalizationError("timing is missing inference_seconds")
+    initial = float(timing["initial_inference_seconds"])
+    repair = float(timing["repair_inference_seconds"])
+    inference = float(timing["inference_seconds"])
+    if initial < 0 or repair < 0 or inference < 0:
+        raise LabelFinalizationError("timing components must be non-negative")
+    if abs(inference - (initial + repair)) > 1e-6:
+        raise LabelFinalizationError(
+            "inference_seconds must equal initial + repair components"
+        )
+
+
 def _manifest(
     *,
     dataset_repo_id: str,
@@ -127,6 +147,7 @@ def _manifest(
 ) -> dict[str, Any]:
     """Build the publication manifest with explicit server configuration."""
 
+    _validate_split_timing(timing)
     return {
         "schema_version": 1,
         "dataset_repo_id": dataset_repo_id,
@@ -149,16 +170,66 @@ def _render_card(
 ) -> str:
     land = stats["landuse_relevance"]
     polygon = stats["polygon_relevance"]
+    land_reasons = stats.get("landuse_reasons", {})
+    polygon_reasons = stats.get("polygon_reasons", {})
+    positive_languages = stats.get("positive_languages", {})
+
+    def percent(count: int) -> str:
+        if row_count == 0:
+            return "0.00%"
+        return f"{count / row_count * 100:.2f}%"
 
     def value(counts: dict[str, int], key: str) -> str:
         count = counts.get(key, 0)
-        return f"{count:,} ({count / row_count * 100:.2f}%)"
+        return f"{count:,} ({percent(count)})"
+
+    server_config = _server_config(identity)
+    initial_inference = float(timing.get("initial_inference_seconds", 0.0))
+    repair_inference = float(timing.get("repair_inference_seconds", 0.0))
+    total_inference = float(timing.get("inference_seconds", 0.0))
+    total_wall = float(timing.get("total_wall_seconds", 0.0))
+    repair_total = int(timing.get("repair_rows_total", 0))
+    repair_succeeded = int(timing.get("repair_rows_succeeded", 0))
+    repair_exhausted = int(timing.get("repair_rows_exhausted", 0))
+    completed = int(timing.get("completed", row_count))
+    total = int(timing.get("total", row_count))
+    interrupted = bool(timing.get("interrupted", False))
+    throughput = (completed / total_inference) if total_inference > 0 else 0.0
 
     scope = (
         f"This is a representative **{row_count:,}-row canary** selected "
         "deterministically for source and language coverage."
         if identity.get("row_limit", 0)
         else "This release labels the complete Afghanistan input."
+    )
+
+    repair_summary = (
+        f"{repair_succeeded:,} repaired of {repair_total:,} attempted "
+        f"({repair_exhausted:,} exhausted after repair attempts)"
+        if repair_total
+        else "No repair attempts were needed."
+    )
+
+    language_lines = (
+        "\n".join(
+            f"- {language}: {count:,}" for language, count in positive_languages.items()
+        )
+        or "- (none)"
+    )
+
+    land_reason_lines = (
+        "\n".join(f"- `{code}`: {count:,}" for code, count in land_reasons.items())
+        or "- (none)"
+    )
+    polygon_reason_lines = (
+        "\n".join(f"- `{code}`: {count:,}" for code, count in polygon_reasons.items())
+        or "- (none)"
+    )
+
+    allocation_lines = (
+        f"- Completed allocations: {max(1, total // 5000):,}"
+        if not interrupted
+        else f"- Last run interrupted at {completed:,}/{total:,} rows"
     )
 
     return f"""---
@@ -177,14 +248,37 @@ configs:
 
 # Afghanistan polygon sentence relevance labels
 
-This proof of concept contains **{row_count:,} labeled sentences** from the Afghanistan-only sentence dataset. {scope} Each row independently records whether its target sentence is relevant to land use or land cover and whether it is relevant to its associated OSM polygon.
+> **Warning:** the labels below are **model-generated**. They are not ground truth and must be audited before use as authoritative training data.
+
+This release contains **{row_count:,} labeled sentences** from the Afghanistan-only sentence dataset. {scope} Each row independently records two boolean decisions:
+
+1. **Land use / land cover relevance** -- does the target sentence describe land use or land cover for the polygon?
+2. **Target polygon relevance** -- does the target sentence describe the *named polygon* itself?
+
+Every decision also carries a short reason code selected from the closed enumerations in the prompt.
 
 ## Label summary
 
-| Question | Yes | No | Uncertain |
+The valid label values are **yes**, **no**, and **uncertain** (lowercase). Every row carries one label per question:
+
+| Question | yes | no | uncertain |
 |---|---:|---:|---:|
 | Land use / land cover | {value(land, "yes")} | {value(land, "no")} | {value(land, "uncertain")} |
 | Target polygon | {value(polygon, "yes")} | {value(polygon, "no")} | {value(polygon, "uncertain")} |
+
+## Label and reason codes
+
+Land-use / land-cover reasons:
+
+{land_reason_lines}
+
+Polygon-relevance reasons:
+
+{polygon_reason_lines}
+
+Positive-label language coverage (top languages, sorted by count):
+
+{language_lines}
 
 ![Label distributions](https://huggingface.co/datasets/{dataset_repo_id}/resolve/main/assets/label_distribution.png)
 
@@ -192,16 +286,54 @@ This proof of concept contains **{row_count:,} labeled sentences** from the Afgh
 
 ## Method
 
-The labeler used `{identity["model_repo_id"]}` (`{identity["model_file"]}`), pinned at `{identity["model_revision"]}`, through `{identity["engine"]} {identity["engine_version"]}`. Prompt `{identity["prompt_version"]}` supplied the target and adjacent sentences, polygon name, country/region, language, page and section titles, the primary OSM tag, and every OSM tag. Structured output was validated before checkpointing. Labels are model-generated and should be audited before use as ground truth.
+The labeler used `{identity["model_repo_id"]}` (`{identity["model_file"]}`), pinned at model revision `{identity["model_revision"]}`, through `{identity["engine"]} {identity["engine_version"]}`. Prompt `{identity["prompt_version"]}` supplied the model with:
 
-## Provenance and runtime
+- the **target sentence**
+- the immediately **adjacent** sentences
+- the **polygon name**
+- the **region / country** (`{identity.get("region", "afghanistan")}`)
+- the **language** code
+- the **page title** and **section title**
+- the **primary OSM tag**
+- every other **OSM tag**
 
-- Input dataset revision: `{identity["input_dataset_revision"]}`
+Structured output was validated against the closed enumerations and re-issued under repair until either a valid label pair was produced or the per-row retry budget was exhausted.
+
+## Model provenance
+
+- Repository: [`{identity["model_repo_id"]}`](https://huggingface.co/{identity["model_repo_id"]}/tree/{identity["model_revision"]})
+- Quantised weights: `{identity["model_file"]}` (SHA-256 `{identity["model_file_sha256"]}`)
+- Engine: `{identity["engine"]} {identity["engine_version"]}`
+- Prompt version: `{identity["prompt_version"]}`
+- Server configuration:
+  - `llama_parallel`: `{server_config["llama_parallel"]}`
+  - `llama_per_slot_context`: `{server_config["llama_per_slot_context"]}`
+  - `llama_total_context`: `{server_config["llama_total_context"]}`
+  - `request_concurrency`: `{server_config["request_concurrency"]}`
+
+## Repair
+
+{repair_summary}
+
+- Initial inference: **{initial_inference:.2f} seconds**
+- Repair inference: **{repair_inference:.2f} seconds**
+- Combined inference: **{total_inference:.2f} seconds**
+
+## Runtime
+
+- Total elapsed: **{total_wall:.2f} seconds**
+- Throughput: **{throughput:.3f} rows/second**
+- Rows completed: **{completed:,} / {total:,}**
+
+{allocation_lines}
+
+## Provenance
+
+- Input dataset revision: [`{identity["input_dataset_revision"]}"`](https://huggingface.co/datasets/NoeFlandre/osm-polygon-wikidata-sentence-relevance/tree/{identity["input_dataset_revision"]})
 - Input Parquet SHA-256: `{identity["input_sha256"]}`
-- End-to-end labeling wall time: **{float(timing.get("total_wall_seconds", 0)):.2f} seconds**
-- Model inference time: **{float(timing.get("inference_seconds", 0)):.2f} seconds**
+- Source commit: `{identity["source_commit"]}`
 
-The original sentence and polygon metadata are preserved. Added fields are `landuse_relevance`, `polygon_relevance`, `landuse_reason`, `polygon_reason`, and `label_evidence`. See `manifest.json` for exact counts, hashes, and run identity.
+The original sentence and polygon metadata are preserved. Added fields are `landuse_relevance`, `polygon_relevance`, `landuse_reason`, `polygon_reason`, and `label_evidence`. See `manifest.json` for the exact counts, hashes, run identity, and server configuration. Code and reproduction instructions: [`NoeFlandre/osm-polygon-wikidata-sentence-relevance`](https://github.com/NoeFlandre/osm-polygon-wikidata-sentence-relevance).
 """
 
 
@@ -324,7 +456,9 @@ def validate_labeled_publication(directory: Path) -> ValidatedLabeledPublication
     directory = Path(directory)
     expected = {Path(name) for name in _FILES}
     actual = {
-        path.relative_to(directory) for path in directory.rglob("*") if path.is_file()
+        path.relative_to(directory)
+        for path in directory.rglob("*")
+        if path.is_file() and not path.name.startswith(".gitattributes")
     }
     if actual != expected:
         raise LabelFinalizationError("labeled publication file layout mismatch")
@@ -359,9 +493,20 @@ def validate_labeled_publication(directory: Path) -> ValidatedLabeledPublication
     stats = manifest.get("statistics", {})
     if stats.get("row_count") != table.num_rows:
         raise LabelFinalizationError("labeled publication row count mismatch")
+    _validate_split_timing(manifest.get("timing", {}))
     for field in ("landuse_relevance", "polygon_relevance"):
         if stats.get(field) != _distribution(table[field].to_pylist()):
             raise LabelFinalizationError("labeled publication statistics mismatch")
+    persisted_card = (directory / "README.md").read_text()
+    rendered_card = _render_card(
+        dataset_repo_id=str(manifest["dataset_repo_id"]),
+        row_count=table.num_rows,
+        stats=stats,
+        identity=manifest["run_identity"],
+        timing=manifest["timing"],
+    )
+    if rendered_card != persisted_card:
+        raise LabelFinalizationError("labeled dataset card has drifted from data")
     return ValidatedLabeledPublication(
         directory=directory,
         row_count=table.num_rows,

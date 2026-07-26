@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import signal
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
@@ -44,13 +44,70 @@ def _passthrough_engine(
     return call
 
 
-def _batched_to_single_engine(engine: LabelEngine) -> RepairEngine:
-    """Adapt a batched :class:`LabelEngine` to a single-message :class:`RepairEngine`."""
+def _batched_to_single_engine(
+    engine: LabelEngine,
+    *,
+    clock: Callable[[], float] | None = None,
+    repair_time_holder: list[float] | None = None,
+) -> RepairEngine:
+    """Adapt a batched :class:`LabelEngine` to a single-message :class:`RepairEngine`.
+
+    When ``clock`` and ``repair_time_holder`` are provided, the wall time
+    spent on each single-row invocation is added to ``repair_time_holder``
+    so the runner can report ``repair_inference_seconds`` independently
+    of the batched ``initial_inference_seconds`` total.
+    """
 
     def call(messages: Sequence[Messages]) -> list[str]:
+        if clock is not None and repair_time_holder is not None:
+            before = clock()
+            result = list(engine.generate(list(messages)))
+            repair_time_holder[0] += max(0.0, clock() - before)
+            return result
         return list(engine.generate(list(messages)))
 
     return call
+
+
+def build_timing_payload(
+    *,
+    initial_inference_seconds: float,
+    repair_inference_seconds: float,
+    checkpoint_and_validation_seconds: float,
+    completed: int,
+    total: int,
+    interrupted: bool,
+    repair_stats: Mapping[str, object],
+    started_at: float,
+    finished_at: float,
+) -> dict[str, object]:
+    """Assemble one atomic timing payload with split inference components.
+
+    The contract is::
+
+        inference_seconds = initial_inference_seconds + repair_inference_seconds
+        total_wall_seconds = inference_seconds + checkpoint_and_validation_seconds
+
+    All values are non-negative. ``interrupted`` is recorded verbatim so
+    the resume path can distinguish completed batches from a SIGINT-stopped
+    allocation.
+    """
+
+    initial = max(0.0, float(initial_inference_seconds))
+    repair = max(0.0, float(repair_inference_seconds))
+    checkpoint = max(0.0, float(checkpoint_and_validation_seconds))
+    total_wall = max(0.0, float(finished_at) - float(started_at))
+    return {
+        "completed": int(completed),
+        "total": int(total),
+        "interrupted": bool(interrupted),
+        "initial_inference_seconds": initial,
+        "repair_inference_seconds": repair,
+        "inference_seconds": initial + repair,
+        "checkpoint_and_validation_seconds": checkpoint,
+        "total_wall_seconds": total_wall,
+        "repair_stats": dict(repair_stats),
+    }
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,6 +119,8 @@ class RunResult:
     interrupted: bool
     elapsed_seconds: float
     inference_seconds: float
+    initial_inference_seconds: float
+    repair_inference_seconds: float
     repair_stats: RepairStats
 
 
@@ -193,7 +252,8 @@ class LabelingRunner:
             index for index, value in enumerate(ids) if value not in completed
         ]
         batch_index = len(self.store._batch_indexes())
-        inference_seconds = 0.0
+        initial_inference_seconds = 0.0
+        repair_time_holder: list[float] = [0.0]
         interrupted = False
         for offset in range(0, len(pending_indexes), self.batch_size):
             if self.stop_requested():
@@ -206,11 +266,17 @@ class LabelingRunner:
             responses = self.engine.generate(
                 [build_messages(prompt_input) for prompt_input in prompt_inputs]
             )
-            inference_seconds += max(0.0, self.clock() - before)
+            initial_inference_seconds += max(0.0, self.clock() - before)
             if len(responses) != len(rows):
                 raise ValueError("engine response count does not match request count")
             records: list[LabelRecord] = []
-            fallback = _batched_to_single_engine(self.engine)
+            # Per-batch single-row engine used only for repair: timer
+            # accumulates wall time on every invocation past the first.
+            fallback = _batched_to_single_engine(
+                self.engine,
+                clock=self.clock,
+                repair_time_holder=repair_time_holder,
+            )
             for prompt_input, response, messages in zip(
                 prompt_inputs,
                 responses,
@@ -245,26 +311,37 @@ class LabelingRunner:
                 completed=len(completed), total=table.num_rows, elapsed_seconds=elapsed
             )
         total_elapsed = max(0.0, self.clock() - started)
-        timing: dict[str, float | int | bool | dict[str, object]] = {
-            "completed": len(completed),
-            "total": table.num_rows,
-            "interrupted": interrupted,
-            "inference_seconds": inference_seconds,
-            "checkpoint_and_validation_seconds": max(
-                0.0, total_elapsed - inference_seconds
+        repair_inference_seconds = repair_time_holder[0]
+        timing = build_timing_payload(
+            initial_inference_seconds=initial_inference_seconds,
+            repair_inference_seconds=repair_inference_seconds,
+            checkpoint_and_validation_seconds=max(
+                0.0,
+                total_elapsed - initial_inference_seconds - repair_inference_seconds,
             ),
-            "total_wall_seconds": total_elapsed,
-            "repair_stats": dict[str, object](self.repair.stats.to_dict()),
-        }
+            completed=len(completed),
+            total=table.num_rows,
+            interrupted=interrupted,
+            repair_stats=self.repair.stats.to_dict(),
+            started_at=started,
+            finished_at=total_elapsed + started,
+        )
         self.store.write_timing(timing)
         return RunResult(
             completed=len(completed),
             total=table.num_rows,
             interrupted=interrupted,
             elapsed_seconds=total_elapsed,
-            inference_seconds=inference_seconds,
+            inference_seconds=initial_inference_seconds + repair_inference_seconds,
+            initial_inference_seconds=initial_inference_seconds,
+            repair_inference_seconds=repair_inference_seconds,
             repair_stats=self.repair.stats,
         )
 
 
-__all__ = ["LabelingRunner", "RunResult", "StopController"]
+__all__ = [
+    "LabelingRunner",
+    "RunResult",
+    "StopController",
+    "build_timing_payload",
+]

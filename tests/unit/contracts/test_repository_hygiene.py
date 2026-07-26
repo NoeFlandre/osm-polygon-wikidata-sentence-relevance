@@ -5,6 +5,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[3]
 
 RETAINED_SHELL = {
+    "_checkout_guard.sh",
+    "_deadline_helper.sh",
     "_finalize_persist.sh",
     "run_afghanistan_labeling.sh",
     "run_afghanistan_labeling_job.sh",

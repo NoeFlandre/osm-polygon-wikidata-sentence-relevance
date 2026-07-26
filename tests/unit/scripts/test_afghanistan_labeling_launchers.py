@@ -35,10 +35,21 @@ def test_job_wrapper_verifies_checkout_gpu_and_persists_logs() -> None:
     text = _text("run_afghanistan_labeling_job.sh")
     assert "gpu_preflight.py" in text
     assert "git -C" in text
-    assert "status --porcelain" in text
+    assert "validate_clean_checkout" in text
+    assert "_checkout_guard.sh" in text
     assert 'JOB_LOG_DIR="${LOG_ROOT}/${OAR_JOB_ID}"' in text
     assert "labeling.exit_code" in text
     assert "run_afghanistan_labeling.sh" in text
+
+
+def test_job_wrapper_invokes_deadline_helper() -> None:
+    text = _text("run_afghanistan_labeling_job.sh")
+    assert "_deadline_helper.sh" in text
+    assert "deadline_helper_run" in text
+    # The wrapper must give the labeling CLI 11h and a 10m grace window
+    # so it can checkpoint before OAR's final TERM/KILL window.
+    assert "11h" in text
+    assert "10m" in text
 
 
 def test_job_wrapper_translates_submit_arguments_to_payload_contract() -> None:

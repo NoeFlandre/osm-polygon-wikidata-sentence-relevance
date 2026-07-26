@@ -20,13 +20,8 @@ from osm_polygon_sentence_relevance.labeling.repair import (
     Messages,
     RepairExhausted,
     _build_repair_messages,
-    _coerce_for_json,
     _failure_reason,
     _invoke_engine,
-    repair_response,
-    repair_response_json,
-    repair_response_payload_to_dict,
-    sanitize_for_log,
 )
 from osm_polygon_sentence_relevance.labeling.runner import LabelingRunner
 from osm_polygon_sentence_relevance.labeling.runtime import (
@@ -197,62 +192,6 @@ def test_repair_exhausted_raises_without_initial_error() -> None:
 def test_repair_rejects_low_max_attempts() -> None:
     with pytest.raises(ValueError, match="at least"):
         BoundedRepair(max_attempts=0)
-
-
-def test_repair_response_helper_and_json() -> None:
-    def engine(messages):
-        return [
-            json.dumps(
-                {
-                    "landuse_relevance": "yes",
-                    "polygon_relevance": "yes",
-                    "landuse_reason": "explicit_land_use",
-                    "polygon_reason": "direct_polygon_reference",
-                    "evidence": "farming",
-                }
-            )
-        ]
-
-    label, stats = repair_response(
-        raw="",
-        target_sentence="farming valley",
-        engine=engine,
-        messages=[
-            {"role": "system", "content": "s"},
-            {"role": "user", "content": "farming valley"},
-        ],
-    )
-    assert label.evidence == "farming"
-    payload = repair_response_payload_to_dict(label, stats)
-    assert payload["label"]["evidence"] == "farming"
-    text = repair_response_json(label, stats)
-    payload2 = json.loads(text)
-    assert payload2["label"]["landuse_relevance"] == "yes"
-
-
-def test_coerce_for_json_converts_unknown() -> None:
-    class _Custom:
-        def __str__(self) -> str:
-            return "x"
-
-    assert _coerce_for_json(_Custom()) == "x"
-    assert _coerce_for_json(1) == 1
-    assert _coerce_for_json(None) is None
-    assert _coerce_for_json({"a": _Custom()}) == {"a": "x"}
-
-
-def test_sanitize_for_log_redacts_raw_keys() -> None:
-    payload = {
-        "prompt": "secret",
-        "raw_response": "x",
-        "raw_request": "y",
-        "sentence_id": "s1",
-    }
-    sanitized = sanitize_for_log(payload)
-    assert sanitized["prompt"] == "<redacted>"
-    assert sanitized["raw_response"] == "<redacted>"
-    assert sanitized["raw_request"] == "<redacted>"
-    assert sanitized["sentence_id"] == "s1"
 
 
 # ---------------------------------------------------------------------------
@@ -517,7 +456,15 @@ def test_finalization_rejects_missing_server_config(tmp_path: Path) -> None:
             )
         ],
     )
-    store.write_timing({"total_wall_seconds": 1.0, "inference_seconds": 0.5})
+    store.write_timing(
+        {
+            "total_wall_seconds": 1.0,
+            "initial_inference_seconds": 0.5,
+            "repair_inference_seconds": 0.0,
+            "inference_seconds": 0.5,
+            "checkpoint_and_validation_seconds": 0.5,
+        }
+    )
 
     output = tmp_path / "publication"
     finalize_labeled_dataset(
@@ -632,7 +579,15 @@ def test_finalization_rejects_partial_afghanistan_input(tmp_path: Path) -> None:
             ),
         ],
     )
-    store.write_timing({"total_wall_seconds": 1.0, "inference_seconds": 0.5})
+    store.write_timing(
+        {
+            "total_wall_seconds": 1.0,
+            "initial_inference_seconds": 0.5,
+            "repair_inference_seconds": 0.0,
+            "inference_seconds": 0.5,
+            "checkpoint_and_validation_seconds": 0.5,
+        }
+    )
     output = tmp_path / "out"
     finalize_labeled_dataset(
         input_path=input_path,
@@ -712,7 +667,15 @@ def test_finalization_rejects_tampered_landuse_distribution(tmp_path: Path) -> N
             )
         ],
     )
-    store.write_timing({"total_wall_seconds": 1.0, "inference_seconds": 0.5})
+    store.write_timing(
+        {
+            "total_wall_seconds": 1.0,
+            "initial_inference_seconds": 0.5,
+            "repair_inference_seconds": 0.0,
+            "inference_seconds": 0.5,
+            "checkpoint_and_validation_seconds": 0.5,
+        }
+    )
     output = tmp_path / "out"
     finalize_labeled_dataset(
         input_path=input_path,

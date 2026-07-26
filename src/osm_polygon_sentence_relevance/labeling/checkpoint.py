@@ -203,7 +203,7 @@ class CheckpointStore:
         )
 
     def write_timing(
-        self, payload: dict[str, float | int | bool | dict[str, object]]
+        self, payload: dict[str, object]
     ) -> None:
         """Atomically persist the final timing summary."""
 
