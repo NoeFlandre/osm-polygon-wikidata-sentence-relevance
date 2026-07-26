@@ -147,7 +147,7 @@ def _hex(value: str, length: int, field: str) -> str:
     return value
 
 
-def _resolve_runtime_plan(args: argparse.Namespace) -> "RuntimePlan":
+def _resolve_runtime_plan(args: argparse.Namespace) -> RuntimePlan:
     plan = build_runtime_plan(
         parallel=args.llama_parallel,
         per_slot_context=args.llama_per_slot_context,
@@ -168,7 +168,7 @@ def _resolve_runtime_plan(args: argparse.Namespace) -> "RuntimePlan":
 
 
 def _identity(
-    args: argparse.Namespace, input_path: Path, plan: "RuntimePlan"
+    args: argparse.Namespace, input_path: Path, plan: RuntimePlan
 ) -> RunIdentity:
     if args.row_limit < 0:
         raise ValueError("row limit must be non-negative")

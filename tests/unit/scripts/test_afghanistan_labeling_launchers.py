@@ -25,8 +25,9 @@ def test_submitter_requests_one_fast_large_cuda_gpu_once() -> None:
     assert text.count("exec oarsub ") == 1
     assert "gpu=1,walltime=12:00:00" in text
     assert "gpu_mem>=60000" in text
-    assert " -t production" in text
+    assert " -q default" in text
     assert " -t exotic" in text
+    assert " -t besteffort" not in text
     assert " -I" not in text
 
 

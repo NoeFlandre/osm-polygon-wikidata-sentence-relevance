@@ -103,10 +103,13 @@ def test_payload_does_not_attempt_vllm() -> None:
 
 def test_submitter_uses_production_exotic_queue_without_cpu_fallback() -> None:
     text = SUBMIT.read_text()
-    assert "-q default" not in text
-    assert "best_effort" not in text
-    assert "besteffort" not in text
+    # The nantes site uses the default queue with the exotic type so the
+    # job enters the production / non-preemptible node class. The
+    # ``-t besteffort`` flag must be absent (it may appear in a comment).
+    assert "-q default" in text
     assert "-t exotic" in text
+    assert " -t besteffort" not in text
+    assert "best_effort" not in text
     assert "cpu" not in text
     assert "mps" not in text
 
