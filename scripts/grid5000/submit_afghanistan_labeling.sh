@@ -83,7 +83,10 @@ for value in "$@"; do
     command_string="${command_string} $(shell_quote "${value}")"
 done
 
-# Production / non-preemptible queue; the load is sustained and must not be
-# interrupted by another user's best-effort workload.
-exec oarsub -t production -t exotic -p "gpu_mem>=60000" \
+# Production / non-preemptible queue: the load is sustained and must not be
+# interrupted by another user's best-effort workload. The nantes site uses
+# the default queue (``-q default``) with the ``exotic`` type so the job
+# is scheduled on the production / non-preemptible node class. The
+# ``-t besteffort`` marker is intentionally absent.
+exec oarsub -q default -t exotic -p "gpu_mem>=60000" \
     -l gpu=1,walltime=12:00:00 "${command_string}"
