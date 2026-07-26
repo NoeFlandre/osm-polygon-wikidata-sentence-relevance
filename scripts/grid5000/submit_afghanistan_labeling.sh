@@ -101,6 +101,7 @@ DATASET_ID="${12}"; readonly DATASET_ID
 BATCH_SIZE="${13}"; readonly BATCH_SIZE
 ROW_LIMIT="${14}"; readonly ROW_LIMIT
 LLAMA_PARALLEL="${15}"; readonly LLAMA_PARALLEL
+GPU_MIN_MEMORY_MB="${LABEL_GPU_MIN_MEMORY_MB:-60000}"; readonly GPU_MIN_MEMORY_MB
 
 RUN_ROOT="${REPO_ROOT_CANON%/*}"
 
@@ -133,6 +134,10 @@ case "${LLAMA_PARALLEL}" in
     1|2|4|8|16|32) ;;
     *) echo "submit_afghanistan_labeling: LLAMA_PARALLEL must be one of 1, 2, 4, 8, 16, 32" >&2; exit 2;;
 esac
+if ! [[ "${GPU_MIN_MEMORY_MB}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "submit_afghanistan_labeling: GPU memory minimum must be a positive integer" >&2
+    exit 2
+fi
 
 for path in "${HF_HOME}" "${LOG_ROOT}" "${TOKENIZER_DIR}"; do
     if [ ! -d "${path}" ] || [ -L "${path}" ]; then
@@ -166,5 +171,5 @@ done
 # interrupted by another user's best-effort workload. The 80 GiB Nantes A100
 # resources are marked as OAR ``exotic``; the required type selects that
 # resource class. The ``-t besteffort`` marker is intentionally absent.
-exec oarsub -q default -t exotic -p "gpu_mem>=60000" \
+exec oarsub -q default -t exotic -p "gpu_mem>=${GPU_MIN_MEMORY_MB}" \
     -l gpu=1,walltime=12:00:00 "${command_string}"

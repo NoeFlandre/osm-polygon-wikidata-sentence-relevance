@@ -20,6 +20,8 @@ def _run_submit(
     root: Path,
     work_dir: Path,
     output_dir: Path | None = None,
+    *,
+    gpu_min_memory_mb: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     if output_dir is None:
         output_dir = root / "output"
@@ -73,6 +75,10 @@ def _run_submit(
         required_file.parent.mkdir(parents=True, exist_ok=True)
         required_file.write_text("ok")
 
+    env = {**os.environ, "PATH": f"{fake_bin}:{os.environ['PATH']}"}
+    if gpu_min_memory_mb is not None:
+        env["LABEL_GPU_MIN_MEMORY_MB"] = gpu_min_memory_mb
+
     result = subprocess.run(
         [
             "bash",
@@ -93,7 +99,7 @@ def _run_submit(
             "0",
             "16",
         ],
-        env={**os.environ, "PATH": f"{fake_bin}:{os.environ['PATH']}"},
+        env=env,
         text=True,
         capture_output=True,
         check=False,
@@ -114,11 +120,35 @@ def test_submitter_requests_one_fast_large_cuda_gpu_once() -> None:
     text = _text("submit_afghanistan_labeling.sh")
     assert text.count("exec oarsub ") == 1
     assert "gpu=1,walltime=12:00:00" in text
-    assert "gpu_mem>=60000" in text
+    assert 'GPU_MIN_MEMORY_MB="${LABEL_GPU_MIN_MEMORY_MB:-60000}"' in text
+    assert "gpu_mem>=${GPU_MIN_MEMORY_MB}" in text
     assert " -q default" in text
     assert " -t exotic" in text
     assert " -t besteffort" not in text
     assert " -I" not in text
+
+
+def test_submitter_accepts_validated_gpu_memory_override(tmp_path: Path) -> None:
+    result = _run_submit(
+        tmp_path,
+        tmp_path / "work",
+        gpu_min_memory_mb="40000",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "gpu_mem>=40000" in tmp_path.joinpath("oarsub.calls").read_text()
+
+
+def test_submitter_rejects_invalid_gpu_memory_override(tmp_path: Path) -> None:
+    result = _run_submit(
+        tmp_path,
+        tmp_path / "work",
+        gpu_min_memory_mb="forty-gigabytes",
+    )
+
+    assert result.returncode == 2
+    assert "GPU memory minimum must be a positive integer" in result.stderr
+    assert not tmp_path.joinpath("oarsub.calls").exists()
 
 
 def test_job_wrapper_verifies_checkout_gpu_and_persists_logs() -> None:
