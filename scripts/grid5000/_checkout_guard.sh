@@ -161,18 +161,21 @@ checkout_guard_is_untracked_venv() {
     local path="$2"
     case "${status_code}" in
         "??")
-            if [ "${path}" = "${_DEPLOYMENT_ENTRY_NAME}" ]; then
-                return 0
-            fi
+            case "${path}" in
+                "${_DEPLOYMENT_ENTRY_NAME}"|"${_DEPLOYMENT_ENTRY_NAME}"/*)
+                    return 0
+                    ;;
+            esac
             ;;
         "!!")
-            if [ "${path}" = "${_DEPLOYMENT_ENTRY_NAME}" ]; then
-                # The ``!!`` marker is git's "ignored" indicator; the
-                # Grid'5000 venv lives inside ``.gitignore`` via the
-                # standard ``.venv`` pattern. Treat it the same as an
-                # untracked ``.venv`` for backwards compatibility.
-                return 0
-            fi
+            case "${path}" in
+                "${_DEPLOYMENT_ENTRY_NAME}"|"${_DEPLOYMENT_ENTRY_NAME}"/*)
+                    # The ``!!`` marker is git's "ignored" indicator; the
+                    # Grid'5000 venv lives inside ``.venv/.gitignore`` via
+                    # the standard ``.venv`` pattern.
+                    return 0
+                    ;;
+            esac
             ;;
     esac
     return 1

@@ -106,6 +106,18 @@ def test_guard_accepts_approved_venv_directory(tmp_path: Path) -> None:
     _expect_pass(result)
 
 
+def test_guard_accepts_nested_ignored_entries_within_venv(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _create_venv(repo / ".venv")
+    nested = repo / ".venv" / "lib"
+    nested.mkdir()
+    (nested / "site-packages").mkdir(parents=True)
+    (nested / "site-packages" / "evil.pth").write_text("/tmp/evil\n")
+    result = _run_guard(repo)
+    _expect_pass(result)
+
+
 def test_guard_accepts_approved_venv_symlink_into_run_root(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     _init_repo(repo)
