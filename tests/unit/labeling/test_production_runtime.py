@@ -1,7 +1,7 @@
-"""Phase 9Q: production runtime amendment (no out-of-repo patches).
+"""Phase 9R: production runtime amendment (no out-of-repo patches).
 
 These tests encode the contract that the production labeling path must satisfy
-after the OAR 334232 forensic review. The amendment is verified by the
+after the OAR 334344 canary validation. The amendment is verified by the
 following 14 properties:
 
 1. Production code does not import, monkeypatch, or rely on ``sitecustomize``,
