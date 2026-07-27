@@ -101,7 +101,7 @@ DATASET_ID="${12}"; readonly DATASET_ID
 BATCH_SIZE="${13}"; readonly BATCH_SIZE
 ROW_LIMIT="${14}"; readonly ROW_LIMIT
 LLAMA_PARALLEL="${15}"; readonly LLAMA_PARALLEL
-GPU_MIN_MEMORY_MB="${LABEL_GPU_MIN_MEMORY_MB:-60000}"; readonly GPU_MIN_MEMORY_MB
+GPU_MIN_MEMORY_MB="${LABEL_GPU_MIN_MEMORY_MB:-40000}"; readonly GPU_MIN_MEMORY_MB
 
 RUN_ROOT="${REPO_ROOT_CANON%/*}"
 
@@ -167,9 +167,9 @@ for value in "$@"; do
     command_string="${command_string} $(shell_quote "${value}")"
 done
 
-# Production / non-preemptible queue: the load is sustained and must not be
-# interrupted by another user's best-effort workload. The 80 GiB Nantes A100
-# resources are marked as OAR ``exotic``; the required type selects that
-# resource class. The ``-t besteffort`` marker is intentionally absent.
-exec oarsub -q default -t exotic -p "gpu_mem>=${GPU_MIN_MEMORY_MB}" \
+# Sustained CUDA queue: the load is sustained and tuned for long, heavy GPU
+# inference runs. Nancy's currently schedulable
+# 40 GiB+ CUDA resources are exposed as ``type=default`` resources we can
+# use without forcing an exotic or best-effort queue type.
+exec oarsub -q default -p "gpu_mem>=${GPU_MIN_MEMORY_MB}" \
     -l gpu=1,walltime=12:00:00 "${command_string}"
