@@ -118,6 +118,28 @@ def test_guard_accepts_nested_ignored_entries_within_venv(tmp_path: Path) -> Non
     _expect_pass(result)
 
 
+def test_guard_accepts_grid5000_oar_output(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    (repo / "OAR.123456.stdout").write_text("")
+    (repo / "OAR.123456.stderr").write_text("")
+    exclude = repo / ".git" / "info" / "exclude"
+    exclude.write_text("OAR.*.stdout\nOAR.*.stderr\n")
+    result = _run_guard(repo)
+    _expect_pass(result)
+
+
+def test_guard_rejects_non_oar_ignored_file(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    (repo / "random.tmp").write_text("")
+    exclude = repo / ".git" / "info" / "exclude"
+    exclude.write_text("*.tmp\n")
+    result = _run_guard(repo)
+    _expect_fail(result)
+    assert "ignored entry is not allowed" in result.stderr
+
+
 def test_guard_accepts_approved_venv_symlink_into_run_root(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     _init_repo(repo)

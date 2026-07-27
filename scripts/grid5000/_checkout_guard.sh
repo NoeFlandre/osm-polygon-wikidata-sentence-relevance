@@ -248,6 +248,10 @@ validate_clean_checkout() {
             continue
         fi
 
+        if checkout_guard_is_allowed_ignored_entry "${status_code}" "${path}"; then
+            continue
+        fi
+
         case "${status_code}" in
             "??")
                 checkout_guard_error "untracked entry is not allowed"
@@ -265,4 +269,23 @@ validate_clean_checkout() {
     done <<< "${dirty_output}"
 
     return 0
+}
+# Some scheduler output files are deliberately ignored under Grid'5000
+# launching conventions. These are safe to ignore because they are rewritten
+# on each submission and are explicitly filtered by .gitignore to avoid
+# accidental leaks.
+checkout_guard_is_allowed_ignored_entry() {
+    local status_code="$1"
+    local path="$2"
+
+    if [ "${status_code}" != "!!" ]; then
+        return 1
+    fi
+
+    case "${path}" in
+        OAR.*.stderr|OAR.*.stdout)
+            return 0
+            ;;
+    esac
+    return 1
 }
