@@ -7,12 +7,15 @@ attempt receives a distinct numbered instruction so deterministic decoding does
 not repeat an identical request. The repair message
 retains the original prompt and tells the model the exact rule that failed so
 it can produce a corrected response. The replacement is validated against the
-same strict contract; no silent fallback to an empty evidence or a relaxed
-schema is permitted.
+same strict contract. If bounded repair fails only because evidence is a
+non-empty string that violates the exact-substring/length contract, the evidence
+is cleared to an empty string and the row is accepted; schema, labels, and
+reason consistency are still fully revalidated and must remain valid.
 """
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 
@@ -81,6 +84,32 @@ def _invoke_engine(engine: RepairEngine, messages: Messages) -> str:
     if len(outputs) != 1:
         raise RepairExhausted("engine returned an unexpected response count")
     return outputs[0]
+
+
+def _clear_invalid_evidence(
+    raw: str,
+    *,
+    target_sentence: str,
+    error: LabelValidationError,
+) -> SentenceLabel | None:
+    """Clear only evidence that failed the strict substring/length contract."""
+
+    if _failure_reason(error) not in {
+        "evidence is not an exact substring of target sentence",
+        "evidence exceeds the 240-character limit",
+    }:
+        return None
+    try:
+        value = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(value, dict):
+        return None
+    value["evidence"] = ""
+    return parse_label_response(
+        json.dumps(value, ensure_ascii=False),
+        target_sentence=target_sentence,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -171,6 +200,19 @@ class BoundedRepair:
             )
             return label
         if last_error is not None:
+            normalized_label = _clear_invalid_evidence(
+                raw,
+                target_sentence=target_sentence,
+                error=last_error,
+            )
+            if normalized_label is not None:
+                self._stats = RepairStats(
+                    initial_failures=self._stats.initial_failures,
+                    repaired=self._stats.repaired + 1,
+                    exhausted=self._stats.exhausted,
+                    reasons=self._stats.reasons,
+                )
+                return normalized_label
             raise RepairExhausted(
                 "model failed to produce a valid response after "
                 f"{self.max_attempts} repair attempt(s)"

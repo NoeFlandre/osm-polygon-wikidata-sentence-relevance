@@ -530,6 +530,39 @@ def test_bounded_repair_succeeds_on_valid_replacement() -> None:
     assert any("exact substring" in c["content"] for c in attempts[1])
 
 
+def test_bounded_repair_clears_only_exhausted_invalid_evidence() -> None:
+    from osm_polygon_sentence_relevance.labeling.repair import BoundedRepair
+
+    def engine(_messages: list[list[dict[str, str]]]) -> list[str]:
+        return [
+            json.dumps(
+                {
+                    "landuse_relevance": "no",
+                    "polygon_relevance": "yes",
+                    "landuse_reason": "no_landuse_or_cover",
+                    "polygon_reason": "place_description",
+                    "evidence": "paraphrase absent from source",
+                }
+            )
+        ]
+
+    repair = BoundedRepair(max_attempts=1)
+    label = repair.call(
+        engine=engine,
+        messages=[
+            {"role": "system", "content": "label"},
+            {"role": "user", "content": "source sentence"},
+        ],
+        target_sentence="source sentence",
+    )
+
+    assert label.evidence == ""
+    assert label.landuse_relevance.value == "no"
+    assert label.polygon_relevance.value == "yes"
+    assert repair.stats.initial_failures == 1
+    assert repair.stats.repaired == 1
+
+
 def test_bounded_repair_rejects_strict_invalid_replacement() -> None:
     from osm_polygon_sentence_relevance.labeling.repair import (
         BoundedRepair,
@@ -537,15 +570,15 @@ def test_bounded_repair_rejects_strict_invalid_replacement() -> None:
     )
 
     def engine(messages: list[list[dict[str, str]]]) -> list[str]:
-        # Both attempts invalid: evidence not a substring.
+        # Both attempts invalid: reason contradicts the positive label.
         return [
             json.dumps(
                 {
                     "landuse_relevance": "yes",
                     "polygon_relevance": "yes",
-                    "landuse_reason": "explicit_land_use",
+                    "landuse_reason": "no_landuse_or_cover",
                     "polygon_reason": "direct_polygon_reference",
-                    "evidence": "bogus",
+                    "evidence": "",
                 }
             )
         ]
@@ -574,9 +607,9 @@ def test_bounded_repair_caps_attempts() -> None:
                 {
                     "landuse_relevance": "yes",
                     "polygon_relevance": "yes",
-                    "landuse_reason": "explicit_land_use",
+                    "landuse_reason": "no_landuse_or_cover",
                     "polygon_reason": "direct_polygon_reference",
-                    "evidence": "bogus",
+                    "evidence": "",
                 }
             )
         ]
@@ -608,9 +641,9 @@ def test_bounded_repair_changes_instruction_between_attempts() -> None:
                 {
                     "landuse_relevance": "yes",
                     "polygon_relevance": "yes",
-                    "landuse_reason": "explicit_land_use",
+                    "landuse_reason": "no_landuse_or_cover",
                     "polygon_reason": "direct_polygon_reference",
-                    "evidence": "bogus",
+                    "evidence": "",
                 }
             )
         ]
