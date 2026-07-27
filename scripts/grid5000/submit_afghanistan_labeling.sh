@@ -168,8 +168,10 @@ for value in "$@"; do
 done
 
 # Sustained CUDA queue: the load is sustained and tuned for long, heavy GPU
-# inference runs. Nancy's currently schedulable
-# 40 GiB+ CUDA resources are exposed as ``type=default`` resources we can
-# use without forcing an exotic or best-effort queue type.
+# inference runs.
+# On this site, 40 GiB+ CUDA resources are commonly exposed under
+# ``type=default`` with ``exotic=YES``; this helper therefore requests
+# the exotic type explicitly.
 exec oarsub -q default -p "gpu_mem>=${GPU_MIN_MEMORY_MB}" \
+    -t exotic \
     -l gpu=1,walltime=12:00:00 "${command_string}"

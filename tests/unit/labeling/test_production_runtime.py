@@ -105,9 +105,10 @@ def test_submitter_uses_production_default_queue_without_cpu_fallback() -> None:
     text = SUBMIT.read_text()
     # The nantes site schedules through default queue resources for production
     # jobs. The
+    # Nancy-compatible resource contracts currently require explicit exotic jobs.
     # ``-t besteffort`` flag must be absent (it may appear in a comment).
     assert "-q default" in text
-    assert "-t exotic" not in text
+    assert "-t exotic" in text
     assert " -t besteffort" not in text
     assert "best_effort" not in text
     assert "cpu" not in text
