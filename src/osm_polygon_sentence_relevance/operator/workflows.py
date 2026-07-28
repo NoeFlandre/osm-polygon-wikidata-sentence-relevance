@@ -131,6 +131,7 @@ def label_submission(
 def llama_build_submission(layout: RemoteLayout) -> SubmissionRequest:
     """Build pinned CUDA llama-server inside an allocated GPU job."""
 
+    revision = "555881ebc8b0fc0402b30e09258a32a7bfd13c52"
     submit_helper = layout.repo / "scripts/grid5000/_submit_gpu_job.sh"
     target = layout.root / "llama-server-bin"
     source = layout.root / "llama.cpp"
@@ -143,8 +144,9 @@ def llama_build_submission(layout: RemoteLayout) -> SubmissionRequest:
         '2> >(tee -a "$job_log/build.stderr.log" >&2); '
         f"if [ ! -d {source}/.git ]; then "
         f"git clone https://github.com/ggml-org/llama.cpp.git {source}; fi; "
-        f"git -C {source} fetch --no-tags origin 555881e; "
-        f"git -C {source} checkout --detach 555881e; "
+        f"git -C {source} fetch --no-tags origin; "
+        f"git -C {source} cat-file -e {revision}^{{commit}}; "
+        f"git -C {source} checkout --detach {revision}; "
         f"cmake -S {source} -B {source}/build -DGGML_CUDA=ON "
         "-DLLAMA_CURL=OFF -DCMAKE_BUILD_TYPE=Release; "
         f"cmake --build {source}/build --target llama-server -j 12; "

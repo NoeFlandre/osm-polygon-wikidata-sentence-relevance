@@ -406,6 +406,8 @@ def test_workflow_layout_and_finalization_commands() -> None:
     assert build.command[0].endswith("_submit_gpu_job.sh")
     assert build.command[1:4] == ("40000", "01:00:00", "night")
     assert "GGML_CUDA=ON" in build.command[-1]
+    assert "555881ebc8b0fc0402b30e09258a32a7bfd13c52" in build.command[-1]
+    assert "fetch --no-tags origin 555881e;" not in build.command[-1]
     assert 'job_log=/r/logs/"${OAR_JOB_ID:?}"' in build.command[-1]
     assert '"$job_log/build.stdout.log"' in build.command[-1]
 
