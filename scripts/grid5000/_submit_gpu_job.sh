@@ -39,6 +39,26 @@ eligible_filter='
     and (.gpu_mem // 0) >= $minimum
     and (.gpu_compute_capability_major // 0) >= 7
   )]'
+queue=default
+production_value=NO
+if jq -e --argjson minimum "${GPU_MIN_MEMORY_MB}" \
+    "${eligible_filter} | any((.production // \"NO\") != \"YES\")" \
+    >/dev/null <<<"${inventory}"; then
+    :
+elif jq -e --argjson minimum "${GPU_MIN_MEMORY_MB}" \
+    "${eligible_filter} | any(.production == \"YES\")" \
+    >/dev/null <<<"${inventory}"; then
+    queue=production
+    production_value=YES
+else
+    echo "submit_gpu_job: no compatible live GPU resource" >&2
+    exit 1
+fi
+readonly queue production_value
+
+eligible_filter="${eligible_filter} | map(select(
+  (.production // \"NO\") == \"${production_value}\"
+))"
 gpu_resource_type=standard
 if jq -e --argjson minimum "${GPU_MIN_MEMORY_MB}" \
     "${eligible_filter} | any((.exotic // \"NO\") != \"YES\")" \
@@ -53,12 +73,14 @@ else
     exit 1
 fi
 
+resource_property="gpu_mem>=${GPU_MIN_MEMORY_MB} AND production='${production_value}'"
+readonly resource_property
 if [ "${gpu_resource_type}" = exotic ]; then
-    exec oarsub -q default -p "gpu_mem>=${GPU_MIN_MEMORY_MB}" \
+    exec oarsub -q "${queue}" -p "${resource_property}" \
         -t exotic -t "${POLICY_TYPE}" \
         -l "gpu=1,walltime=${WALLTIME}" "${PAYLOAD}"
 else
-    exec oarsub -q default -p "gpu_mem>=${GPU_MIN_MEMORY_MB}" \
+    exec oarsub -q "${queue}" -p "${resource_property}" \
         -t "${POLICY_TYPE}" \
         -l "gpu=1,walltime=${WALLTIME}" "${PAYLOAD}"
 fi

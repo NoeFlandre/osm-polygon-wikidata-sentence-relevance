@@ -104,11 +104,12 @@ def test_payload_does_not_attempt_vllm() -> None:
 
 def test_submitter_uses_production_default_queue_without_cpu_fallback() -> None:
     text = SUBMIT.read_text() + GPU_SUBMIT.read_text()
-    # The nantes site schedules through default queue resources for production
-    # jobs. The
-    # Sites whose matching resources require it receive an explicit exotic type.
+    # The live inventory selects default or production resources and adds the
+    # exotic type only when the matching resources require it.
     # ``-t besteffort`` flag must be absent (it may appear in a comment).
-    assert "-q default" in text
+    assert "queue=default" in text
+    assert "queue=production" in text
+    assert '-q "${queue}"' in text
     assert "-t exotic" in text
     assert " -t besteffort" not in text
     assert "best_effort" not in text
