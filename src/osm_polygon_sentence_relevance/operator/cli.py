@@ -112,11 +112,19 @@ def _resolve_input_revision(explicit: str | None, stage: str) -> str:
     return sha
 
 
-def _probe_target(target: str) -> SiteProbe:
+def _probe_target(target: str, run_id: str | None = None) -> SiteProbe:
+    if run_id is not None and re.fullmatch(r"[0-9a-f]{20}", run_id) is None:
+        raise ValueError("run ID must be twenty lowercase hexadecimal characters")
     ssh = SshClient(target=target, attempts=1, command_timeout=30)
     # ``oarnodes -J`` is the authoritative OAR resource inventory. Restrict
     # the maximum to currently Alive GPU resources; ``oarstat -p`` describes
     # jobs and does not expose the node properties needed here.
+    managed_probe = (
+        f'test -f "$HOME/osm-polygon-operator/{run_id}/.operator-managed.json" '
+        "&& managed=1"
+        if run_id is not None
+        else ":"
+    )
     command = r"""
 set -euo pipefail
 command -v oarsub >/dev/null
@@ -133,13 +141,20 @@ inventory=$(oarnodes -J | jq -r '
 ')
 read -r gpu_mb gpu_major <<<"$inventory"
 waiting=$(oarstat -u 2>/dev/null | awk '$5 ~ /Waiting|Hold/ {n++} END {print n+0}')
-printf '%s %s %s %s\n' "$free_kb" "$gpu_mb" "$gpu_major" "$waiting"
-""".strip()
+managed=0
+__MANAGED_PROBE__
+printf '%s %s %s %s %s\n' \
+  "$free_kb" "$gpu_mb" "$gpu_major" "$waiting" "$managed"
+""".replace("__MANAGED_PROBE__", managed_probe).strip()
     try:
         result = ssh.run(command)
-        free_kb_raw, gpu_raw, gpu_major_raw, waiting_raw = result.stdout.splitlines()[
-            -1
-        ].split()
+        (
+            free_kb_raw,
+            gpu_raw,
+            gpu_major_raw,
+            waiting_raw,
+            managed_raw,
+        ) = result.stdout.splitlines()[-1].split()
         quota = _read_remote_quota(ssh)
         gpu_memory = int(gpu_raw)
         gpu_major = int(gpu_major_raw)
@@ -154,6 +169,7 @@ printf '%s %s %s %s\n' "$free_kb" "$gpu_mb" "$gpu_major" "$waiting"
                 quota.soft_headroom_bytes,
             ),
             expected_start_seconds=int(waiting_raw) * 60,
+            has_managed_run=managed_raw == "1",
         )
     except (SshError, ValueError, IndexError):
         return SiteProbe(
@@ -292,7 +308,7 @@ def _run(args: argparse.Namespace) -> int:
     probes: list[SiteProbe] = []
     for target in dict.fromkeys(args.site):
         _milestone(f"Probing Grid'5000 site: {target}")
-        probe = _probe_target(target)
+        probe = _probe_target(target, config.run_id)
         probes.append(probe)
         if probe.reachable:
             _milestone(
@@ -315,7 +331,7 @@ def _run(args: argparse.Namespace) -> int:
         probes = []
         for target in dict.fromkeys(args.site):
             _milestone(f"Re-probing Grid'5000 site: {target}")
-            probes.append(_probe_target(target))
+            probes.append(_probe_target(target, config.run_id))
         selection = select_site(probes, requirements)
     target = selection.selected.target
     _milestone(f"Selected Grid'5000 site: {selection.selected.name}")

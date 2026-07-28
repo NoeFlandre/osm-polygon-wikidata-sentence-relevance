@@ -16,6 +16,7 @@ class SiteProbe:
     cuda_capability: tuple[int, int] | None
     persistent_free_bytes: int
     expected_start_seconds: int
+    has_managed_run: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,7 +88,11 @@ def select_site(
         raise NoCompatibleSiteError("no compatible Grid'5000 site is available")
     selected = min(
         compatible,
-        key=lambda probe: (probe.expected_start_seconds, probe.name),
+        key=lambda probe: (
+            not probe.has_managed_run,
+            probe.expected_start_seconds,
+            probe.name,
+        ),
     )
     return SiteSelection(selected=selected, decisions=decisions)
 

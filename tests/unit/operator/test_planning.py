@@ -67,6 +67,21 @@ def test_site_selection_uses_delay_then_name() -> None:
     assert selection.selected.name == "nancy"
 
 
+def test_site_selection_prefers_compatible_existing_managed_run() -> None:
+    fresh = _probe("grenoble", delay=0)
+    resumed = SiteProbe(
+        "sophia",
+        "sophia",
+        True,
+        80_000,
+        (8, 0),
+        100 * 1024**3,
+        100,
+        has_managed_run=True,
+    )
+    assert select_site([fresh, resumed]).selected.name == "sophia"
+
+
 def test_site_selection_rejects_incompatible() -> None:
     with pytest.raises(NoCompatibleSiteError):
         select_site([_probe("nancy", memory=10_000)], SiteRequirements())

@@ -121,11 +121,11 @@ def test_site_probe_parses_frontend_facts(monkeypatch: pytest.MonkeyPatch) -> No
         def run(self, command: str) -> SimpleNamespace:
             self.__class__.commands.append(command)
             if "oarnodes" in command:
-                return SimpleNamespace(stdout="100000000 80000 8 3\n")
+                return SimpleNamespace(stdout="100000000 80000 8 3 1\n")
             return SimpleNamespace(stdout=" 1000 25000000 100000000\n")
 
     monkeypatch.setattr(cli, "SshClient", FakeSsh)
-    assert cli._probe_target("nancy") == SiteProbe(
+    assert cli._probe_target("nancy", "a" * 20) == SiteProbe(
         "nancy",
         "nancy",
         True,
@@ -133,6 +133,7 @@ def test_site_probe_parses_frontend_facts(monkeypatch: pytest.MonkeyPatch) -> No
         (8, 0),
         24_999_000 * 1024,
         180,
+        True,
     )
     assert "oarnodes -J" in FakeSsh.commands[0]
     assert "jq -r" in FakeSsh.commands[0]
@@ -149,7 +150,7 @@ def test_site_probe_uses_zero_headroom_after_soft_quota(
 
         def run(self, command: str) -> SimpleNamespace:
             if "oarnodes" in command:
-                return SimpleNamespace(stdout="100000000 80000 8 0\n")
+                return SimpleNamespace(stdout="100000000 80000 8 0 0\n")
             return SimpleNamespace(stdout=" 30000000* 25000000 100000000\n")
 
     monkeypatch.setattr(cli, "SshClient", FakeSsh)
@@ -398,7 +399,7 @@ def _install_run_fakes(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(
         cli,
         "_probe_target",
-        lambda target: SiteProbe(
+        lambda target, _run_id: SiteProbe(
             target, target, True, 80_000, (8, 0), 100 * 1024**3, 0
         ),
     )
@@ -447,7 +448,7 @@ def test_run_reclaims_managed_storage_then_reprobes(
         ]
     )
     cleaned: list[bool] = []
-    monkeypatch.setattr(cli, "_probe_target", lambda _target: next(probes))
+    monkeypatch.setattr(cli, "_probe_target", lambda _target, _run_id: next(probes))
     monkeypatch.setattr(
         cli,
         "_cleanup_remote",
