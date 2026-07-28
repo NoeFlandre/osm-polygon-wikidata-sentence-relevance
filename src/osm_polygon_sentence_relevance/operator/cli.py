@@ -42,6 +42,12 @@ from osm_polygon_sentence_relevance.operator.workflows import (
 DEFAULT_TARGETS: Final[tuple[str, ...]] = ("nancy", "nantes", "rennes")
 
 
+def _milestone(message: str) -> None:
+    """Print one concise operator milestone immediately."""
+
+    print(f"[operator] {message}", flush=True)
+
+
 def _git_head() -> str:
     result = subprocess.run(
         ["git", "rev-parse", "HEAD"],
@@ -146,8 +152,12 @@ def _transition_terminal(
 def _run(args: argparse.Namespace) -> int:
     if not DATA_ROOT.exists():
         raise RuntimeError(f"external data root is unavailable: {DATA_ROOT}")
+    _milestone("Validating the local source checkout")
     source_commit = _git_head()
+    _milestone(f"Source commit: {source_commit[:12]}")
+    _milestone("Resolving immutable input revision")
     input_revision = _resolve_input_revision(args.input_revision, args.stage)
+    _milestone(f"Input revision: {input_revision[:12]}")
     config = OperatorConfig.build(
         scope=args.scope,
         region=args.region,
@@ -162,22 +172,40 @@ def _run(args: argparse.Namespace) -> int:
     )
     store = StateStore(DATA_ROOT)
     store.load_or_create(config.run_identity)
+    _milestone(f"Durable run ID: {config.run_id}")
 
     requirements = SiteRequirements(
         gpu_memory_mb=args.gpu_memory_mb,
         persistent_free_bytes=args.remote_free_bytes,
     )
-    probes = [_probe_target(target) for target in args.site]
+    probes: list[SiteProbe] = []
+    for target in dict.fromkeys(args.site):
+        _milestone(f"Probing Grid'5000 site: {target}")
+        probe = _probe_target(target)
+        probes.append(probe)
+        if probe.reachable:
+            _milestone(
+                f"Site {probe.name}: reachable, GPU {probe.gpu_memory_mb} MiB, "
+                f"persistent free {probe.persistent_free_bytes // 1024**3} GiB"
+            )
+        else:
+            _milestone(f"Site {target}: unavailable")
     try:
         selection = select_site(probes, requirements)
     except NoCompatibleSiteError:
+        _milestone(
+            "No compatible site; reclaiming only completed or failed managed runs"
+        )
         for probe in probes:
             if probe.reachable:
                 _cleanup_remote(SshClient(target=probe.target), execute=True)
-        probes = [_probe_target(target) for target in args.site]
+        probes = []
+        for target in dict.fromkeys(args.site):
+            _milestone(f"Re-probing Grid'5000 site: {target}")
+            probes.append(_probe_target(target))
         selection = select_site(probes, requirements)
     target = selection.selected.target
-    print(f"Selected Grid'5000 site: {selection.selected.name}", flush=True)
+    _milestone(f"Selected Grid'5000 site: {selection.selected.name}")
     ssh = SshClient(target=target, command_timeout=1800)
     home = _remote_home(ssh)
     layout = RemoteLayout(home / "osm-polygon-operator" / config.run_id)
@@ -193,7 +221,9 @@ def _run(args: argparse.Namespace) -> int:
         emit=_emit,
         poll_seconds=args.poll_seconds,
     )
+    _milestone("Preparing remote checkout and locked environment")
     controller.prepare(site=selection.selected.name)
+    _milestone("Remote checkout and environment are ready")
 
     durable = store.load()
     split_done = "split_output_job_id" in durable.facts
@@ -274,12 +304,15 @@ def _run(args: argparse.Namespace) -> int:
             )
         else:
             input_parquet = layout.root / "input/sentences.parquet"
+        _milestone("Staging immutable labeling assets")
         assets = stager.prepare_label_assets(
             config,
             layout,
             download_input=config.stage is Stage.LABEL,
         )
+        _milestone("Input, model, and tokenizer assets are ready")
         if not assets.llama_server_ready:
+            _milestone("CUDA llama-server binary is absent; submitting its build")
             build_job = oar.submit(llama_build_submission(layout))
             print(f"Submitted CUDA llama-server build job {build_job}", flush=True)
             _monitor_without_log(oar, build_job, args.poll_seconds)

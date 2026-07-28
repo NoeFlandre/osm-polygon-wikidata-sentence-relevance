@@ -334,7 +334,12 @@ def test_run_label_reuses_checkpoints_and_completes(
     assert state.phase is RunPhase.COMPLETE
     assert state.facts["published"] is True
     assert state.facts["hub_commit"] == "c" * 40
-    assert "Labeling complete" in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert "Resolving immutable input revision" in output
+    assert "Probing Grid'5000 site: nancy" in output
+    assert "Preparing remote checkout" in output
+    assert "Staging immutable labeling assets" in output
+    assert "Labeling complete" in output
 
 
 def test_simple_monitors_and_public_helpers(
