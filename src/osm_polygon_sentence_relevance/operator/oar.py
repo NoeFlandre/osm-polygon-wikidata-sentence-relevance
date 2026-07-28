@@ -57,6 +57,7 @@ class JobStatus:
     exit_code: int | None = None
     message: str = ""
     node: str | None = None
+    scheduled_start: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -147,12 +148,23 @@ class OarClient:
             raise OarError("unsupported OAR job state")
         exit_code_raw = record.get("exit_code")
         exit_code = int(exit_code_raw) if exit_code_raw is not None else None
+        scheduled_start_raw = record.get("scheduled_start")
+        scheduled_start = (
+            scheduled_start_raw
+            if isinstance(scheduled_start_raw, str)
+            and re.fullmatch(
+                r"[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}",
+                scheduled_start_raw,
+            )
+            else None
+        )
         return JobStatus(
             job_id=job_id,
             state=state,
             exit_code=exit_code,
             message=str(record.get("message", "")),
             node=record.get("assigned_network_address"),
+            scheduled_start=scheduled_start,
         )
 
     def cancel(self, job_id: int) -> None:

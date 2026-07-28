@@ -24,7 +24,7 @@ from osm_polygon_sentence_relevance.operator.controller import (
     Controller,
     LiveProgress,
 )
-from osm_polygon_sentence_relevance.operator.oar import JobState, OarClient
+from osm_polygon_sentence_relevance.operator.oar import JobState, JobStatus, OarClient
 from osm_polygon_sentence_relevance.operator.quota import (
     QuotaUsage,
     parse_quota_output,
@@ -471,7 +471,14 @@ def _run(args: argparse.Namespace) -> int:
             _milestone("CUDA llama-server binary is absent; submitting its build")
             build_job = oar.submit(llama_build_submission(layout))
             print(f"Submitted CUDA llama-server build job {build_job}", flush=True)
-            _monitor_without_log(oar, build_job, args.poll_seconds)
+            _monitor_simple(
+                ssh,
+                oar,
+                layout,
+                build_job,
+                "build.stdout.log",
+                args.poll_seconds,
+            )
             ready = ssh.run(
                 "if test -x "
                 f"{layout.root!s}/llama-server-bin/llama-server; "
@@ -568,8 +575,10 @@ def _monitor_simple(
     poll_seconds: float,
 ) -> None:
     offset = 0
+    previous: tuple[JobState, str | None, str | None] | None = None
     while True:
         status = oar.status(job_id)
+        previous = _report_job_status(status, previous)
         chunk = ssh.read_since(str(layout.logs / str(job_id) / log_name), offset)
         if chunk.reset:
             offset = 0
@@ -588,8 +597,10 @@ def _monitor_without_log(
     job_id: int,
     poll_seconds: float,
 ) -> None:
+    previous: tuple[JobState, str | None, str | None] | None = None
     while True:
         status = oar.status(job_id)
+        previous = _report_job_status(status, previous)
         if status.state is JobState.TERMINATED:
             if status.exit_code not in {None, 0}:
                 raise RuntimeError("remote build allocation failed")
@@ -597,6 +608,34 @@ def _monitor_without_log(
         if status.state in {JobState.ERROR, JobState.MISSING}:
             raise RuntimeError("remote build allocation failed")
         time.sleep(poll_seconds)
+
+
+def _report_job_status(
+    status: JobStatus,
+    previous: tuple[JobState, str | None, str | None] | None,
+) -> tuple[JobState, str | None, str | None]:
+    """Print a scheduler transition once and return its comparison key."""
+
+    current = (status.state, status.node, status.scheduled_start)
+    if current == previous:
+        return current
+    detail = ""
+    if status.state is JobState.QUEUED and status.scheduled_start is not None:
+        detail = f"; scheduled start {status.scheduled_start}"
+    elif status.state is JobState.RUNNING and status.node:
+        detail = f" on {status.node}"
+    elif (
+        status.state
+        in {
+            JobState.TERMINATED,
+            JobState.ERROR,
+            JobState.MISSING,
+        }
+        and status.exit_code is not None
+    ):
+        detail = f" (exit {status.exit_code})"
+    print(f"[job {status.job_id}] {status.state.value}{detail}", flush=True)
+    return current
 
 
 def _remote_exit_code(

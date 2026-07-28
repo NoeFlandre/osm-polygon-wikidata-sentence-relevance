@@ -134,8 +134,13 @@ def llama_build_submission(layout: RemoteLayout) -> SubmissionRequest:
     submit_helper = layout.repo / "scripts/grid5000/_submit_gpu_job.sh"
     target = layout.root / "llama-server-bin"
     source = layout.root / "llama.cpp"
+    logs = layout.logs
     payload = (
         "set -euo pipefail; umask 077; "
+        f'job_log={logs}/"${{OAR_JOB_ID:?}}"; '
+        'mkdir -p -m 0700 "$job_log"; '
+        'exec > >(tee -a "$job_log/build.stdout.log") '
+        '2> >(tee -a "$job_log/build.stderr.log" >&2); '
         f"if [ ! -d {source}/.git ]; then "
         f"git clone https://github.com/ggml-org/llama.cpp.git {source}; fi; "
         f"git -C {source} fetch --no-tags origin 555881e; "

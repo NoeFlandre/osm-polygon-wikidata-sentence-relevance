@@ -326,13 +326,15 @@ def test_oar_client_parses_all_supported_states(raw: str, expected: JobState) ->
     payload = (
         '{"42":{"state":"'
         + raw
-        + '","exit_code":"0","message":"ok","assigned_network_address":"n1"}}'
+        + '","exit_code":"0","message":"ok","assigned_network_address":"n1",'
+        '"scheduled_start":"2026-07-28 19:00:00"}}'
     )
     client = OarClient(_FakeSsh([payload]))  # type: ignore[arg-type]
     status = client.status(42)
     assert status.state is expected
     assert status.exit_code == 0
     assert status.node == "n1"
+    assert status.scheduled_start == "2026-07-28 19:00:00"
 
 
 def test_oar_client_submit_cancel_and_status_errors() -> None:
@@ -404,6 +406,8 @@ def test_workflow_layout_and_finalization_commands() -> None:
     assert build.command[0].endswith("_submit_gpu_job.sh")
     assert build.command[1:4] == ("40000", "01:00:00", "night")
     assert "GGML_CUDA=ON" in build.command[-1]
+    assert 'job_log=/r/logs/"${OAR_JOB_ID:?}"' in build.command[-1]
+    assert '"$job_log/build.stdout.log"' in build.command[-1]
 
 
 def test_workflows_require_immutable_revision() -> None:

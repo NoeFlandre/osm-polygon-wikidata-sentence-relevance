@@ -532,6 +532,7 @@ def test_run_label_reuses_checkpoints_and_completes(
 
 def test_simple_monitors_and_public_helpers(
     monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     ssh = _FakeSsh()
     layout = cli.RemoteLayout(PurePosixPath("/r"))
@@ -539,6 +540,7 @@ def test_simple_monitors_and_public_helpers(
     monkeypatch.setattr(cli.time, "sleep", lambda _seconds: None)
     cli._monitor_simple(ssh, oar, layout, 1, "log", 0)  # type: ignore[arg-type]
     cli._monitor_without_log(oar, 1, 0)  # type: ignore[arg-type]
+    assert "[job 1] terminated" in capsys.readouterr().out
     assert (
         cli._publish_split(  # type: ignore[arg-type]
             ssh, layout, PurePosixPath("/out"), "owner/data"
@@ -548,6 +550,33 @@ def test_simple_monitors_and_public_helpers(
     cli._mark_remote_status(ssh, layout, "failed")  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="managed status"):
         cli._mark_remote_status(ssh, layout, "unknown")  # type: ignore[arg-type]
+
+
+def test_monitor_reports_queue_schedule_and_running_node(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    class StatefulOar:
+        statuses = iter(
+            (
+                JobStatus(
+                    42,
+                    JobState.QUEUED,
+                    scheduled_start="2026-07-28 19:00:00",
+                ),
+                JobStatus(42, JobState.RUNNING, node="gpu-1"),
+                JobStatus(42, JobState.TERMINATED, exit_code=0),
+            )
+        )
+
+        def status(self, _job_id: int) -> JobStatus:
+            return next(self.statuses)
+
+    monkeypatch.setattr(cli.time, "sleep", lambda _seconds: None)
+    cli._monitor_without_log(StatefulOar(), 42, 0)  # type: ignore[arg-type]
+    output = capsys.readouterr().out
+    assert "[job 42] queued; scheduled start 2026-07-28 19:00:00" in output
+    assert "[job 42] running on gpu-1" in output
+    assert "[job 42] terminated (exit 0)" in output
 
 
 def test_terminal_transition_rejects_unexpected_phase(tmp_path: Path) -> None:
