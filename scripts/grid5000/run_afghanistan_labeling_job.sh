@@ -74,15 +74,15 @@ mkdir -m 0700 -- "${JOB_LOG_DIR}"
     2>"${JOB_LOG_DIR}/gpu_preflight.stderr.log"
 
 set +e
-# Wrap the payload in the deadline helper so a 12-hour OAR allocation
-# gives the labelling CLI 700m (11h40m) and a 10-minute grace before SIGKILL.
+# Wrap the payload so a 55-minute OAR allocation gives the labeling CLI
+# 45 minutes, a 5-minute graceful checkpoint window, and scheduler margin.
 # The labelling CLI handles SIGINT by writing ``interrupted=true`` and
 # exiting 0 so the helper propagates 0 and the next allocation can
 # resume from the same checkpoint directory.
 #
 # shellcheck source=scripts/grid5000/_deadline_helper.sh
 . "$(dirname "${BASH_SOURCE[0]}")/_deadline_helper.sh"
-deadline_helper_run 700m 10m "${PAYLOAD}" \
+deadline_helper_run 45m 5m "${PAYLOAD}" \
     "${REPO_ROOT}" "$4" "$5" "$6" "$7" "$8" "$9" \
     "${10}" "${11}" "${12}" "${13}" "${14}" "${LLAMA_PARALLEL}" \
     "${LLAMA_PER_SLOT_CONTEXT}" "${REQUEST_CONCURRENCY}" \

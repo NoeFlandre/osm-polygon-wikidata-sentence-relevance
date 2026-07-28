@@ -176,11 +176,26 @@ for value in "$@"; do
     command_string="${command_string} $(shell_quote "${value}")"
 done
 
-# Sustained CUDA queue: the load is sustained and tuned for long, heavy GPU
-# inference runs.
+read -r policy_weekday policy_hour < <(TZ=Europe/Paris date '+%u %H')
+if ! [[ "${policy_weekday}" =~ ^[1-7]$ ]] || \
+   ! [[ "${policy_hour}" =~ ^[0-2][0-9]$ ]] || \
+   [ "${policy_hour#0}" -gt 23 ]; then
+    echo "submit_afghanistan_labeling: invalid Europe/Paris scheduler clock" >&2
+    exit 1
+fi
+policy_type=night
+if [ "${policy_weekday}" -le 5 ] && \
+   [ "$((10#${policy_hour}))" -ge 9 ] && \
+   [ "$((10#${policy_hour}))" -lt 19 ]; then
+    policy_type=day
+fi
+readonly policy_type
+
+# Short sequential CUDA allocation. OAR constrains it to the current
+# Europe/Paris policy window, so it cannot cross a weekday boundary.
 # On this site, 40 GiB+ CUDA resources are commonly exposed under
 # ``type=default`` with ``exotic=YES``; this helper therefore requests
 # the exotic type explicitly.
 exec oarsub -q default -p "gpu_mem>=${GPU_MIN_MEMORY_MB}" \
-    -t exotic -t night \
-    -l gpu=1,walltime=12:00:00 "${command_string}"
+    -t exotic -t "${policy_type}" \
+    -l gpu=1,walltime=00:55:00 "${command_string}"

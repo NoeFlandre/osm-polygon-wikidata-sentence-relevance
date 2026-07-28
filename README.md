@@ -34,8 +34,10 @@ on `main`. Pressing Ctrl-C stops only local monitoring; it does not cancel the
 remote job or delete checkpoints. Re-running the same command resumes the same
 deterministic run.
 
-Every OAR submission is constrained to Grid'5000 night/weekend scheduling and
-preceded by the live `usagepolicycheck` checks. Site selection uses the
+Every OAR submission is preceded by the live `usagepolicycheck` checks.
+Labeling is split into sequential 55-minute allocations bound to OAR's current
+day or night/weekend window; each allocation checkpoints after at most 45
+minutes and the next one resumes automatically. Site selection uses the
 account's `/home` soft-quota headroom rather than the shared filesystem's free
 space. When headroom is insufficient, only completed or failed
 operator-managed runs are eligible for automatic removal; the active run and

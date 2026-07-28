@@ -71,7 +71,10 @@ git -C "$repo" fetch --no-tags origin main
 test "$(git -C "$repo" rev-parse origin/main)" = {_q(config.source_commit)}
 git -C "$repo" checkout --detach {_q(config.source_commit)}
 test -z "$(git -C "$repo" status --porcelain)"
-uv sync --locked --extra hub --extra segmentation -C "$repo"
+UV_BIN="$(command -v uv || true)"
+if [ -z "$UV_BIN" ]; then UV_BIN="$HOME/.local/bin/uv"; fi
+test -x "$UV_BIN"
+"$UV_BIN" sync --locked --extra hub --extra segmentation -C "$repo"
 printf 'STAGING_OK reused=%s\\n' "$reused"
 """.strip()
         result = self._ssh.run(script)

@@ -311,7 +311,7 @@ def _run(args: argparse.Namespace) -> int:
     layout = RemoteLayout(home / "osm-polygon-operator" / config.run_id)
     _milestone("Checking live Grid'5000 usage-policy constraints")
     _usage_policy_preflight(ssh, selection.selected.name)
-    _milestone("Usage-policy preflight passed; submissions are night-bound")
+    _milestone("Usage-policy preflight passed; submissions are window-bound")
     _milestone("Enforcing Grid'5000 home soft-quota headroom")
     _storage_preflight(
         ssh,
