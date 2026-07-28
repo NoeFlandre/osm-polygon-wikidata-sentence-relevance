@@ -7,7 +7,7 @@ import shlex
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 
-from osm_polygon_sentence_relevance.operator.config import OperatorConfig
+from osm_polygon_sentence_relevance.operator.config import OperatorConfig, Stage
 from osm_polygon_sentence_relevance.operator.ssh import SshClient
 from osm_polygon_sentence_relevance.operator.workflows import RemoteLayout
 
@@ -43,6 +43,9 @@ class Stager:
     def prepare(self, config: OperatorConfig, layout: RemoteLayout) -> StagingResult:
         """Create/reuse a locked checkout without executing model inference."""
 
+        extras = "--extra hub"
+        if config.stage in {Stage.SPLIT, Stage.ALL}:
+            extras += " --extra segmentation"
         repo_url = (
             "https://github.com/NoeFlandre/osm-polygon-wikidata-sentence-relevance.git"
         )
@@ -82,7 +85,7 @@ cleanup_uv_cache() {{
   rm -rf -- "$UV_CACHE_DIR"
 }}
 trap cleanup_uv_cache EXIT
-"$UV_BIN" sync --locked --extra hub --extra segmentation --project "$repo"
+"$UV_BIN" sync --locked --no-dev {extras} --project "$repo"
 cleanup_uv_cache
 trap - EXIT
 printf 'STAGING_OK reused=%s\\n' "$reused"
@@ -147,10 +150,13 @@ hf_hub_download(
 snapshot_download(
     repo_id=tokenizer_repo, revision=tokenizer_revision,
     local_dir=tokenizer_dir,
+    allow_patterns=["*.json", "*.txt", "*.jinja", "*.model"],
 )
 PY
 test "$(sha256sum {_q(model_file)} | awk '{{print $1}}')" = \
   {_q(config.label_model_file_sha256)}
+test -f {_q(tokenizer_dir / "tokenizer.json")}
+test -f {_q(tokenizer_dir / "tokenizer_config.json")}
 if test -x {_q(layout.root / "llama-server-bin/llama-server")}; then
   llama_ready=true
 else

@@ -12,11 +12,11 @@ from osm_polygon_sentence_relevance.operator.staging import Stager
 from osm_polygon_sentence_relevance.operator.workflows import RemoteLayout
 
 
-def _config() -> OperatorConfig:
+def _config(*, stage: str = "label") -> OperatorConfig:
     return OperatorConfig.build(
         scope="region",
         region="afghanistan-latest",
-        stage="label",
+        stage=stage,
         source_commit="a" * 40,
         input_revision="b" * 40,
     )
@@ -42,14 +42,25 @@ def test_prepare_builds_clean_pinned_checkout() -> None:
     assert "checkout --detach" in command
     assert 'UV_BIN="$(command -v uv || true)"' in command
     assert 'UV_BIN="$HOME/.local/bin/uv"' in command
-    assert '"$UV_BIN" sync --locked --extra hub --extra segmentation' in command
+    assert '"$UV_BIN" sync --locked --no-dev --extra hub' in command
+    assert "--extra segmentation" not in command
     assert '--project "$repo"' in command
-    assert '"$UV_BIN" sync --locked --extra hub --extra segmentation -C' not in command
+    assert '"$UV_BIN" sync --locked --no-dev --extra hub -C' not in command
     assert 'UV_CACHE_DIR="$root/uv-cache"' in command
     assert "export UV_CACHE_DIR" in command
     assert "trap cleanup_uv_cache EXIT" in command
     assert 'rm -rf -- "$UV_CACHE_DIR"' in command
     assert '"status":"active"' in command
+
+
+def test_prepare_includes_segmentation_dependencies_only_when_needed() -> None:
+    ssh = RecordingSsh(["STAGING_OK reused=false\n"])
+    layout = RemoteLayout(PurePosixPath("/home/user/operator/run"))
+    Stager(ssh).prepare(_config(stage="split"), layout)  # type: ignore[arg-type]
+    command = ssh.commands[0]
+    assert (
+        '"$UV_BIN" sync --locked --no-dev --extra hub --extra segmentation' in command
+    )
 
 
 def test_prepare_reports_reuse_and_rejects_missing_marker() -> None:
@@ -70,6 +81,12 @@ def test_prepare_label_assets_downloads_and_validates_pins() -> None:
     command = ssh.commands[0]
     assert "hf_hub_download" in command
     assert "snapshot_download" in command
+    assert "allow_patterns=" in command
+    assert '"*.safetensors"' not in command
+    assert '"*.bin"' not in command
+    assert "test -f /home/user/operator/run/tokenizer/" in command
+    assert "/tokenizer.json" in command
+    assert "/tokenizer_config.json" in command
     assert "sha256sum" in command
 
 
