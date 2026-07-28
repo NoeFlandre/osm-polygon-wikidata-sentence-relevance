@@ -579,6 +579,119 @@ def test_monitor_reports_queue_schedule_and_running_node(
     assert "[job 42] terminated (exit 0)" in output
 
 
+def test_llama_build_reattaches_to_recorded_queued_job(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    state = _FakeStore(Path("/unused"))
+    state.value = SimpleNamespace(
+        phase=RunPhase.REMOTE_PREPARED,
+        facts={"llama_build_job_id": 42},
+    )
+    ssh = _FakeSsh()
+
+    class ExistingOar:
+        submitted = 0
+        statuses = iter(
+            (
+                JobStatus(42, JobState.QUEUED),
+                JobStatus(42, JobState.TERMINATED, exit_code=0),
+            )
+        )
+
+        def submit(self, _request: object) -> int:
+            self.submitted += 1
+            return 99
+
+        def status(self, _job_id: int) -> JobStatus:
+            return next(self.statuses)
+
+    monkeypatch.setattr(cli.time, "sleep", lambda _seconds: None)
+    oar = ExistingOar()
+    assert (
+        cli._ensure_llama_server(  # type: ignore[arg-type]
+            ssh,
+            oar,
+            state,
+            cli.RemoteLayout(PurePosixPath("/r")),
+            0,
+        )
+        == 42
+    )
+    assert oar.submitted == 0
+    assert "Reattaching to CUDA llama-server build job 42" in capsys.readouterr().out
+
+
+def test_llama_build_records_replacement_after_terminal_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = _FakeStore(Path("/unused"))
+    state.value = SimpleNamespace(
+        phase=RunPhase.REMOTE_PREPARED,
+        facts={"llama_build_job_id": 41},
+    )
+    ssh = _FakeSsh()
+
+    class ReplacementOar:
+        submitted = 0
+        statuses = iter(
+            (
+                JobStatus(41, JobState.ERROR, exit_code=1),
+                JobStatus(42, JobState.TERMINATED, exit_code=0),
+            )
+        )
+
+        def submit(self, _request: object) -> int:
+            self.submitted += 1
+            return 42
+
+        def status(self, _job_id: int) -> JobStatus:
+            return next(self.statuses)
+
+    monkeypatch.setattr(cli.time, "sleep", lambda _seconds: None)
+    oar = ReplacementOar()
+    assert (
+        cli._ensure_llama_server(  # type: ignore[arg-type]
+            ssh,
+            oar,
+            state,
+            cli.RemoteLayout(PurePosixPath("/r")),
+            0,
+        )
+        == 42
+    )
+    assert oar.submitted == 1
+    assert state.value.facts["llama_build_job_id"] == 42
+
+
+def test_llama_build_job_is_durable_before_local_monitor_interrupt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = _FakeStore(Path("/unused"))
+    state.value = SimpleNamespace(phase=RunPhase.REMOTE_PREPARED, facts={})
+    ssh = _FakeSsh()
+
+    class QueuedOar:
+        def submit(self, _request: object) -> int:
+            return 42
+
+        def status(self, _job_id: int) -> JobStatus:
+            return JobStatus(42, JobState.QUEUED)
+
+    def interrupt(_seconds: float) -> None:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(cli.time, "sleep", interrupt)
+    with pytest.raises(KeyboardInterrupt):
+        cli._ensure_llama_server(  # type: ignore[arg-type]
+            ssh,
+            QueuedOar(),
+            state,
+            cli.RemoteLayout(PurePosixPath("/r")),
+            30,
+        )
+    assert state.value.facts["llama_build_job_id"] == 42
+
+
 def test_terminal_transition_rejects_unexpected_phase(tmp_path: Path) -> None:
     state = _FakeStore(tmp_path)
     with pytest.raises(RuntimeError, match="unexpected durable"):

@@ -468,24 +468,7 @@ def _run(args: argparse.Namespace) -> int:
         )
         _milestone("Input, model, and tokenizer assets are ready")
         if not assets.llama_server_ready:
-            _milestone("CUDA llama-server binary is absent; submitting its build")
-            build_job = oar.submit(llama_build_submission(layout))
-            print(f"Submitted CUDA llama-server build job {build_job}", flush=True)
-            _monitor_simple(
-                ssh,
-                oar,
-                layout,
-                build_job,
-                "build.stdout.log",
-                args.poll_seconds,
-            )
-            ready = ssh.run(
-                "if test -x "
-                f"{layout.root!s}/llama-server-bin/llama-server; "
-                "then printf yes; else printf no; fi"
-            ).stdout
-            if ready != "yes":
-                raise RuntimeError("CUDA llama-server build did not produce a binary")
+            _ensure_llama_server(ssh, oar, store, layout, args.poll_seconds)
         if config.stage is Stage.ALL:
             assets = type(assets)(
                 input_parquet,
@@ -590,6 +573,73 @@ def _monitor_simple(
         if status.state in {JobState.ERROR, JobState.MISSING}:
             raise RuntimeError("remote allocation failed")
         time.sleep(poll_seconds)
+
+
+def _llama_server_ready(ssh: SshClient, layout: RemoteLayout) -> bool:
+    return (
+        ssh.run(
+            "if test -x "
+            f"{layout.root!s}/llama-server-bin/llama-server; "
+            "then printf yes; else printf no; fi"
+        ).stdout
+        == "yes"
+    )
+
+
+def _ensure_llama_server(
+    ssh: SshClient,
+    oar: OarClient,
+    state: StateStore,
+    layout: RemoteLayout,
+    poll_seconds: float,
+) -> int:
+    """Submit or reattach to the durable auxiliary CUDA build job."""
+
+    durable = state.load()
+    raw_job_id = durable.facts.get("llama_build_job_id")
+    job_id = raw_job_id if type(raw_job_id) is int and raw_job_id > 0 else None
+    if job_id is not None:
+        status = oar.status(job_id)
+        if status.state in {
+            JobState.QUEUED,
+            JobState.RUNNING,
+            JobState.FINISHING,
+        }:
+            print(f"Reattaching to CUDA llama-server build job {job_id}", flush=True)
+        elif (
+            status.state is JobState.TERMINATED
+            and status.exit_code in {None, 0}
+            and _llama_server_ready(ssh, layout)
+        ):
+            print(f"Reusing completed CUDA llama-server build job {job_id}", flush=True)
+            return job_id
+        else:
+            job_id = None
+
+    if job_id is None:
+        _milestone("CUDA llama-server binary is absent; submitting its build")
+        job_id = oar.submit(llama_build_submission(layout))
+        current = state.load()
+        if current.phase is not RunPhase.REMOTE_PREPARED:
+            raise RuntimeError("CUDA build submission has invalid durable phase")
+        state.transition(
+            expected=RunPhase.REMOTE_PREPARED,
+            target=RunPhase.REMOTE_PREPARED,
+            facts={"llama_build_job_id": job_id},
+        )
+        print(f"Submitted CUDA llama-server build job {job_id}", flush=True)
+
+    _monitor_simple(
+        ssh,
+        oar,
+        layout,
+        job_id,
+        "build.stdout.log",
+        poll_seconds,
+    )
+    if not _llama_server_ready(ssh, layout):
+        raise RuntimeError("CUDA llama-server build did not produce a binary")
+    return job_id
 
 
 def _monitor_without_log(
