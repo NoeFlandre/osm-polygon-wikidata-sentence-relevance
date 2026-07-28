@@ -9,8 +9,8 @@ if ! [[ "${OAR_JOB_ID}" =~ ^[0-9]+$ ]]; then
     echo "run_streaming_build_job: OAR_JOB_ID must be numeric" >&2
     exit 2
 fi
-if [ "$#" -ne 10 ]; then
-    echo "run_streaming_build_job: exactly ten positional arguments are required" >&2
+if [ "$#" -ne 11 ]; then
+    echo "run_streaming_build_job: exactly eleven positional arguments are required" >&2
     exit 2
 fi
 
@@ -24,6 +24,7 @@ INPUT_REVISION="$7"; readonly INPUT_REVISION
 RUN_ID="$8"; readonly RUN_ID
 BATCH_SIZE="$9"; readonly BATCH_SIZE
 MAX_SHARDS="${10}"; readonly MAX_SHARDS
+SHARD_KEY="${11}"; readonly SHARD_KEY
 
 if [ "$(git -C "${REPO_ROOT}" rev-parse HEAD)" != "${EXPECTED_SOURCE_COMMIT}" ]; then
     echo "run_streaming_build_job: checkout commit mismatch" >&2
@@ -36,10 +37,13 @@ fi
 
 PYTHON="${REPO_ROOT}/.venv/bin/python"
 PAYLOAD="${REPO_ROOT}/scripts/grid5000/run_streaming_build.sh"
-if [ ! -x "${PYTHON}" ] || [ ! -x "${PAYLOAD}" ]; then
+DEADLINE_HELPER="${REPO_ROOT}/scripts/grid5000/_deadline_helper.sh"
+if [ ! -x "${PYTHON}" ] || [ ! -x "${PAYLOAD}" ] || [ ! -r "${DEADLINE_HELPER}" ]; then
     echo "run_streaming_build_job: required executable is missing" >&2
     exit 1
 fi
+# shellcheck source=_deadline_helper.sh
+source "${DEADLINE_HELPER}"
 
 SCRATCH_BASE="${LOCALSCRATCH:-${OAR_JOB_SCRATCH_DIR:-/tmp/oar-${OAR_JOB_ID}}}"
 case "${SCRATCH_BASE}" in
@@ -58,9 +62,11 @@ mkdir -m 0700 -- "${JOB_LOG_DIR}"
     2>"${JOB_LOG_DIR}/gpu_preflight.stderr.log"
 
 set +e
-"${PAYLOAD}" "${REPO_ROOT}" "${HF_HOME}" "${WORK_DIR}" \
+deadline_helper_run 700m 10m "${PAYLOAD}" \
+    "${REPO_ROOT}" "${HF_HOME}" "${WORK_DIR}" \
     "${OUTPUT_REPO_ID}" "${INPUT_REPO_ID}" "${EXPECTED_SOURCE_COMMIT}" \
     "${INPUT_REVISION}" "${RUN_ID}" "${BATCH_SIZE}" "${MAX_SHARDS}" \
+    "${SHARD_KEY}" \
     >"${JOB_LOG_DIR}/build.stdout.log" \
     2>"${JOB_LOG_DIR}/build.stderr.log"
 build_rc=$?

@@ -4,8 +4,8 @@
 set -euo pipefail
 umask 077
 
-if [ "$#" -ne 10 ]; then
-    echo "run_streaming_build: exactly ten positional arguments are required" >&2
+if [ "$#" -ne 11 ]; then
+    echo "run_streaming_build: exactly eleven positional arguments are required" >&2
     exit 2
 fi
 
@@ -19,6 +19,7 @@ INPUT_REVISION="$7"; readonly INPUT_REVISION
 RUN_ID="$8"; readonly RUN_ID
 BATCH_SIZE="$9"; readonly BATCH_SIZE
 MAX_SHARDS="${10}"; readonly MAX_SHARDS
+SHARD_KEY="${11}"; readonly SHARD_KEY
 
 PYTHON="${REPO_ROOT}/.venv/bin/python"
 if [ ! -x "${PYTHON}" ]; then
@@ -51,6 +52,9 @@ args=(
 )
 if [ "${MAX_SHARDS}" -gt 0 ]; then
     args+=(--max-shards "${MAX_SHARDS}")
+fi
+if [ -n "${SHARD_KEY}" ]; then
+    args+=(--shard "${SHARD_KEY}")
 fi
 
 exec "${PYTHON}" "${args[@]}"

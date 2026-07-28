@@ -46,8 +46,8 @@ if [ "${BASH_SOURCE[0]}" != "$0" ]; then
     return 0
 fi
 
-if [ "$#" -ne 15 ]; then
-    echo "submit_afghanistan_labeling: exactly fifteen arguments are required" >&2
+if [ "$#" -ne 17 ]; then
+    echo "submit_afghanistan_labeling: exactly seventeen arguments are required" >&2
     exit 2
 fi
 
@@ -101,6 +101,8 @@ DATASET_ID="${12}"; readonly DATASET_ID
 BATCH_SIZE="${13}"; readonly BATCH_SIZE
 ROW_LIMIT="${14}"; readonly ROW_LIMIT
 LLAMA_PARALLEL="${15}"; readonly LLAMA_PARALLEL
+LLAMA_PER_SLOT_CONTEXT="${16}"; readonly LLAMA_PER_SLOT_CONTEXT
+REQUEST_CONCURRENCY="${17}"; readonly REQUEST_CONCURRENCY
 GPU_MIN_MEMORY_MB="${LABEL_GPU_MIN_MEMORY_MB:-40000}"; readonly GPU_MIN_MEMORY_MB
 
 RUN_ROOT="${REPO_ROOT_CANON%/*}"
@@ -134,6 +136,13 @@ case "${LLAMA_PARALLEL}" in
     1|2|4|8|16|32) ;;
     *) echo "submit_afghanistan_labeling: LLAMA_PARALLEL must be one of 1, 2, 4, 8, 16, 32" >&2; exit 2;;
 esac
+if ! [[ "${LLAMA_PER_SLOT_CONTEXT}" =~ ^[1-9][0-9]*$ ]] || \
+   [ "${LLAMA_PER_SLOT_CONTEXT}" -lt 4096 ] || \
+   ! [[ "${REQUEST_CONCURRENCY}" =~ ^[1-9][0-9]*$ ]] || \
+   [ "${REQUEST_CONCURRENCY}" -gt "${LLAMA_PARALLEL}" ]; then
+    echo "submit_afghanistan_labeling: invalid context or concurrency" >&2
+    exit 2
+fi
 if ! [[ "${GPU_MIN_MEMORY_MB}" =~ ^[1-9][0-9]*$ ]]; then
     echo "submit_afghanistan_labeling: GPU memory minimum must be a positive integer" >&2
     exit 2

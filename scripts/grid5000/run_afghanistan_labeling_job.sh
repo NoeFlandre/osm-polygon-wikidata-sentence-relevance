@@ -14,8 +14,8 @@ if ! [[ "${OAR_JOB_ID}" =~ ^[0-9]+$ ]]; then
     echo "run_afghanistan_labeling_job: OAR_JOB_ID must be numeric" >&2
     exit 2
 fi
-if [ "$#" -ne 15 ]; then
-    echo "run_afghanistan_labeling_job: exactly fifteen arguments are required" >&2
+if [ "$#" -ne 17 ]; then
+    echo "run_afghanistan_labeling_job: exactly seventeen arguments are required" >&2
     exit 2
 fi
 
@@ -23,6 +23,8 @@ REPO_ROOT="$(cd "$1" && pwd -P)"; readonly REPO_ROOT
 LOG_ROOT="$3"; readonly LOG_ROOT
 EXPECTED_SOURCE_COMMIT="${11}"; readonly EXPECTED_SOURCE_COMMIT
 LLAMA_PARALLEL="${15}"; readonly LLAMA_PARALLEL
+LLAMA_PER_SLOT_CONTEXT="${16}"; readonly LLAMA_PER_SLOT_CONTEXT
+REQUEST_CONCURRENCY="${17}"; readonly REQUEST_CONCURRENCY
 RUN_ROOT="$(cd "${REPO_ROOT}/.." && pwd -P)"; readonly RUN_ROOT
 
 # ``$2`` is the HF cache and ``$5`` is the persistent work directory; the
@@ -46,6 +48,13 @@ case "${LLAMA_PARALLEL}" in
     1|2|4|8|16|32) ;;
     *) echo "run_afghanistan_labeling_job: LLAMA_PARALLEL must be one of 1, 2, 4, 8, 16, 32" >&2; exit 2;;
 esac
+if ! [[ "${LLAMA_PER_SLOT_CONTEXT}" =~ ^[1-9][0-9]*$ ]] || \
+   [ "${LLAMA_PER_SLOT_CONTEXT}" -lt 4096 ] || \
+   ! [[ "${REQUEST_CONCURRENCY}" =~ ^[1-9][0-9]*$ ]] || \
+   [ "${REQUEST_CONCURRENCY}" -gt "${LLAMA_PARALLEL}" ]; then
+    echo "run_afghanistan_labeling_job: invalid context or concurrency" >&2
+    exit 2
+fi
 
 PYTHON="${REPO_ROOT}/.venv/bin/python"
 PAYLOAD="${REPO_ROOT}/scripts/grid5000/run_afghanistan_labeling.sh"
@@ -76,6 +85,7 @@ set +e
 deadline_helper_run 700m 10m "${PAYLOAD}" \
     "${REPO_ROOT}" "$4" "$5" "$6" "$7" "$8" "$9" \
     "${10}" "${11}" "${12}" "${13}" "${14}" "${LLAMA_PARALLEL}" \
+    "${LLAMA_PER_SLOT_CONTEXT}" "${REQUEST_CONCURRENCY}" \
     >"${JOB_LOG_DIR}/labeling.stdout.log" \
     2>"${JOB_LOG_DIR}/labeling.stderr.log"
 labeling_rc=$?

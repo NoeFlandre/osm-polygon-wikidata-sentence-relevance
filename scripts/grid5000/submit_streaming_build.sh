@@ -4,8 +4,8 @@
 set -euo pipefail
 umask 077
 
-if [ "$#" -ne 10 ]; then
-    echo "submit_streaming_build: exactly ten positional arguments are required" >&2
+if [ "$#" -ne 11 ]; then
+    echo "submit_streaming_build: exactly eleven positional arguments are required" >&2
     exit 2
 fi
 
@@ -19,6 +19,7 @@ INPUT_REVISION="$7"; readonly INPUT_REVISION
 RUN_ID="$8"; readonly RUN_ID
 BATCH_SIZE="$9"; readonly BATCH_SIZE
 MAX_SHARDS="${10}"; readonly MAX_SHARDS
+SHARD_KEY="${11}"; readonly SHARD_KEY
 
 for path in "${REPO_ROOT}" "${HF_HOME}" "${LOG_ROOT}"; do
     case "${path}" in /*) ;; *) echo "submit_streaming_build: persistent path must be absolute" >&2; exit 2 ;; esac
@@ -41,6 +42,14 @@ if ! [[ "${RUN_ID}" =~ ^[a-z0-9][a-z0-9._-]*$ ]] || \
    ! [[ "${BATCH_SIZE}" =~ ^[1-9][0-9]*$ ]] || \
    ! [[ "${MAX_SHARDS}" =~ ^(0|[1-9][0-9]*)$ ]]; then
     echo "submit_streaming_build: invalid run ID or numeric argument" >&2
+    exit 2
+fi
+if [ -n "${SHARD_KEY}" ] && ! [[ "${SHARD_KEY}" =~ ^[a-z0-9]+([.-][a-z0-9]+)*-latest$ ]]; then
+    echo "submit_streaming_build: invalid shard key" >&2
+    exit 2
+fi
+if [ -n "${SHARD_KEY}" ] && [ "${MAX_SHARDS}" -ne 0 ]; then
+    echo "submit_streaming_build: shard key conflicts with max shards" >&2
     exit 2
 fi
 

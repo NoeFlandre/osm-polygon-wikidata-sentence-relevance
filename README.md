@@ -11,6 +11,33 @@ and document metadata — suitable for downstream relevance modelling.
 
 Documentation index: [`docs/index.md`](docs/index.md).
 
+## One-command Grid'5000 production
+
+Install the locked environment on the Mac, connect the external project disk,
+and run:
+
+```bash
+uv sync --locked --extra hub --extra segmentation
+uv run osm-polygon-grid5000 run \
+  --scope region \
+  --region afghanistan-latest \
+  --stage all
+```
+
+The operator resolves the input dataset to an immutable revision, selects a
+compatible Grid'5000 site, stages a clean checkout, submits CUDA sentence
+splitting and labeling allocations, streams their logs in this terminal,
+continues from durable checkpoints after an expected wall-time stop, validates
+the final artifacts, and publishes to
+[`NoeFlandre/osm-polygon-wikidata-sentence-relevance`](https://huggingface.co/datasets/NoeFlandre/osm-polygon-wikidata-sentence-relevance)
+on `main`. Pressing Ctrl-C stops only local monitoring; it does not cancel the
+remote job or delete checkpoints. Re-running the same command resumes the same
+deterministic run.
+
+All Mac-side state is stored under the configured external data root. The
+command refuses to fall back to the Mac’s internal disk or to run inference
+locally.
+
 ## Project Repositories
 
 - **GitHub**: [NoeFlandre/osm-polygon-wikidata-sentence-relevance](https://github.com/NoeFlandre/osm-polygon-wikidata-sentence-relevance)

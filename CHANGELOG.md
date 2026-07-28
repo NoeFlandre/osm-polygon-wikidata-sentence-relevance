@@ -8,6 +8,11 @@ pre-1.0 package.
 
 ### Added
 
+- A Mac-side `osm-polygon-grid5000` operator with deterministic run identity,
+  durable state, bounded OpenSSH transport, automatic site selection,
+  resumable OAR allocations, live terminal logs, exact region selection,
+  adaptive llama.cpp context, and validated Hugging Face publication.
+
 - Resumable Afghanistan LLM labeling with independent land-use/land-cover and
   polygon-relevance decisions, strict structured output, vLLM-first CUDA
   serving with a llama.cpp fallback, factual timing/ETA, and atomic labels.

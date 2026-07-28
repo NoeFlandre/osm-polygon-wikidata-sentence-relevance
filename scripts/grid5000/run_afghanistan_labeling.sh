@@ -10,8 +10,8 @@
 set -euo pipefail
 umask 077
 
-if [ "$#" -ne 13 ]; then
-    echo "run_afghanistan_labeling: exactly thirteen arguments are required" >&2
+if [ "$#" -ne 15 ]; then
+    echo "run_afghanistan_labeling: exactly fifteen arguments are required" >&2
     exit 2
 fi
 
@@ -28,6 +28,8 @@ DATASET_ID="${10}"; readonly DATASET_ID
 BATCH_SIZE="${11}"; readonly BATCH_SIZE
 ROW_LIMIT="${12}"; readonly ROW_LIMIT
 LLAMA_PARALLEL="${13}"; readonly LLAMA_PARALLEL
+LLAMA_PER_SLOT_CONTEXT="${14}"; readonly LLAMA_PER_SLOT_CONTEXT
+REQUEST_CONCURRENCY="${15}"; readonly REQUEST_CONCURRENCY
 
 : "${OAR_JOB_ID:?run_afghanistan_labeling requires an OAR allocation}"
 case "${OAR_JOB_ID}" in (*[!0-9]*|'') echo "run_afghanistan_labeling: invalid OAR job ID" >&2; exit 2;; esac
@@ -42,9 +44,14 @@ case "${LLAMA_PARALLEL}" in
     1|2|4|8|16|32) ;;
     *) echo "run_afghanistan_labeling: LLAMA_PARALLEL must be one of 1, 2, 4, 8, 16, 32" >&2; exit 2;;
 esac
-LLAMA_PER_SLOT_CONTEXT=4096; readonly LLAMA_PER_SLOT_CONTEXT
+if ! [[ "${LLAMA_PER_SLOT_CONTEXT}" =~ ^[1-9][0-9]*$ ]] || \
+   [ "${LLAMA_PER_SLOT_CONTEXT}" -lt 4096 ] || \
+   ! [[ "${REQUEST_CONCURRENCY}" =~ ^[1-9][0-9]*$ ]] || \
+   [ "${REQUEST_CONCURRENCY}" -gt "${LLAMA_PARALLEL}" ]; then
+    echo "run_afghanistan_labeling: invalid context or concurrency" >&2
+    exit 2
+fi
 LLAMA_TOTAL_CONTEXT=$((LLAMA_PARALLEL * LLAMA_PER_SLOT_CONTEXT)); readonly LLAMA_TOTAL_CONTEXT
-REQUEST_CONCURRENCY="${LLAMA_PARALLEL}"; readonly REQUEST_CONCURRENCY
 
 case "${MODEL_FILE}" in (*Qwen3.6-27B-Q4_K_M.gguf) ;; (*) echo "run_afghanistan_labeling: expected pinned Q4_K_M model file" >&2; exit 2;; esac
 test -f "${INPUT_PARQUET}" || { echo "run_afghanistan_labeling: input Parquet missing" >&2; exit 2; }

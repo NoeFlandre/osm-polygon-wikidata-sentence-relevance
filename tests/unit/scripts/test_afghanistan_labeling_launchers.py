@@ -98,6 +98,8 @@ def _run_submit(
             "128",
             "0",
             "16",
+            "8192",
+            "16",
         ],
         env=env,
         text=True,
@@ -184,7 +186,8 @@ def test_job_wrapper_translates_submit_arguments_to_payload_contract() -> None:
     normalized = " ".join(text.replace("\\", "").split())
     expected = (
         '"${PAYLOAD}" "${REPO_ROOT}" "$4" "$5" "$6" "$7" "$8" "$9" '
-        '"${10}" "${11}" "${12}" "${13}" "${14}" "${LLAMA_PARALLEL}"'
+        '"${10}" "${11}" "${12}" "${13}" "${14}" "${LLAMA_PARALLEL}" '
+        '"${LLAMA_PER_SLOT_CONTEXT}" "${REQUEST_CONCURRENCY}"'
     )
     assert expected in normalized
     assert '"${PAYLOAD}" "$@"' not in text
@@ -193,7 +196,7 @@ def test_job_wrapper_translates_submit_arguments_to_payload_contract() -> None:
 def test_submitter_propagates_llama_parallel_positional() -> None:
     text = _text("submit_afghanistan_labeling.sh")
     assert 'LLAMA_PARALLEL="${15}"' in text
-    assert "exactly fifteen arguments" in text
+    assert "exactly seventeen arguments" in text
     assert "1|2|4|8|16|32" in text
 
 
@@ -219,7 +222,7 @@ def test_payload_reads_engine_version_without_sigpipe() -> None:
 def test_docs_include_canonical_full_run_args() -> None:
     text = GUIDES.read_text()
     assert '"NoeFlandre/osm-polygon-wikidata-sentence-relevance"' in text
-    assert '"128" "0" "16"' in text
+    assert '"128" "0" "8" "8192" "8"' in text
     assert '"0" "0" "16"' not in text
 
 

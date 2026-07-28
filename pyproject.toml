@@ -80,6 +80,7 @@ osm_polygon_sentence_relevance = ["py.typed"]
 [project.scripts]
 osm-polygon-sentence-relevance = "osm_polygon_sentence_relevance.application.cli:main"
 osm-polygon-label-sentences = "osm_polygon_sentence_relevance.labeling.cli:main"
+osm-polygon-grid5000 = "osm_polygon_sentence_relevance.operator.cli:main"
 
 
 [tool.pytest.ini_options]

@@ -6,6 +6,9 @@ Console command (installed via `uv sync`):
 osm-polygon-sentence-relevance
 ```
 
+The separate public Mac-side Grid'5000 operator is documented in the
+[Grid'5000 operator reference](grid5000-operator.md).
+
 The Afghanistan labeling proof of concept has a separate focused entry point:
 
 ```text

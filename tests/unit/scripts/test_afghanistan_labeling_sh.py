@@ -50,7 +50,7 @@ def test_payload_uses_q4_k_m_and_pinned_local_files() -> None:
 
 def test_payload_supports_nonpublishing_representative_canary() -> None:
     text = SCRIPT.read_text()
-    assert "exactly thirteen arguments" in text
+    assert "exactly fifteen arguments" in text
     assert 'ROW_LIMIT="${12}"' in text
     assert '--row-limit "${ROW_LIMIT}"' in text
     assert 'LLAMA_PARALLEL="${13}"' in text

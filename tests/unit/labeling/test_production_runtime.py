@@ -125,7 +125,7 @@ def test_submitter_uses_production_default_queue_without_cpu_fallback() -> None:
 def test_llama_parallel_is_first_class_positional_in_submit_helper() -> None:
     text = SUBMIT.read_text()
     assert "LLAMA_PARALLEL" in text
-    assert "exactly fifteen arguments" in text
+    assert "exactly seventeen arguments" in text
     # The argument must be quoted and propagated to the wrapper.
     assert text.count("LLAMA_PARALLEL") >= 3
 
@@ -133,14 +133,14 @@ def test_llama_parallel_is_first_class_positional_in_submit_helper() -> None:
 def test_llama_parallel_is_first_class_positional_in_job_wrapper() -> None:
     text = JOB_WRAPPER.read_text()
     assert "LLAMA_PARALLEL" in text
-    assert "exactly fifteen arguments" in text
+    assert "exactly seventeen arguments" in text
     assert "${15}" in text
 
 
 def test_llama_parallel_is_first_class_positional_in_payload() -> None:
     text = PAYLOAD.read_text()
     assert "LLAMA_PARALLEL" in text
-    assert "exactly thirteen arguments" in text
+    assert "exactly fifteen arguments" in text
     assert "${13}" in text
 
 
