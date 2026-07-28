@@ -39,7 +39,20 @@ def test_help_exposes_run_status_and_public_stage_choices(
         ]
     )
     assert args.stage == "all"
-    assert "sophia" in args.site
+    assert set(args.site) == {
+        "bordeaux",
+        "grenoble",
+        "lille",
+        "louvain",
+        "luxembourg",
+        "lyon",
+        "nancy",
+        "nantes",
+        "rennes",
+        "sophia",
+        "strasbourg",
+        "toulouse",
+    }
 
 
 def test_label_staging_reserves_measured_environment_headroom() -> None:

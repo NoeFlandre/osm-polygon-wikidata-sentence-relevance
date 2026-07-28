@@ -44,7 +44,20 @@ from osm_polygon_sentence_relevance.operator.workflows import (
     split_finalization_submission,
 )
 
-DEFAULT_TARGETS: Final[tuple[str, ...]] = ("nancy", "nantes", "rennes", "sophia")
+DEFAULT_TARGETS: Final[tuple[str, ...]] = (
+    "bordeaux",
+    "grenoble",
+    "lille",
+    "louvain",
+    "luxembourg",
+    "lyon",
+    "nancy",
+    "nantes",
+    "rennes",
+    "sophia",
+    "strasbourg",
+    "toulouse",
+)
 _SUBMISSION_HEADROOM_BYTES: Final[int] = 512 * 1024**2
 _LABEL_STAGING_HEADROOM_BYTES: Final[int] = 22 * 1024**3
 _REMOTE_QUOTA_COMMAND: Final[str] = (

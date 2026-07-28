@@ -39,7 +39,8 @@ Labeling is split into sequential 55-minute allocations bound to OAR's current
 day or night/weekend window; each allocation checkpoints after at most 45
 minutes and the next one resumes automatically. Site selection uses the
 account's `/home` soft-quota headroom rather than the shared filesystem's free
-space. When headroom is insufficient, only completed or failed
+space. All current Grid'5000 sites are probed; unreachable or incompatible
+sites are discarded before selection. When headroom is insufficient, only completed or failed
 operator-managed runs are eligible for automatic removal; the active run and
 its checkpoints are never deleted.
 

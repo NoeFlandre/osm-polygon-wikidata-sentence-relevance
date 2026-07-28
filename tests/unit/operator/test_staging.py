@@ -43,6 +43,12 @@ def test_prepare_builds_clean_pinned_checkout() -> None:
     assert 'UV_BIN="$(command -v uv || true)"' in command
     assert 'UV_BIN="$HOME/.local/bin/uv"' in command
     assert '"$UV_BIN" sync --locked --extra hub --extra segmentation' in command
+    assert '--project "$repo"' in command
+    assert '"$UV_BIN" sync --locked --extra hub --extra segmentation -C' not in command
+    assert 'UV_CACHE_DIR="$root/uv-cache"' in command
+    assert "export UV_CACHE_DIR" in command
+    assert "trap cleanup_uv_cache EXIT" in command
+    assert 'rm -rf -- "$UV_CACHE_DIR"' in command
     assert '"status":"active"' in command
 
 

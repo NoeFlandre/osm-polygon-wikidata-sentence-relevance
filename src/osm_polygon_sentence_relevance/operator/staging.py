@@ -74,7 +74,17 @@ test -z "$(git -C "$repo" status --porcelain)"
 UV_BIN="$(command -v uv || true)"
 if [ -z "$UV_BIN" ]; then UV_BIN="$HOME/.local/bin/uv"; fi
 test -x "$UV_BIN"
-"$UV_BIN" sync --locked --extra hub --extra segmentation -C "$repo"
+UV_CACHE_DIR="$root/uv-cache"
+export UV_CACHE_DIR
+cleanup_uv_cache() {{
+  [ "$UV_CACHE_DIR" = "$root/uv-cache" ] || exit 70
+  [ ! -L "$UV_CACHE_DIR" ] || exit 70
+  rm -rf -- "$UV_CACHE_DIR"
+}}
+trap cleanup_uv_cache EXIT
+"$UV_BIN" sync --locked --extra hub --extra segmentation --project "$repo"
+cleanup_uv_cache
+trap - EXIT
 printf 'STAGING_OK reused=%s\\n' "$reused"
 """.strip()
         result = self._ssh.run(script)
