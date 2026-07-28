@@ -26,6 +26,7 @@ class SiteRequirements:
     gpu_memory_mb: int = 40_000
     cuda_capability: tuple[int, int] = (7, 0)
     persistent_free_bytes: int = 8 * 1024**3
+    resume_persistent_free_bytes: int = 512 * 1024**2
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,7 +63,12 @@ def evaluate_site(probe: SiteProbe, requirements: SiteRequirements) -> SiteDecis
         or probe.cuda_capability < requirements.cuda_capability
     ):
         reasons.append("insufficient_cuda_capability")
-    if probe.persistent_free_bytes < requirements.persistent_free_bytes:
+    required_storage = (
+        requirements.resume_persistent_free_bytes
+        if probe.has_managed_run
+        else requirements.persistent_free_bytes
+    )
+    if probe.persistent_free_bytes < required_storage:
         reasons.append("insufficient_persistent_storage")
     if probe.expected_start_seconds < 0:
         reasons.append("invalid_queue_estimate")

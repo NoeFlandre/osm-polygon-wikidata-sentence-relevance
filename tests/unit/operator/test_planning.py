@@ -82,6 +82,34 @@ def test_site_selection_prefers_compatible_existing_managed_run() -> None:
     assert select_site([fresh, resumed]).selected.name == "sophia"
 
 
+def test_managed_run_requires_only_incremental_resume_headroom() -> None:
+    resumed = SiteProbe(
+        "sophia",
+        "sophia",
+        True,
+        80_000,
+        (8, 0),
+        6 * 1024**3,
+        100,
+        has_managed_run=True,
+    )
+    requirements = SiteRequirements(persistent_free_bytes=22 * 1024**3)
+    assert evaluate_site(resumed, requirements).compatible
+    too_full = SiteProbe(
+        "nancy",
+        "nancy",
+        True,
+        80_000,
+        (8, 0),
+        511 * 1024**2,
+        0,
+        has_managed_run=True,
+    )
+    assert evaluate_site(too_full, requirements).reasons == (
+        "insufficient_persistent_storage",
+    )
+
+
 def test_site_selection_rejects_incompatible() -> None:
     with pytest.raises(NoCompatibleSiteError):
         select_site([_probe("nancy", memory=10_000)], SiteRequirements())

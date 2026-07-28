@@ -342,10 +342,15 @@ def _run(args: argparse.Namespace) -> int:
     _usage_policy_preflight(ssh, selection.selected.name)
     _milestone("Usage-policy preflight passed; submissions are window-bound")
     _milestone("Enforcing Grid'5000 home soft-quota headroom")
+    initial_headroom = (
+        requirements.resume_persistent_free_bytes
+        if selection.selected.has_managed_run
+        else requirements.persistent_free_bytes
+    )
     _storage_preflight(
         ssh,
         protected_root=layout.root,
-        minimum_headroom_bytes=requirements.persistent_free_bytes,
+        minimum_headroom_bytes=initial_headroom,
     )
     _milestone("Storage preflight passed")
 

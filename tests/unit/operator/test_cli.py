@@ -478,6 +478,28 @@ def test_run_label_reuses_checkpoints_and_completes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     _install_run_fakes(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        cli,
+        "_probe_target",
+        lambda target, _run_id: SiteProbe(
+            target,
+            target,
+            True,
+            80_000,
+            (8, 0),
+            6 * 1024**3,
+            0,
+            has_managed_run=True,
+        ),
+    )
+    headroom: list[int] = []
+    monkeypatch.setattr(
+        cli,
+        "_storage_preflight",
+        lambda _ssh, *, protected_root, minimum_headroom_bytes: headroom.append(
+            minimum_headroom_bytes
+        ),
+    )
     args = cli.build_parser().parse_args(
         [
             "run",
@@ -504,6 +526,8 @@ def test_run_label_reuses_checkpoints_and_completes(
     assert "Preparing remote checkout" in output
     assert "Staging immutable labeling assets" in output
     assert "Labeling complete" in output
+    assert headroom
+    assert set(headroom) == {512 * 1024**2}
 
 
 def test_simple_monitors_and_public_helpers(
