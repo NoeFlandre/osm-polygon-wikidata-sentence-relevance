@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import shlex
 import subprocess
 import sys
@@ -24,6 +25,10 @@ from osm_polygon_sentence_relevance.operator.controller import (
     LiveProgress,
 )
 from osm_polygon_sentence_relevance.operator.oar import JobState, OarClient
+from osm_polygon_sentence_relevance.operator.quota import (
+    QuotaUsage,
+    parse_quota_output,
+)
 from osm_polygon_sentence_relevance.operator.sites import (
     NoCompatibleSiteError,
     SiteProbe,
@@ -39,7 +44,14 @@ from osm_polygon_sentence_relevance.operator.workflows import (
     split_finalization_submission,
 )
 
-DEFAULT_TARGETS: Final[tuple[str, ...]] = ("nancy", "nantes", "rennes")
+DEFAULT_TARGETS: Final[tuple[str, ...]] = ("nancy", "nantes", "rennes", "sophia")
+_SUBMISSION_HEADROOM_BYTES: Final[int] = 512 * 1024**2
+_LABEL_STAGING_HEADROOM_BYTES: Final[int] = 22 * 1024**3
+_REMOTE_QUOTA_COMMAND: Final[str] = (
+    "set +e; quota_output=$(quota 2>&1); quota_rc=$?; set -e; "
+    'if [ "$quota_rc" -gt 1 ]; then exit "$quota_rc"; fi; '
+    "printf '%s\\n' \"$quota_output\""
+)
 
 
 def _milestone(message: str) -> None:
@@ -115,6 +127,7 @@ printf '%s %s %s %s\n' "$free_kb" "$gpu_mb" "$gpu_major" "$waiting"
         free_kb_raw, gpu_raw, gpu_major_raw, waiting_raw = result.stdout.splitlines()[
             -1
         ].split()
+        quota = _read_remote_quota(ssh)
         gpu_memory = int(gpu_raw)
         gpu_major = int(gpu_major_raw)
         return SiteProbe(
@@ -123,7 +136,10 @@ printf '%s %s %s %s\n' "$free_kb" "$gpu_mb" "$gpu_major" "$waiting"
             reachable=True,
             gpu_memory_mb=gpu_memory,
             cuda_capability=(gpu_major, 0) if gpu_memory > 0 else None,
-            persistent_free_bytes=int(free_kb_raw) * 1024,
+            persistent_free_bytes=min(
+                int(free_kb_raw) * 1024,
+                quota.soft_headroom_bytes,
+            ),
             expected_start_seconds=int(waiting_raw) * 60,
         )
     except (SshError, ValueError, IndexError):
@@ -155,11 +171,59 @@ def _storage_cleanup_can_help(
     )
 
 
+def _required_staging_headroom(stage: str, requested_bytes: int) -> int:
+    """Reserve measured label-environment space before persistent staging."""
+
+    if requested_bytes < 0:
+        raise ValueError("requested storage headroom must be non-negative")
+    if stage in {Stage.LABEL.value, Stage.ALL.value}:
+        return max(requested_bytes, _LABEL_STAGING_HEADROOM_BYTES)
+    return requested_bytes
+
+
 def _remote_home(ssh: SshClient) -> PurePosixPath:
     value = ssh.run('printf "%s\\n" "$HOME"').stdout.strip()
     if not value.startswith("/") or "\n" in value or ".." in value.split("/"):
         raise RuntimeError("remote home path is invalid")
     return PurePosixPath(value)
+
+
+def _usage_policy_preflight(ssh: SshClient, site: str) -> None:
+    """Fail closed unless Grid'5000's live policy checks succeed."""
+
+    if re.fullmatch(r"[a-z][a-z0-9-]*", site) is None:
+        raise ValueError("Grid'5000 site name is invalid")
+    quoted_site = shlex.quote(site)
+    ssh.run(
+        "command -v usagepolicycheck >/dev/null && "
+        f"usagepolicycheck -l --sites {quoted_site} >/dev/null && "
+        "usagepolicycheck -t >/dev/null"
+    )
+
+
+def _read_remote_quota(ssh: SshClient) -> QuotaUsage:
+    """Read the site's current home quota, including over-quota rc=1."""
+
+    return parse_quota_output(ssh.run(_REMOTE_QUOTA_COMMAND).stdout)
+
+
+def _storage_preflight(
+    ssh: SshClient,
+    *,
+    protected_root: PurePosixPath,
+    minimum_headroom_bytes: int,
+) -> None:
+    """Reclaim terminal managed runs, then fail closed above the soft quota."""
+
+    if minimum_headroom_bytes < 0:
+        raise ValueError("minimum storage headroom must be non-negative")
+    quota = _read_remote_quota(ssh)
+    if quota.soft_headroom_bytes >= minimum_headroom_bytes:
+        return
+    _cleanup_remote(ssh, execute=True, protected_root=protected_root)
+    quota = _read_remote_quota(ssh)
+    if quota.soft_headroom_bytes < minimum_headroom_bytes:
+        raise RuntimeError("Grid'5000 home soft quota has insufficient safe headroom")
 
 
 def _emit(progress: LiveProgress) -> None:
@@ -207,7 +271,10 @@ def _run(args: argparse.Namespace) -> int:
 
     requirements = SiteRequirements(
         gpu_memory_mb=args.gpu_memory_mb,
-        persistent_free_bytes=args.remote_free_bytes,
+        persistent_free_bytes=_required_staging_headroom(
+            args.stage,
+            args.remote_free_bytes,
+        ),
     )
     probes: list[SiteProbe] = []
     for target in dict.fromkeys(args.site):
@@ -242,7 +309,29 @@ def _run(args: argparse.Namespace) -> int:
     ssh = SshClient(target=target, command_timeout=1800)
     home = _remote_home(ssh)
     layout = RemoteLayout(home / "osm-polygon-operator" / config.run_id)
-    oar = OarClient(ssh)
+    _milestone("Checking live Grid'5000 usage-policy constraints")
+    _usage_policy_preflight(ssh, selection.selected.name)
+    _milestone("Usage-policy preflight passed; submissions are night-bound")
+    _milestone("Enforcing Grid'5000 home soft-quota headroom")
+    _storage_preflight(
+        ssh,
+        protected_root=layout.root,
+        minimum_headroom_bytes=requirements.persistent_free_bytes,
+    )
+    _milestone("Storage preflight passed")
+
+    def submission_preflight() -> None:
+        _usage_policy_preflight(ssh, selection.selected.name)
+        _storage_preflight(
+            ssh,
+            protected_root=layout.root,
+            minimum_headroom_bytes=_SUBMISSION_HEADROOM_BYTES,
+        )
+
+    oar = OarClient(
+        ssh,
+        preflight=submission_preflight,
+    )
     stager = Stager(ssh)
     controller = Controller(
         config=config,
@@ -564,15 +653,23 @@ def _mark_remote_status(ssh: SshClient, layout: RemoteLayout, status: str) -> No
     )
 
 
-def _cleanup_remote(ssh: SshClient, *, execute: bool) -> tuple[str, ...]:
+def _cleanup_remote(
+    ssh: SshClient,
+    *,
+    execute: bool,
+    protected_root: PurePosixPath | None = None,
+) -> tuple[str, ...]:
     action = "delete" if execute else "preview"
+    protected = str(protected_root) if protected_root is not None else ""
     script = f"""
 set -euo pipefail
 root="$HOME/osm-polygon-operator"
+protected={shlex.quote(protected)}
 [ -d "$root" ] || exit 0
 find "$root" -mindepth 1 -maxdepth 1 -type d -print0 |
 while IFS= read -r -d '' candidate; do
   [ ! -L "$candidate" ] || continue
+  [ -z "$protected" ] || [ "$candidate" != "$protected" ] || continue
   marker="$candidate/.operator-managed.json"
   [ -f "$marker" ] && [ ! -L "$marker" ] || continue
   status=$(sed -n 's/.*"status":"\\([^"]*\\)".*/\\1/p' "$marker")

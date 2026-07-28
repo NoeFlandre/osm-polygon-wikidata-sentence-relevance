@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import shlex
 import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -147,8 +148,8 @@ def test_run_uses_expected_ssh_argv() -> None:
     assert args[idx + 1] == "nancy"
     assert args[idx + 2] == "bash"
     assert args[idx + 3] == "-lc"
-    assert args[idx + 4] == "echo hello"
-    assert args[-1] == "echo hello"
+    assert args[idx + 4] == shlex.quote("echo hello")
+    assert args[-1] == shlex.quote("echo hello")
     assert result.attempts == 1
 
 
@@ -208,6 +209,14 @@ def test_exactly_one_fixed_bootstrap_command_is_used() -> None:
     args = _args_for_call(client, runner)
     idx = args.index("-lc")
     assert args[idx + 1] == "echo"
+
+
+def test_remote_shell_command_is_preserved_as_one_bash_script() -> None:
+    client, runner, _ = _build_client(responses=[_FakeCompleted(0, "", "")])
+    command = 'printf "%s\\n" "$HOME"'
+    client.run(command)
+    args = _args_for_call(client, runner)
+    assert args[args.index("-lc") + 1] == shlex.quote(command)
 
 
 def test_shell_true_is_never_used() -> None:

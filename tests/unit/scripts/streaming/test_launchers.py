@@ -49,5 +49,15 @@ def test_submitter_submits_one_noninteractive_gpu_job() -> None:
     text = _text("submit_streaming_build.sh")
     assert text.count("exec oarsub ") == 1
     assert "gpu=1,walltime=12:00:00" in text
+    assert " -t night" in text
     assert " -I" not in text
     assert "device auto" not in text
+
+
+def test_finalization_submissions_are_night_bound() -> None:
+    text = _text("submit_streaming_finalization.sh")
+    assert text.count("exec oarsub ") == 2
+    for line in text.splitlines():
+        if "exec oarsub " in line:
+            assert "-q default" in line
+            assert "-t night" in line

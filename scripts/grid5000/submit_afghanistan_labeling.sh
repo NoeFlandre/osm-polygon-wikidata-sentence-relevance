@@ -182,5 +182,5 @@ done
 # ``type=default`` with ``exotic=YES``; this helper therefore requests
 # the exotic type explicitly.
 exec oarsub -q default -p "gpu_mem>=${GPU_MIN_MEMORY_MB}" \
-    -t exotic \
+    -t exotic -t night \
     -l gpu=1,walltime=12:00:00 "${command_string}"

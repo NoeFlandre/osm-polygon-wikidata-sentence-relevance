@@ -34,6 +34,13 @@ on `main`. Pressing Ctrl-C stops only local monitoring; it does not cancel the
 remote job or delete checkpoints. Re-running the same command resumes the same
 deterministic run.
 
+Every OAR submission is constrained to Grid'5000 night/weekend scheduling and
+preceded by the live `usagepolicycheck` checks. Site selection uses the
+account's `/home` soft-quota headroom rather than the shared filesystem's free
+space. When headroom is insufficient, only completed or failed
+operator-managed runs are eligible for automatic removal; the active run and
+its checkpoints are never deleted.
+
 All Mac-side state is stored under the configured external data root. The
 command refuses to fall back to the Mac’s internal disk or to run inference
 locally.

@@ -21,6 +21,11 @@ from osm_polygon_sentence_relevance.operator.config import (
     Scope,
     Stage,
 )
+from osm_polygon_sentence_relevance.operator.quota import (
+    QuotaError,
+    QuotaUsage,
+    parse_quota_output,
+)
 from osm_polygon_sentence_relevance.operator.ssh import (
     LogChunk,
     SshClient,
@@ -50,12 +55,15 @@ __all__ = [
     "Grid5000Requirements",
     "RunIdentity",
     "OperatorConfig",
+    "QuotaError",
+    "QuotaUsage",
     "RunState",
     "RunPhase",
     "StateStore",
     "StateError",
     "StateIdentityMismatch",
     "StateTransitionError",
+    "parse_quota_output",
     "StateSecurityError",
     "LogChunk",
     "SshClient",

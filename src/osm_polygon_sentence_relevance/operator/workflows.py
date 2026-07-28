@@ -152,6 +152,8 @@ def llama_build_submission(layout: RemoteLayout) -> SubmissionRequest:
             "default",
             "-t",
             "exotic",
+            "-t",
+            "night",
             "-p",
             "gpu_mem>=40000",
             "-l",

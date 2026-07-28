@@ -39,6 +39,13 @@ def test_help_exposes_run_status_and_public_stage_choices(
         ]
     )
     assert args.stage == "all"
+    assert "sophia" in args.site
+
+
+def test_label_staging_reserves_measured_environment_headroom() -> None:
+    assert cli._required_staging_headroom("split", 8 * 1024**3) == 8 * 1024**3
+    assert cli._required_staging_headroom("label", 8 * 1024**3) == 22 * 1024**3
+    assert cli._required_staging_headroom("all", 24 * 1024**3) == 24 * 1024**3
 
 
 def test_sigint_only_stops_local_monitoring(
@@ -93,22 +100,47 @@ def test_live_progress_is_rendered(capsys: pytest.CaptureFixture[str]) -> None:
 
 def test_site_probe_parses_frontend_facts(monkeypatch: pytest.MonkeyPatch) -> None:
     class FakeSsh:
-        command = ""
+        commands: list[str] = []
 
         def __init__(self, **_kwargs: object) -> None:
             pass
 
         def run(self, command: str) -> SimpleNamespace:
-            self.__class__.command = command
-            return SimpleNamespace(stdout="1000 80000 8 3\n")
+            self.__class__.commands.append(command)
+            if "oarnodes" in command:
+                return SimpleNamespace(stdout="100000000 80000 8 3\n")
+            return SimpleNamespace(stdout=" 1000 25000000 100000000\n")
 
     monkeypatch.setattr(cli, "SshClient", FakeSsh)
     assert cli._probe_target("nancy") == SiteProbe(
-        "nancy", "nancy", True, 80_000, (8, 0), 1_024_000, 180
+        "nancy",
+        "nancy",
+        True,
+        80_000,
+        (8, 0),
+        24_999_000 * 1024,
+        180,
     )
-    assert "oarnodes -J" in FakeSsh.command
-    assert "jq -r" in FakeSsh.command
-    assert "oarstat -p" not in FakeSsh.command
+    assert "oarnodes -J" in FakeSsh.commands[0]
+    assert "jq -r" in FakeSsh.commands[0]
+    assert "oarstat -p" not in FakeSsh.commands[0]
+    assert "quota_output=$(quota" in FakeSsh.commands[1]
+
+
+def test_site_probe_uses_zero_headroom_after_soft_quota(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeSsh:
+        def __init__(self, **_kwargs: object) -> None:
+            pass
+
+        def run(self, command: str) -> SimpleNamespace:
+            if "oarnodes" in command:
+                return SimpleNamespace(stdout="100000000 80000 8 0\n")
+            return SimpleNamespace(stdout=" 30000000* 25000000 100000000\n")
+
+    monkeypatch.setattr(cli, "SshClient", FakeSsh)
+    assert cli._probe_target("nancy").persistent_free_bytes == 0
 
 
 def test_storage_cleanup_is_attempted_only_when_it_can_restore_compatibility() -> None:
@@ -176,6 +208,71 @@ def test_remote_home_and_exit_code_validation() -> None:
         cli._assert_remote_exit_zero(FakeSsh(["2\n"]), layout, 1, "exit")  # type: ignore[arg-type]
 
 
+def test_usage_policy_preflight_runs_live_checker() -> None:
+    class PolicySsh:
+        command = ""
+
+        def run(self, command: str) -> SimpleNamespace:
+            self.__class__.command = command
+            return SimpleNamespace(stdout="")
+
+    cli._usage_policy_preflight(PolicySsh(), "nancy")  # type: ignore[arg-type]
+    assert "usagepolicycheck -l --sites nancy" in PolicySsh.command
+    assert "usagepolicycheck -t" in PolicySsh.command
+
+
+def test_storage_preflight_cleans_terminal_runs_and_rechecks() -> None:
+    class StorageSsh:
+        outputs = iter(
+            [
+                " 30000000* 25000000 100000000\n",
+                "/home/user/osm-polygon-operator/old\n",
+                " 10000000 25000000 100000000\n",
+            ]
+        )
+        commands: list[str] = []
+
+        def run(self, command: str) -> SimpleNamespace:
+            self.__class__.commands.append(command)
+            return SimpleNamespace(stdout=next(self.__class__.outputs))
+
+    cli._storage_preflight(  # type: ignore[arg-type]
+        StorageSsh(),
+        protected_root=PurePosixPath("/home/user/osm-polygon-operator/current"),
+        minimum_headroom_bytes=1024,
+    )
+    assert "quota" in StorageSsh.commands[0]
+    assert "rm -rf" in StorageSsh.commands[1]
+    assert "current" in StorageSsh.commands[1]
+
+
+def test_storage_preflight_fails_closed_when_cleanup_is_insufficient() -> None:
+    class StorageSsh:
+        outputs = iter(
+            [
+                " 30000000* 25000000 100000000\n",
+                "",
+                " 30000000* 25000000 100000000\n",
+            ]
+        )
+
+        def run(self, _command: str) -> SimpleNamespace:
+            return SimpleNamespace(stdout=next(self.__class__.outputs))
+
+    with pytest.raises(RuntimeError, match="soft quota"):
+        cli._storage_preflight(  # type: ignore[arg-type]
+            StorageSsh(),
+            protected_root=PurePosixPath("/home/user/osm-polygon-operator/current"),
+            minimum_headroom_bytes=1024,
+        )
+
+
+@pytest.mark.parametrize("site", ["", "Nancy", "nancy;true", "nancy site"])
+def test_usage_policy_preflight_rejects_unsafe_site(site: str) -> None:
+    with pytest.raises(ValueError, match="site name"):
+        cli._usage_policy_preflight(SimpleNamespace(), site)  # type: ignore[arg-type]
+
+
 class _FakeStore:
     instances: list[_FakeStore] = []
 
@@ -207,6 +304,8 @@ class _FakeSsh:
 
     def run(self, command: str) -> SimpleNamespace:
         self.commands.append(command)
+        if "quota_output=$(quota" in command:
+            return SimpleNamespace(stdout=" 1000 25000000 100000000\n")
         if 'printf "%s\\n" "$HOME"' in command:
             return SimpleNamespace(stdout="/home/user\n")
         if "build.exit_code" in command or "finalize.exit_code" in command:
@@ -230,7 +329,7 @@ class _FakeSsh:
 
 
 class _FakeOar:
-    def __init__(self, _ssh: object) -> None:
+    def __init__(self, _ssh: object, **_kwargs: object) -> None:
         self.next_job = 90
 
     def submit(self, _request: object) -> int:
@@ -322,6 +421,43 @@ def test_run_split_finalizes_publishes_and_marks_complete(
     assert state.facts["published"] is True
     assert state.facts["hub_commit"] == "abcdef123456"
     assert "Sentence splitting complete" in capsys.readouterr().out
+
+
+def test_run_reclaims_managed_storage_then_reprobes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _install_run_fakes(monkeypatch, tmp_path)
+    probes = iter(
+        [
+            SiteProbe("nancy", "nancy", True, 80_000, (8, 0), 1, 0),
+            SiteProbe("nancy", "nancy", True, 80_000, (8, 0), 100 * 1024**3, 0),
+        ]
+    )
+    cleaned: list[bool] = []
+    monkeypatch.setattr(cli, "_probe_target", lambda _target: next(probes))
+    monkeypatch.setattr(
+        cli,
+        "_cleanup_remote",
+        lambda _ssh, *, execute: cleaned.append(execute) or ("/managed/old",),
+    )
+    args = cli.build_parser().parse_args(
+        [
+            "run",
+            "--scope",
+            "region",
+            "--region",
+            "afghanistan-latest",
+            "--stage",
+            "split",
+            "--site",
+            "nancy",
+            "--poll-seconds",
+            "0",
+        ]
+    )
+    args.site = ["nancy"]
+    assert cli._run(args) == 0
+    assert cleaned == [True]
 
 
 def test_run_label_reuses_checkpoints_and_completes(

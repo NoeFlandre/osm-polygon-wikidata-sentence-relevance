@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import math
 import re
+import shlex
 import subprocess
 import time
 from collections.abc import Callable, Mapping, Sequence
@@ -678,7 +679,7 @@ class SshClient:
             self.target,
             SSH_COMMAND,
             "-lc",
-            command,
+            shlex.quote(command),
         ]
 
     def _build_read_args(self, path: str, offset: int, max_bytes: int) -> list[str]:
@@ -700,8 +701,9 @@ class SshClient:
             self.target,
             SSH_COMMAND,
             "-lc",
-            _REMOTE_READ_SCRIPT,
-            path,
+            shlex.quote(_REMOTE_READ_SCRIPT),
+            "operator-read",
+            shlex.quote(path),
             str(offset),
             str(max_bytes),
         ]

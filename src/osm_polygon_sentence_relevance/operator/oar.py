@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 import shlex
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -102,10 +103,18 @@ def classify_exit(status: JobStatus, checkpoint: CheckpointFacts) -> ExitClass:
 class OarClient:
     """OAR frontend adapter over the bounded SSH transport."""
 
-    def __init__(self, ssh: SshClient) -> None:
+    def __init__(
+        self,
+        ssh: SshClient,
+        *,
+        preflight: Callable[[], None] | None = None,
+    ) -> None:
         self._ssh = ssh
+        self._preflight = preflight
 
     def submit(self, request: SubmissionRequest) -> int:
+        if self._preflight is not None:
+            self._preflight()
         result = self._ssh.run(request.shell_command())
         return parse_job_id(result.stdout)
 

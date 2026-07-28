@@ -65,6 +65,7 @@ for value in "$@"; do
 done
 
 if [ "${NODE_TYPE}" = "gpu" ]; then
-    exec oarsub -q production -l gpu=1,walltime="${WALLTIME}" "${command_string}"
+    exec oarsub -q default -t exotic -t night \
+        -l gpu=1,walltime="${WALLTIME}" "${command_string}"
 fi
-exec oarsub -q default -l walltime="${WALLTIME}" "${command_string}"
+exec oarsub -q default -t night -l walltime="${WALLTIME}" "${command_string}"

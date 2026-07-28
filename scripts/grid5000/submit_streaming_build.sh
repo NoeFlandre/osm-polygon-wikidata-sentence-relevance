@@ -68,4 +68,5 @@ for value in "$@"; do
     command_string="${command_string} $(shell_quote "${value}")"
 done
 
-exec oarsub -q production -l gpu=1,walltime=12:00:00 "${command_string}"
+exec oarsub -q default -t exotic -t night \
+    -l gpu=1,walltime=12:00:00 "${command_string}"

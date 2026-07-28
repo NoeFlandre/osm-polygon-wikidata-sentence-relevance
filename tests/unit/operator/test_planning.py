@@ -308,6 +308,29 @@ def test_oar_client_submit_cancel_and_status_errors() -> None:
         OarClient(_FakeSsh(['{"state":"Surprise"}'])).status(42)  # type: ignore[arg-type]
 
 
+def test_oar_client_runs_policy_preflight_before_every_submission() -> None:
+    ssh = _FakeSsh(["OAR_JOB_ID=41\n", "OAR_JOB_ID=42\n"])
+    calls: list[str] = []
+    client = OarClient(ssh, preflight=lambda: calls.append("checked"))  # type: ignore[arg-type]
+    request = SubmissionRequest(("oarsub", "payload"))
+
+    assert client.submit(request) == 41
+    assert client.submit(request) == 42
+    assert calls == ["checked", "checked"]
+
+
+def test_oar_client_does_not_submit_when_policy_preflight_fails() -> None:
+    ssh = _FakeSsh(["OAR_JOB_ID=42\n"])
+
+    def reject() -> None:
+        raise RuntimeError("policy refused")
+
+    client = OarClient(ssh, preflight=reject)  # type: ignore[arg-type]
+    with pytest.raises(RuntimeError, match="policy refused"):
+        client.submit(SubmissionRequest(("oarsub", "payload")))
+    assert ssh.commands == []
+
+
 def test_exit_classification_complete_cancelled_and_failed() -> None:
     complete = CheckpointFacts(10, 10, True)
     assert (
@@ -336,6 +359,7 @@ def test_workflow_layout_and_finalization_commands() -> None:
     assert final.command[-2:] == ("02:00:00", "cpu")
     build = llama_build_submission(layout)
     assert build.command[:5] == ("oarsub", "-q", "default", "-t", "exotic")
+    assert build.command[5:7] == ("-t", "night")
     assert "GGML_CUDA=ON" in build.command[-1]
 
 
