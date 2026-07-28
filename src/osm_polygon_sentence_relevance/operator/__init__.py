@@ -21,6 +21,16 @@ from osm_polygon_sentence_relevance.operator.config import (
     Scope,
     Stage,
 )
+from osm_polygon_sentence_relevance.operator.ssh import (
+    LogChunk,
+    SshClient,
+    SshConnectionError,
+    SshError,
+    SshProtocolError,
+    SshRemoteError,
+    SshResult,
+    SshTimeoutError,
+)
 from osm_polygon_sentence_relevance.operator.state import (
     RunPhase,
     RunState,
@@ -47,6 +57,14 @@ __all__ = [
     "StateIdentityMismatch",
     "StateTransitionError",
     "StateSecurityError",
+    "LogChunk",
+    "SshClient",
+    "SshError",
+    "SshResult",
+    "SshConnectionError",
+    "SshRemoteError",
+    "SshTimeoutError",
+    "SshProtocolError",
     "DEFAULT_BATCH_SIZE",
     "DEFAULT_ROW_LIMIT",
     "DEFAULT_LLAMA_PARALLEL",
