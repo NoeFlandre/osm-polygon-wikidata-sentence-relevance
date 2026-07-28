@@ -21,6 +21,15 @@ from osm_polygon_sentence_relevance.operator.config import (
     Scope,
     Stage,
 )
+from osm_polygon_sentence_relevance.operator.state import (
+    RunPhase,
+    RunState,
+    StateError,
+    StateIdentityMismatch,
+    StateSecurityError,
+    StateStore,
+    StateTransitionError,
+)
 
 __all__ = [
     "DATA_ROOT",
@@ -31,6 +40,13 @@ __all__ = [
     "Grid5000Requirements",
     "RunIdentity",
     "OperatorConfig",
+    "RunState",
+    "RunPhase",
+    "StateStore",
+    "StateError",
+    "StateIdentityMismatch",
+    "StateTransitionError",
+    "StateSecurityError",
     "DEFAULT_BATCH_SIZE",
     "DEFAULT_ROW_LIMIT",
     "DEFAULT_LLAMA_PARALLEL",
