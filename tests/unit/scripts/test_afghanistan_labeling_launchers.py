@@ -39,6 +39,11 @@ def _run_submit(
         "echo 123456\n",
     )
     fake_bin.joinpath("oarsub").chmod(0o700)
+    fake_bin.joinpath("oarnodes").write_text(
+        "#!/usr/bin/env bash\n"
+        """printf '%s\n' '{"node":{"state":"Alive","gpu_count":1,"gpu_mem":49140,"gpu_compute_capability_major":8,"exotic":"NO"}}'\n""",
+    )
+    fake_bin.joinpath("oarnodes").chmod(0o700)
     if policy_clock is not None:
         fake_bin.joinpath("date").write_text(
             f"#!/usr/bin/env bash\nprintf '%s\\n' '{policy_clock}'\n",
@@ -55,6 +60,7 @@ def _run_submit(
     repo_target = repo_root / "scripts" / "grid5000"
     repo_target.mkdir(parents=True)
     for item in (
+        GRID / "_submit_gpu_job.sh",
         GRID / "run_afghanistan_labeling_job.sh",
         GRID / "run_afghanistan_labeling.sh",
     ):
@@ -126,13 +132,10 @@ def test_labeling_launchers_are_executable() -> None:
 
 def test_submitter_requests_one_fast_large_cuda_gpu_once() -> None:
     text = _text("submit_afghanistan_labeling.sh")
-    assert text.count("exec oarsub ") == 1
-    assert "gpu=1,walltime=00:55:00" in text
+    assert "_submit_gpu_job.sh" in text
+    assert '"00:55:00"' in text
     assert 'GPU_MIN_MEMORY_MB="${LABEL_GPU_MIN_MEMORY_MB:-40000}"' in text
-    assert "gpu_mem>=${GPU_MIN_MEMORY_MB}" in text
-    assert " -q default" in text
-    assert " -t exotic" in text
-    assert '-t "${policy_type}"' in text
+    assert "exec oarsub " not in text
     assert " -t besteffort" not in text
     assert " -I" not in text
 
@@ -141,12 +144,12 @@ def test_submitter_selects_day_or_night_from_paris_clock(tmp_path: Path) -> None
     day_root = tmp_path / "day"
     day = _run_submit(day_root, day_root / "work", policy_clock="2 14")
     assert day.returncode == 0, day.stderr
-    assert "-t exotic -t day" in day_root.joinpath("oarsub.calls").read_text()
+    assert "-t day" in day_root.joinpath("oarsub.calls").read_text()
 
     night_root = tmp_path / "night"
     night = _run_submit(night_root, night_root / "work", policy_clock="2 22")
     assert night.returncode == 0, night.stderr
-    assert "-t exotic -t night" in night_root.joinpath("oarsub.calls").read_text()
+    assert "-t night" in night_root.joinpath("oarsub.calls").read_text()
 
     weekend_root = tmp_path / "weekend"
     weekend = _run_submit(
@@ -155,7 +158,7 @@ def test_submitter_selects_day_or_night_from_paris_clock(tmp_path: Path) -> None
         policy_clock="6 14",
     )
     assert weekend.returncode == 0, weekend.stderr
-    assert "-t exotic -t night" in weekend_root.joinpath("oarsub.calls").read_text()
+    assert "-t night" in weekend_root.joinpath("oarsub.calls").read_text()
 
 
 def test_submitter_accepts_validated_gpu_memory_override(tmp_path: Path) -> None:
@@ -326,7 +329,7 @@ def test_submit_helper_hits_oarsub_once_with_valid_paths(tmp_path: Path) -> None
     assert result.returncode == 0
     assert result.stdout.strip() == "123456"
     assert call_count.exists()
-    assert call_count.read_text().strip() == "11"
+    assert call_count.read_text().strip() == "9"
     assert "submit_afghanistan_labeling: required" not in result.stderr
 
 

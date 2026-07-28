@@ -358,8 +358,8 @@ def test_workflow_layout_and_finalization_commands() -> None:
     assert "submit_streaming_finalization.sh" in final.command[0]
     assert final.command[-2:] == ("02:00:00", "cpu")
     build = llama_build_submission(layout)
-    assert build.command[:5] == ("oarsub", "-q", "default", "-t", "exotic")
-    assert build.command[5:7] == ("-t", "night")
+    assert build.command[0].endswith("_submit_gpu_job.sh")
+    assert build.command[1:4] == ("40000", "01:00:00", "night")
     assert "GGML_CUDA=ON" in build.command[-1]
 
 

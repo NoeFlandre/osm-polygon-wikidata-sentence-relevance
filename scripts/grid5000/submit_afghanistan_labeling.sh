@@ -162,8 +162,9 @@ for path in "${INPUT_PARQUET}" "${MODEL_FILE}"; do
 done
 
 WRAPPER="${REPO_ROOT}/scripts/grid5000/run_afghanistan_labeling_job.sh"
-if [ ! -x "${WRAPPER}" ] || ! command -v oarsub >/dev/null 2>&1; then
-    echo "submit_afghanistan_labeling: wrapper or oarsub is unavailable" >&2
+SUBMIT_HELPER="${REPO_ROOT}/scripts/grid5000/_submit_gpu_job.sh"
+if [ ! -x "${WRAPPER}" ] || [ ! -x "${SUBMIT_HELPER}" ]; then
+    echo "submit_afghanistan_labeling: wrapper or submit helper is unavailable" >&2
     exit 1
 fi
 
@@ -191,11 +192,7 @@ if [ "${policy_weekday}" -le 5 ] && \
 fi
 readonly policy_type
 
-# Short sequential CUDA allocation. OAR constrains it to the current
-# Europe/Paris policy window, so it cannot cross a weekday boundary.
-# On this site, 40 GiB+ CUDA resources are commonly exposed under
-# ``type=default`` with ``exotic=YES``; this helper therefore requests
-# the exotic type explicitly.
-exec oarsub -q default -p "gpu_mem>=${GPU_MIN_MEMORY_MB}" \
-    -t exotic -t "${policy_type}" \
-    -l gpu=1,walltime=00:55:00 "${command_string}"
+# The shared helper adds ``-t exotic`` only when the live site's matching
+# GPU resources require it.
+exec "${SUBMIT_HELPER}" \
+    "${GPU_MIN_MEMORY_MB}" "00:55:00" "${policy_type}" "${command_string}"

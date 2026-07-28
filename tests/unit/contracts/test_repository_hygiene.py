@@ -8,6 +8,7 @@ RETAINED_SHELL = {
     "_checkout_guard.sh",
     "_deadline_helper.sh",
     "_finalize_persist.sh",
+    "_submit_gpu_job.sh",
     "run_afghanistan_labeling.sh",
     "run_afghanistan_labeling_job.sh",
     "run_streaming_build.sh",

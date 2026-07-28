@@ -131,6 +131,7 @@ def label_submission(
 def llama_build_submission(layout: RemoteLayout) -> SubmissionRequest:
     """Build pinned CUDA llama-server inside an allocated GPU job."""
 
+    submit_helper = layout.repo / "scripts/grid5000/_submit_gpu_job.sh"
     target = layout.root / "llama-server-bin"
     source = layout.root / "llama.cpp"
     payload = (
@@ -147,17 +148,10 @@ def llama_build_submission(layout: RemoteLayout) -> SubmissionRequest:
     )
     return SubmissionRequest(
         (
-            "oarsub",
-            "-q",
-            "default",
-            "-t",
-            "exotic",
-            "-t",
+            str(submit_helper),
+            "40000",
+            "01:00:00",
             "night",
-            "-p",
-            "gpu_mem>=40000",
-            "-l",
-            "gpu=1,walltime=01:00:00",
             payload,
         )
     )

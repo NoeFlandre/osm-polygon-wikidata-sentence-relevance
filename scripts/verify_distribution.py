@@ -85,6 +85,7 @@ SDIST_FORBIDDEN = [
 WHEEL_FORBIDDEN_PREFIXES = ("docs/", ".local-docs/", "tests/", ".git")
 SDIST_PRODUCTION_SHELL_SCRIPTS = (
     "scripts/grid5000/_finalize_persist.sh",
+    "scripts/grid5000/_submit_gpu_job.sh",
     "scripts/grid5000/run_afghanistan_labeling.sh",
     "scripts/grid5000/run_afghanistan_labeling_job.sh",
     "scripts/grid5000/run_streaming_build.sh",

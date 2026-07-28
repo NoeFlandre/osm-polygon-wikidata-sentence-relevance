@@ -50,6 +50,7 @@ SRC_ROOT = ROOT / "src" / "osm_polygon_sentence_relevance" / "labeling"
 GRID_ROOT = ROOT / "scripts" / "grid5000"
 DOC = ROOT / "docs" / "guides" / "grid5000.md"
 SUBMIT = GRID_ROOT / "submit_afghanistan_labeling.sh"
+GPU_SUBMIT = GRID_ROOT / "_submit_gpu_job.sh"
 JOB_WRAPPER = GRID_ROOT / "run_afghanistan_labeling_job.sh"
 PAYLOAD = GRID_ROOT / "run_afghanistan_labeling.sh"
 
@@ -102,10 +103,10 @@ def test_payload_does_not_attempt_vllm() -> None:
 
 
 def test_submitter_uses_production_default_queue_without_cpu_fallback() -> None:
-    text = SUBMIT.read_text()
+    text = SUBMIT.read_text() + GPU_SUBMIT.read_text()
     # The nantes site schedules through default queue resources for production
     # jobs. The
-    # Nancy-compatible resource contracts currently require explicit exotic jobs.
+    # Sites whose matching resources require it receive an explicit exotic type.
     # ``-t besteffort`` flag must be absent (it may appear in a comment).
     assert "-q default" in text
     assert "-t exotic" in text
