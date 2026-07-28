@@ -89,26 +89,40 @@ def _resolve_input_revision(explicit: str | None, stage: str) -> str:
 
 def _probe_target(target: str) -> SiteProbe:
     ssh = SshClient(target=target, attempts=1, command_timeout=30)
-    # The frontend property inventory supplies the largest advertised GPU,
-    # while df measures the operator's persistent home filesystem.
+    # ``oarnodes -J`` is the authoritative OAR resource inventory. Restrict
+    # the maximum to currently Alive GPU resources; ``oarstat -p`` describes
+    # jobs and does not expose the node properties needed here.
     command = r"""
 set -euo pipefail
 command -v oarsub >/dev/null
+command -v oarnodes >/dev/null
+command -v jq >/dev/null
 free_kb=$(df -Pk "$HOME" | awk 'NR==2 {print $4}')
-gpu_mb=$(oarstat -p 2>/dev/null | sed -n 's/.*gpu_mem=\([0-9][0-9]*\).*/\1/p' | sort -nr | head -1)
-gpu_mb=${gpu_mb:-0}
+inventory=$(oarnodes -J | jq -r '
+  (([.[] | select(.gpu_count > 0 and .state == "Alive") | .gpu_mem]
+    | max // 0 | tostring)
+   + " " +
+   ([.[] | select(.gpu_count > 0 and .state == "Alive")
+           | .gpu_compute_capability_major]
+    | max // 0 | tostring))
+')
+read -r gpu_mb gpu_major <<<"$inventory"
 waiting=$(oarstat -u 2>/dev/null | awk '$5 ~ /Waiting|Hold/ {n++} END {print n+0}')
-printf '%s %s %s\n' "$free_kb" "$gpu_mb" "$waiting"
+printf '%s %s %s %s\n' "$free_kb" "$gpu_mb" "$gpu_major" "$waiting"
 """.strip()
     try:
         result = ssh.run(command)
-        free_kb_raw, gpu_raw, waiting_raw = result.stdout.splitlines()[-1].split()
+        free_kb_raw, gpu_raw, gpu_major_raw, waiting_raw = result.stdout.splitlines()[
+            -1
+        ].split()
+        gpu_memory = int(gpu_raw)
+        gpu_major = int(gpu_major_raw)
         return SiteProbe(
             name=target.split("@")[-1].split(".")[0],
             target=target,
             reachable=True,
-            gpu_memory_mb=int(gpu_raw),
-            cuda_capability=(7, 0) if int(gpu_raw) > 0 else None,
+            gpu_memory_mb=gpu_memory,
+            cuda_capability=(gpu_major, 0) if gpu_memory > 0 else None,
             persistent_free_bytes=int(free_kb_raw) * 1024,
             expected_start_seconds=int(waiting_raw) * 60,
         )
@@ -122,6 +136,23 @@ printf '%s %s %s\n' "$free_kb" "$gpu_mb" "$waiting"
             0,
             0,
         )
+
+
+def _storage_cleanup_can_help(
+    probes: list[SiteProbe],
+    requirements: SiteRequirements,
+) -> bool:
+    """Return whether storage is the only failed hard constraint anywhere."""
+
+    return any(
+        probe.reachable
+        and probe.gpu_memory_mb >= requirements.gpu_memory_mb
+        and probe.cuda_capability is not None
+        and probe.cuda_capability >= requirements.cuda_capability
+        and probe.expected_start_seconds >= 0
+        and probe.persistent_free_bytes < requirements.persistent_free_bytes
+        for probe in probes
+    )
 
 
 def _remote_home(ssh: SshClient) -> PurePosixPath:
@@ -193,6 +224,8 @@ def _run(args: argparse.Namespace) -> int:
     try:
         selection = select_site(probes, requirements)
     except NoCompatibleSiteError:
+        if not _storage_cleanup_can_help(probes, requirements):
+            raise
         _milestone(
             "No compatible site; reclaiming only completed or failed managed runs"
         )

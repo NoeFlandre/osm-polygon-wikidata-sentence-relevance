@@ -12,7 +12,7 @@ import pytest
 from osm_polygon_sentence_relevance.operator import cli
 from osm_polygon_sentence_relevance.operator.controller import LiveProgress
 from osm_polygon_sentence_relevance.operator.oar import JobState, JobStatus
-from osm_polygon_sentence_relevance.operator.sites import SiteProbe
+from osm_polygon_sentence_relevance.operator.sites import SiteProbe, SiteRequirements
 from osm_polygon_sentence_relevance.operator.staging import LabelAssets
 from osm_polygon_sentence_relevance.operator.state import RunPhase
 
@@ -92,20 +92,34 @@ def test_live_progress_is_rendered(capsys: pytest.CaptureFixture[str]) -> None:
 
 
 def test_site_probe_parses_frontend_facts(monkeypatch: pytest.MonkeyPatch) -> None:
-    class Result:
-        stdout = "1000 80000 3\n"
-
     class FakeSsh:
+        command = ""
+
         def __init__(self, **_kwargs: object) -> None:
             pass
 
-        def run(self, _command: str) -> Result:
-            return Result()
+        def run(self, command: str) -> SimpleNamespace:
+            self.__class__.command = command
+            return SimpleNamespace(stdout="1000 80000 8 3\n")
 
     monkeypatch.setattr(cli, "SshClient", FakeSsh)
     assert cli._probe_target("nancy") == SiteProbe(
-        "nancy", "nancy", True, 80_000, (7, 0), 1_024_000, 180
+        "nancy", "nancy", True, 80_000, (8, 0), 1_024_000, 180
     )
+    assert "oarnodes -J" in FakeSsh.command
+    assert "jq -r" in FakeSsh.command
+    assert "oarstat -p" not in FakeSsh.command
+
+
+def test_storage_cleanup_is_attempted_only_when_it_can_restore_compatibility() -> None:
+    requirements = SiteRequirements(
+        gpu_memory_mb=40_000,
+        persistent_free_bytes=10_000,
+    )
+    no_gpu = SiteProbe("x", "x", True, 0, None, 100_000, 0)
+    low_storage = SiteProbe("x", "x", True, 80_000, (8, 0), 1, 0)
+    assert not cli._storage_cleanup_can_help([no_gpu], requirements)
+    assert cli._storage_cleanup_can_help([low_storage], requirements)
 
 
 def test_git_head_requires_immutable_clean_checkout(
