@@ -41,9 +41,10 @@ from osm_polygon_sentence_relevance.operator.oar import (
     format_job_status,
     is_live_state,
 )
-from osm_polygon_sentence_relevance.operator.quota import (
-    QuotaUsage,
-    parse_quota_output,
+from osm_polygon_sentence_relevance.operator.quota import read_home_quota
+from osm_polygon_sentence_relevance.operator.site_discovery import (
+    DEFAULT_SITES,
+    probe_site,
 )
 from osm_polygon_sentence_relevance.operator.sites import (
     NoCompatibleSiteError,
@@ -51,12 +52,7 @@ from osm_polygon_sentence_relevance.operator.sites import (
     SiteRequirements,
     select_site,
 )
-from osm_polygon_sentence_relevance.operator.sites_availability import (
-    AvailabilityProbe,
-    availability_command,
-    parse_availability_stdout,
-)
-from osm_polygon_sentence_relevance.operator.ssh import SshClient, SshError
+from osm_polygon_sentence_relevance.operator.ssh import SshClient
 from osm_polygon_sentence_relevance.operator.staging import Stager
 from osm_polygon_sentence_relevance.operator.state import RunPhase, RunState, StateStore
 from osm_polygon_sentence_relevance.operator.workflows import (
@@ -66,27 +62,8 @@ from osm_polygon_sentence_relevance.operator.workflows import (
     split_finalization_submission,
 )
 
-DEFAULT_TARGETS: Final[tuple[str, ...]] = (
-    "bordeaux",
-    "grenoble",
-    "lille",
-    "louvain",
-    "luxembourg",
-    "lyon",
-    "nancy",
-    "nantes",
-    "rennes",
-    "sophia",
-    "strasbourg",
-    "toulouse",
-)
 _SUBMISSION_HEADROOM_BYTES: Final[int] = 512 * 1024**2
 _LABEL_STAGING_HEADROOM_BYTES: Final[int] = 22 * 1024**3
-_REMOTE_QUOTA_COMMAND: Final[str] = (
-    "set +e; quota_output=$(quota 2>&1); quota_rc=$?; set -e; "
-    'if [ "$quota_rc" -gt 1 ]; then exit "$quota_rc"; fi; '
-    "printf '%s\\n' \"$quota_output\""
-)
 
 
 def _milestone(message: str) -> None:
@@ -138,118 +115,6 @@ def _resolve_input_revision(explicit: str | None, stage: str) -> str:
     if not sha:
         raise RuntimeError("input dataset main did not resolve to a commit")
     return sha
-
-
-def _probe_target(
-    target: str,
-    run_id: str | None = None,
-    requirements: SiteRequirements | None = None,
-) -> SiteProbe:
-    """Probe a Grid'5000 frontend for factual availability.
-
-    Reads ``oarnodes -J`` via :func:`parse_availability_stdout` so the
-    ``idle_compatible`` flag is a direct OAR observation rather than a
-    queue-depth projection. ``queued_jobs`` is populated for diagnostics
-    only; it is never used as an ETA forecast.
-    """
-
-    if run_id is not None and re.fullmatch(r"[0-9a-f]{20}", run_id) is None:
-        raise ValueError("run ID must be twenty lowercase hexadecimal characters")
-    _validate_safe_path(target)
-    ssh = SshClient(target=target, attempts=1, command_timeout=30)
-    managed_probe = (
-        f'run_root="$HOME/osm-polygon-operator/{run_id}"; '
-        'test -f "$run_root/.operator-managed.json" && managed=1; '
-        'test -x "$run_root/llama-server-bin/llama-server" && runtime_ready=1'
-        if run_id is not None
-        else ":"
-    )
-    probe = r"""
-set -euo pipefail
-command -v oarnodes >/dev/null
-command -v jq >/dev/null
-free_kb=$(df -Pk "$HOME" | awk 'NR==2 {print $4}')
-managed=0
-runtime_ready=0
-__MANAGED_PROBE__
-printf '%s\n%s\n%s\n' "$free_kb" "$managed" "$runtime_ready"
-""".replace("__MANAGED_PROBE__", managed_probe).strip()
-    try:
-        availability_text = _result_text(ssh.run(availability_command()))
-        avail = parse_availability_stdout(availability_text)
-        probe_lines = _result_text(ssh.run(probe)).splitlines()
-        if len(probe_lines) != 3:
-            raise ValueError("invalid site probe output")
-        free_kb_raw, managed_raw, runtime_ready_raw = (
-            line.strip() for line in probe_lines
-        )
-        if managed_raw not in {"0", "1"} or runtime_ready_raw not in {"0", "1"}:
-            raise ValueError("invalid managed-run probe output")
-        quota = _read_remote_quota(ssh)
-        gpu_memory, gpu_capability = _aggregate_peak_gpu(avail)
-        idle = avail.idle_compatible(requirements or SiteRequirements())
-        waiting = _queue_depth(ssh)
-    except (SshError, ValueError, IndexError):
-        return SiteProbe(
-            name=target.split("@")[-1].split(".")[0],
-            target=target,
-            reachable=False,
-            gpu_memory_mb=0,
-            cuda_capability=None,
-            persistent_free_bytes=0,
-            queued_jobs=0,
-        )
-    return SiteProbe(
-        name=target.split("@")[-1].split(".")[0],
-        target=target,
-        reachable=True,
-        gpu_memory_mb=gpu_memory,
-        cuda_capability=gpu_capability,
-        persistent_free_bytes=min(
-            int(free_kb_raw) * 1024,
-            quota.soft_headroom_bytes,
-        ),
-        queued_jobs=waiting,
-        idle_compatible=idle,
-        has_managed_run=managed_raw == "1",
-        label_runtime_ready=runtime_ready_raw == "1",
-    )
-
-
-def _validate_safe_path(value: str) -> None:
-    """Reject any character that could subvert a shell interpolation."""
-
-    from osm_polygon_sentence_relevance.operator.relay import (
-        _validate_safe_path as _relay_validate,
-    )
-
-    _relay_validate(value)
-
-
-def _aggregate_peak_gpu(
-    probe: AvailabilityProbe,
-) -> tuple[int, tuple[int, int] | None]:
-    """Return the (memory_mb, capability) of the largest compatible node."""
-
-    if not probe.gpu_nodes:
-        return 0, None
-    best = max(probe.gpu_nodes, key=lambda n: n.gpu_memory_mb)
-    return best.gpu_memory_mb, best.cuda_capability
-
-
-def _queue_depth(ssh: SshClient) -> int:
-    """Return the number of jobs the user currently has Waiting or Hold.
-
-    This is a direct OAR observation; it is recorded for diagnostics but
-    never interpreted as an ETA forecast.
-    """
-
-    cmd = "oarstat -u 2>/dev/null | awk '$5 ~ /Waiting|Hold/ {n++} END {print n+0}'"
-    try:
-        result = ssh.run(cmd)
-        return int(_result_text(result).strip())
-    except (SshError, ValueError):
-        return 0
 
 
 def _storage_cleanup_can_help(
@@ -308,12 +173,6 @@ def _usage_policy_preflight(ssh: SshClient, site: str) -> None:
     )
 
 
-def _read_remote_quota(ssh: SshClient) -> QuotaUsage:
-    """Read the site's current home quota, including over-quota rc=1."""
-
-    return parse_quota_output(_result_text(ssh.run(_REMOTE_QUOTA_COMMAND)))
-
-
 def _storage_preflight(
     ssh: SshClient,
     *,
@@ -324,11 +183,11 @@ def _storage_preflight(
 
     if minimum_headroom_bytes < 0:
         raise ValueError("minimum storage headroom must be non-negative")
-    quota = _read_remote_quota(ssh)
+    quota = read_home_quota(ssh)
     if quota.soft_headroom_bytes >= minimum_headroom_bytes:
         return
     _cleanup_remote(ssh, execute=True, protected_root=protected_root)
-    quota = _read_remote_quota(ssh)
+    quota = read_home_quota(ssh)
     if quota.soft_headroom_bytes < minimum_headroom_bytes:
         raise RuntimeError("Grid'5000 home soft quota has insufficient safe headroom")
 
@@ -904,7 +763,7 @@ def _optimize_queued_start(
             and trial_job > 0
             and isinstance(deadline_at, (int, float))
         ):
-            trial_probe = _probe_target(
+            trial_probe = probe_site(
                 trial_site,
                 config.run_id,
                 SiteRequirements(
@@ -929,14 +788,14 @@ def _optimize_queued_start(
         gpu_memory_mb=getattr(args, "gpu_memory_mb", 40_000),
         persistent_free_bytes=_SUBMISSION_HEADROOM_BYTES,
     )
-    targets = tuple(dict.fromkeys(getattr(args, "site", DEFAULT_TARGETS)))
+    targets = tuple(dict.fromkeys(getattr(args, "site", DEFAULT_SITES)))
     probes: list[SiteProbe] = []
     _milestone(
         "Queued start is distant; checking every site for an immediate "
         "policy-compliant GPU"
     )
     for target in targets:
-        probe = _probe_target(target, config.run_id, requirements)
+        probe = probe_site(target, config.run_id, requirements)
         probes.append(probe)
         if not probe.reachable:
             _milestone(f"Immediate candidate {target}: unavailable")
@@ -1204,7 +1063,7 @@ def _run(args: argparse.Namespace) -> int:
     probes: list[SiteProbe] = []
     for target in dict.fromkeys(args.site):
         _milestone(f"Probing Grid'5000 site: {target}")
-        probe = _probe_target(target, config.run_id, requirements)
+        probe = probe_site(target, config.run_id, requirements)
         probes.append(probe)
         if probe.reachable:
             _milestone(
@@ -1227,7 +1086,7 @@ def _run(args: argparse.Namespace) -> int:
         probes = []
         for target in dict.fromkeys(args.site):
             _milestone(f"Re-probing Grid'5000 site: {target}")
-            probes.append(_probe_target(target, config.run_id, requirements))
+            probes.append(probe_site(target, config.run_id, requirements))
         selection = select_site(probes, requirements)
     target = selection.selected.target
     _milestone(f"Selected Grid'5000 site: {selection.selected.name}")
@@ -1744,7 +1603,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--region")
     run.add_argument("--stage", choices=[stage.value for stage in Stage], required=True)
     run.add_argument("--input-revision")
-    run.add_argument("--site", action="append", default=list(DEFAULT_TARGETS))
+    run.add_argument("--site", action="append", default=list(DEFAULT_SITES))
     run.add_argument("--batch-size", type=int, default=128)
     run.add_argument("--row-limit", type=int, default=0)
     run.add_argument("--llama-parallel", type=int, default=8)
@@ -1764,7 +1623,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="resume or classify a historical run by its durable run ID",
     )
     resume.add_argument("run_id")
-    resume.add_argument("--site", action="append", default=list(DEFAULT_TARGETS))
+    resume.add_argument("--site", action="append", default=list(DEFAULT_SITES))
     resume.add_argument("--gpu-memory-mb", type=int, default=40_000)
     resume.add_argument("--poll-seconds", type=float, default=30.0)
     resume.set_defaults(handler=_resume_handler)

@@ -13,8 +13,6 @@ from osm_polygon_sentence_relevance.operator import cli
 from osm_polygon_sentence_relevance.operator.config import OperatorConfig
 from osm_polygon_sentence_relevance.operator.oar import ExitClass
 from osm_polygon_sentence_relevance.operator.sites import SiteProbe, SiteRequirements
-from osm_polygon_sentence_relevance.operator.sites_availability import AvailabilityProbe
-from osm_polygon_sentence_relevance.operator.ssh import SshError
 from osm_polygon_sentence_relevance.operator.state import RunPhase, StateStore
 
 
@@ -218,17 +216,8 @@ def test_resume_refuses_tampered_persisted_identity(
 def test_small_cli_validation_and_fallback_branches(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    assert cli._aggregate_peak_gpu(AvailabilityProbe(())) == (0, None)
     with pytest.raises(ValueError, match="non-negative"):
         cli._required_staging_headroom("label", -1)
-    with pytest.raises(ValueError, match="twenty"):
-        cli._probe_target("nancy", "bad")
-
-    class BrokenSsh:
-        def run(self, _command: str) -> Any:
-            raise SshError("offline", category="transport", returncode=255, attempts=1)
-
-    assert cli._queue_depth(BrokenSsh()) == 0  # type: ignore[arg-type]
     requirements = SiteRequirements(persistent_free_bytes=10)
     assert cli._storage_cleanup_can_help(
         [SiteProbe("x", "x", True, 80_000, (8, 0), 1, 0)], requirements

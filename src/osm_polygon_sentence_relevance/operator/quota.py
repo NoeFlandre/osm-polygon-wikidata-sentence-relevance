@@ -4,6 +4,18 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from typing import TYPE_CHECKING, Final
+
+if TYPE_CHECKING:
+    from osm_polygon_sentence_relevance.operator.ssh import SshClient
+
+#: Read-only home-quota acquisition. ``set +e`` keeps rc=1 (over quota) from
+#: aborting the command; rc>1 still surfaces as a transport failure.
+_HOME_QUOTA_COMMAND: Final[str] = (
+    "set +e; quota_output=$(quota 2>&1); quota_rc=$?; set -e; "
+    'if [ "$quota_rc" -gt 1 ]; then exit "$quota_rc"; fi; '
+    "printf '%s\\n' \"$quota_output\""
+)
 
 _QUOTA_ROW = re.compile(
     r"^\s*(?P<used>[0-9]+)\*?\s+"
@@ -57,4 +69,10 @@ def parse_quota_output(output: str) -> QuotaUsage:
     raise QuotaError("home quota output has no usable data row")
 
 
-__all__ = ["QuotaError", "QuotaUsage", "parse_quota_output"]
+def read_home_quota(ssh: SshClient) -> QuotaUsage:
+    """Read the current home quota over SSH, tolerating over-quota rc=1."""
+
+    return parse_quota_output(ssh.run(_HOME_QUOTA_COMMAND).stdout)
+
+
+__all__ = ["QuotaError", "QuotaUsage", "parse_quota_output", "read_home_quota"]

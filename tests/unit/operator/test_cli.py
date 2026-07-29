@@ -103,82 +103,9 @@ def test_status_prints_durable_json(
     assert '"phase": "running"' in capsys.readouterr().out
 
 
-def test_probe_failure_is_incompatible(monkeypatch: pytest.MonkeyPatch) -> None:
-    class BrokenSsh:
-        def __init__(self, **_kwargs: object) -> None:
-            pass
-
-        def run(self, _command: str) -> object:
-            raise ValueError("offline")
-
-    monkeypatch.setattr(cli, "SshClient", BrokenSsh)
-    probe = cli._probe_target("nancy")
-    assert not probe.reachable
-
-
 def test_live_progress_is_rendered(capsys: pytest.CaptureFixture[str]) -> None:
     cli._emit(LiveProgress(42, "build.stdout.log", "one\ntwo\n", 8))
     assert capsys.readouterr().out.splitlines() == ["[job 42] one", "[job 42] two"]
-
-
-def test_site_probe_parses_frontend_facts(monkeypatch: pytest.MonkeyPatch) -> None:
-    class FakeSsh:
-        commands: list[str] = []
-
-        def __init__(self, **_kwargs: object) -> None:
-            pass
-
-        def run(self, command: str) -> SimpleNamespace:
-            self.__class__.commands.append(command)
-            if "oarnodes -J" in command:
-                # Two alive idle GPU nodes, one busy, one non-Alive.
-                return SimpleNamespace(
-                    stdout=(
-                        '{"state":"Alive","jobs":0,"gpu_mem":80000,'
-                        '"gpu_compute_capability_major":8}\n'
-                        '{"state":"Alive","jobs":2,"gpu_mem":40000,'
-                        '"gpu_compute_capability_major":8}\n'
-                        '{"state":"Dead","jobs":0,"gpu_mem":80000,'
-                        '"gpu_compute_capability_major":8}\n'
-                    )
-                )
-            if "oarstat" in command:
-                return SimpleNamespace(stdout="3\n")
-            if "quota" in command:
-                return SimpleNamespace(stdout=" 1000 25000000 100000000\n")
-            return SimpleNamespace(stdout="1000\n1\n1\n")
-
-    monkeypatch.setattr(cli, "SshClient", FakeSsh)
-    assert cli._probe_target("nancy", "a" * 20) == SiteProbe(
-        "nancy",
-        "nancy",
-        True,
-        80_000,
-        (8, 0),
-        1_024_000,  # min(1000*1024 free kb, quota headroom)
-        3,
-        True,  # idle_compatible from oarnodes idle node
-        True,
-        True,
-    )
-    assert any("oarnodes -J" in c for c in FakeSsh.commands)
-    assert not any("oarstat -p" in c for c in FakeSsh.commands)
-
-
-def test_site_probe_uses_zero_headroom_after_soft_quota(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    class FakeSsh:
-        def __init__(self, **_kwargs: object) -> None:
-            pass
-
-        def run(self, command: str) -> SimpleNamespace:
-            if "oarnodes" in command:
-                return SimpleNamespace(stdout="100000000 80000 8 0 0\n")
-            return SimpleNamespace(stdout=" 30000000* 25000000 100000000\n")
-
-    monkeypatch.setattr(cli, "SshClient", FakeSsh)
-    assert cli._probe_target("nancy").persistent_free_bytes == 0
 
 
 def test_storage_cleanup_is_attempted_only_when_it_can_restore_compatibility() -> None:
@@ -422,7 +349,7 @@ def _install_run_fakes(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(cli, "_resolve_input_revision", lambda *_a: "b" * 40)
     monkeypatch.setattr(
         cli,
-        "_probe_target",
+        "probe_site",
         lambda target, _run_id, _requirements=None: SiteProbe(
             target, target, True, 80_000, (8, 0), 100 * 1024**3, 0
         ),
@@ -473,7 +400,7 @@ def test_run_reclaims_managed_storage_then_reprobes(
     )
     cleaned: list[bool] = []
     monkeypatch.setattr(
-        cli, "_probe_target", lambda _target, _run_id, _requirements=None: next(probes)
+        cli, "probe_site", lambda _target, _run_id, _requirements=None: next(probes)
     )
     monkeypatch.setattr(
         cli,
@@ -506,7 +433,7 @@ def test_run_label_reuses_checkpoints_and_completes(
     _install_run_fakes(monkeypatch, tmp_path)
     monkeypatch.setattr(
         cli,
-        "_probe_target",
+        "probe_site",
         lambda target, _run_id, _requirements=None: SiteProbe(
             target,
             target,

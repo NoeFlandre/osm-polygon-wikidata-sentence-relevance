@@ -133,7 +133,7 @@ def test_cli_adopts_running_trial_then_cancels_fallback(
     monkeypatch.setattr(cli, "_storage_preflight", lambda *_a, **_kw: None)
     monkeypatch.setattr(
         cli,
-        "_probe_target",
+        "probe_site",
         lambda site, *_a, **_kw: _ready_probe(site),
     )
     args = SimpleNamespace(site=["nancy"], gpu_memory_mb=40_000)
@@ -171,7 +171,7 @@ def test_cli_retains_fallback_when_no_runtime_ready_candidate(
     monkeypatch.setattr(cli, "_remote_home", lambda _ssh: PurePosixPath("/home/u"))
     monkeypatch.setattr(
         cli,
-        "_probe_target",
+        "probe_site",
         lambda site, *_a, **_kw: SiteProbe(
             site,
             site,
@@ -231,7 +231,7 @@ def test_cli_recovers_persisted_running_trial(
     monkeypatch.setattr(cli, "_remote_home", lambda _ssh: PurePosixPath("/home/u"))
     monkeypatch.setattr(
         cli,
-        "_probe_target",
+        "probe_site",
         lambda site, *_a, **_kw: _ready_probe(site),
     )
     args = SimpleNamespace(site=["nancy"], gpu_memory_mb=40_000)

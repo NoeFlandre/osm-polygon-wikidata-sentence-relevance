@@ -524,7 +524,7 @@ def test_resume_reroutes_cross_site_and_submits_exactly_one_new_allocation(
             has_managed_run=False,
         )
 
-    monkeypatch.setattr(cli, "_probe_target", fake_probe)
+    monkeypatch.setattr(cli, "probe_site", fake_probe)
 
     config = OperatorConfig.build(
         scope="region",
