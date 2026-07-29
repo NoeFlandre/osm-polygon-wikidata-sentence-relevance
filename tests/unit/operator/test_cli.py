@@ -437,6 +437,48 @@ def test_public_helpers(
         cli._mark_remote_status(ssh, layout, "unknown")  # type: ignore[arg-type]
 
 
+def test_failed_allocation_marks_managed_remote_root_eligible_for_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A classified failure must not leave its managed marker permanently active."""
+
+    calls: list[tuple[object, ...]] = []
+    monkeypatch.setattr(
+        cli,
+        "_transition_terminal",
+        lambda *args, **kwargs: calls.append(("transition", kwargs["target"])),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_mark_remote_status",
+        lambda ssh, layout, status: calls.append(("marker", ssh, layout, status)),
+    )
+    ssh = object()
+    layout = cli.RemoteLayout(PurePosixPath("/r"))
+
+    with pytest.raises(RuntimeError, match="failed deterministically"):
+        cli._apply_classification(
+            store=object(),  # type: ignore[arg-type]
+            config=OperatorConfig.build(
+                scope="region",
+                region="afghanistan-latest",
+                stage="label",
+                source_commit="a" * 40,
+                input_revision="b" * 40,
+            ),
+            ssh=ssh,  # type: ignore[arg-type]
+            layout=layout,
+            job_id=2895249,
+            active_stage="label",
+            classification=ExitClass.FAILED,
+        )
+
+    assert calls == [
+        ("transition", RunPhase.FAILED),
+        ("marker", ssh, layout, "failed"),
+    ]
+
+
 def test_ensure_llama_server_delegates_to_monitor_job_with_log(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -459,6 +501,8 @@ def test_ensure_llama_server_delegates_to_monitor_job_with_log(
         job_id_arg: int,
         log_name_arg: str,
         poll_seconds_arg: float,
+        *,
+        sleeper: object | None = None,
     ) -> None:
         calls.append(
             {
@@ -468,6 +512,7 @@ def test_ensure_llama_server_delegates_to_monitor_job_with_log(
                 "job_id": job_id_arg,
                 "log_name": log_name_arg,
                 "poll_seconds": poll_seconds_arg,
+                "sleeper": sleeper,
             }
         )
 
@@ -489,6 +534,7 @@ def test_ensure_llama_server_delegates_to_monitor_job_with_log(
     assert calls[0]["job_id"] == 99
     assert calls[0]["log_name"] == "build.stdout.log"
     assert calls[0]["poll_seconds"] == 5.0
+    assert calls[0]["sleeper"] is cli.time.sleep
 
 
 def test_llama_build_reattaches_to_recorded_queued_job(

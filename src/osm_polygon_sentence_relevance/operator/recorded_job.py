@@ -145,17 +145,20 @@ def _parse_batch_index(name: str) -> int | None:
     return int(digits)
 
 
-def _read_progress_payload(ssh: SshClient, label_work_root: str) -> dict[str, object]:
+def _read_progress_payload(
+    ssh: SshClient, label_work_root: str
+) -> dict[str, object] | None:
     """Read and validate ``${label_work_root}/progress.json``.
 
-    Raises :class:`ResumeError` if the file is missing, malformed, or not a
-    mapping. The production ``CheckpointStore`` writes progress.json at the
-    label-work root, *not* under ``checkpoints/``.
+    A missing file is represented by ``None`` because a payload can fail
+    before its first checkpoint. Malformed, non-mapping content still raises
+    :class:`ResumeError`. The production ``CheckpointStore`` writes
+    progress.json at the label-work root, *not* under ``checkpoints/``.
     """
 
     raw = _read_remote_text(ssh, f"{label_work_root.rstrip('/')}/progress.json")
     if not raw.strip():
-        return {"completed": 0, "total": 0, "identity": None}
+        return None
     try:
         payload = json.loads(raw)
     except json.JSONDecodeError as exc:
@@ -244,34 +247,38 @@ def inspect_remote_resume(
     manifest_present = manifest_text == "yes"
 
     progress_payload = _read_progress_payload(ssh, label_work_root)
-    progress_identity = progress_payload.get("identity")
-    progress_identity_matches = isinstance(progress_identity, Mapping) and dict(
-        progress_identity
-    ) == dict(expected_identity)
-    try:
-        completed = int(cast(int | str, progress_payload.get("completed", 0)))
-    except (TypeError, ValueError) as exc:
-        raise ResumeError("progress.json completed is invalid") from exc
-    if "total" in progress_payload:
-        try:
-            total = int(cast(int | str, progress_payload["total"]))
-        except (TypeError, ValueError) as exc:
-            raise ResumeError("progress.json total is invalid") from exc
-    elif "remaining" in progress_payload:
-        try:
-            remaining = int(cast(int | str, progress_payload["remaining"]))
-        except (TypeError, ValueError) as exc:
-            raise ResumeError("progress.json remaining is invalid") from exc
-        total = completed + remaining
+    if progress_payload is None:
+        progress = ProgressFacts(completed=0, total=0, identity_matches=False)
+        progress_identity_matches = False
     else:
-        raise ResumeError("progress.json missing total/remaining")
-    if completed < 0 or total <= 0 or completed > total:
-        raise ResumeError("progress.json counters are inconsistent")
-    progress = ProgressFacts(
-        completed=completed,
-        total=total,
-        identity_matches=progress_identity_matches,
-    )
+        progress_identity = progress_payload.get("identity")
+        progress_identity_matches = isinstance(progress_identity, Mapping) and dict(
+            progress_identity
+        ) == dict(expected_identity)
+        try:
+            completed = int(cast(int | str, progress_payload.get("completed", 0)))
+        except (TypeError, ValueError) as exc:
+            raise ResumeError("progress.json completed is invalid") from exc
+        if "total" in progress_payload:
+            try:
+                total = int(cast(int | str, progress_payload["total"]))
+            except (TypeError, ValueError) as exc:
+                raise ResumeError("progress.json total is invalid") from exc
+        elif "remaining" in progress_payload:
+            try:
+                remaining = int(cast(int | str, progress_payload["remaining"]))
+            except (TypeError, ValueError) as exc:
+                raise ResumeError("progress.json remaining is invalid") from exc
+            total = completed + remaining
+        else:
+            raise ResumeError("progress.json missing total/remaining")
+        if completed < 0 or total <= 0 or completed > total:
+            raise ResumeError("progress.json counters are inconsistent")
+        progress = ProgressFacts(
+            completed=completed,
+            total=total,
+            identity_matches=progress_identity_matches,
+        )
 
     entries = _enumerate_remote_checkpoint_files(ssh, label_work_root)
     if entries:

@@ -350,6 +350,7 @@ def _apply_classification(
             target=RunPhase.FAILED,
             facts={"failed_job_id": job_id},
         )
+        _mark_remote_status(ssh, layout, "failed")
         raise RuntimeError(
             f"recorded allocation {job_id} failed deterministically; not "
             "resubmitting automatically"
@@ -1143,6 +1144,7 @@ def _run(args: argparse.Namespace) -> int:
             final_job,
             "finalize.stdout.log",
             args.poll_seconds,
+            sleeper=time.sleep,
         )
         _assert_remote_exit_zero(ssh, layout, final_job, "finalize.exit_code")
         store.transition(
@@ -1328,6 +1330,7 @@ def _ensure_llama_server(
         job_id,
         "build.stdout.log",
         poll_seconds,
+        sleeper=time.sleep,
     )
     if not _llama_server_ready(ssh, layout):
         raise RuntimeError("CUDA llama-server build did not produce a binary")

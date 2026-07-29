@@ -478,9 +478,7 @@ def test_read_progress_payload_rejects_invalid_json_and_non_mapping(
         def read_since(self, _path: str, _o: int) -> Any:
             return LogChunk(text="", next_offset=0, eof=True)
 
-    empty = recorded_job._read_progress_payload(_Blank(), str(tmp_path))
-    assert empty["completed"] == 0
-    assert empty["total"] == 0
+    assert recorded_job._read_progress_payload(_Blank(), str(tmp_path)) is None
 
 
 def test_read_remote_bytes_digest_rejects_malformed_output() -> None:
@@ -540,6 +538,52 @@ def test_inspect_remote_resume_rejects_inconsistent_counters(tmp_path: Path) -> 
             expected_identity={},
             exit_file=str(tmp_path / "x.exit"),
         )
+
+
+def test_inspect_remote_resume_treats_absent_progress_as_failed_not_corrupt(
+    tmp_path: Path,
+) -> None:
+    """A pre-checkpoint payload failure has no progress file and is not corruption."""
+
+    from osm_polygon_sentence_relevance.operator import recorded_job
+    from osm_polygon_sentence_relevance.operator.oar import (
+        ExitClass,
+        JobState,
+        JobStatus,
+    )
+    from osm_polygon_sentence_relevance.operator.ssh import LogChunk
+
+    class _Ssh:
+        def run(self, command: str) -> Any:
+            if "manifest.json" in command:
+                return LogChunk(text="no", next_offset=0, eof=True)
+            if "find" in command and "checkpoints" in command:
+                return LogChunk(text="", next_offset=0, eof=True)
+            return LogChunk(text="", next_offset=0, eof=True)
+
+        def read_since(self, _path: str, _offset: int) -> Any:
+            return LogChunk(text="", next_offset=0, eof=True)
+
+    inspection = recorded_job.inspect_remote_resume(
+        _Ssh(),
+        label_work_root=str(tmp_path / "label-work"),
+        label_output_root=str(tmp_path / "label-output"),
+        expected_identity={},
+        exit_file=str(tmp_path / "labeling.exit_code"),
+    )
+
+    assert inspection.progress == recorded_job.ProgressFacts(
+        completed=0,
+        total=0,
+        identity_matches=False,
+    )
+    assert (
+        recorded_job.classify_terminal(
+            JobStatus(2895249, JobState.TERMINATED, exit_code=256),
+            inspection,
+        )
+        is ExitClass.FAILED
+    )
 
 
 def test_classify_terminal_insufficient_evidence_yields_failed(

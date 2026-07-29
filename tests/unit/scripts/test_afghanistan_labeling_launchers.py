@@ -184,9 +184,9 @@ def test_submitter_rejects_invalid_gpu_memory_override(tmp_path: Path) -> None:
     assert not tmp_path.joinpath("oarsub.calls").exists()
 
 
-def test_job_wrapper_verifies_checkout_gpu_and_persists_logs() -> None:
+def test_job_wrapper_verifies_checkout_and_persists_logs() -> None:
     text = _text("run_afghanistan_labeling_job.sh")
-    assert "gpu_preflight.py" in text
+    assert "gpu_preflight.py" not in text
     assert "git -C" in text
     assert "validate_clean_checkout" in text
     assert "_checkout_guard.sh" in text
@@ -215,7 +215,20 @@ def test_job_wrapper_acquires_nonblocking_run_lock_before_gpu_work() -> None:
     text = _text("run_afghanistan_labeling_job.sh")
     assert "flock -n" in text
     assert "labeling.run.lock" in text
-    assert text.index("flock -n") < text.index("gpu_preflight.py")
+    assert text.index("flock -n") < text.index("deadline_helper_run")
+
+
+def test_labeling_payload_uses_dependency_free_cuda_preflight() -> None:
+    """llama.cpp labeling must not require the optional Torch/SaT environment."""
+
+    wrapper = _text("run_afghanistan_labeling_job.sh")
+    payload = _text("run_afghanistan_labeling.sh")
+
+    assert "torch" not in wrapper
+    assert "gpu_preflight.py" not in wrapper
+    assert "command -v nvidia-smi" in payload
+    assert "nvidia-smi -L" in payload
+    assert payload.index("nvidia-smi -L") < payload.index("llama-server --model")
 
 
 def test_job_wrapper_translates_submit_arguments_to_payload_contract() -> None:

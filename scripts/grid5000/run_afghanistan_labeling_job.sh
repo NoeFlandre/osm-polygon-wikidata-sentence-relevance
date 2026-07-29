@@ -89,10 +89,6 @@ export PATH="${LLAMA_SERVER_DIR}:${PATH}"
 JOB_LOG_DIR="${LOG_ROOT}/${OAR_JOB_ID}"
 mkdir -m 0700 -- "${JOB_LOG_DIR}"
 
-"${PYTHON}" "${REPO_ROOT}/scripts/grid5000/gpu_preflight.py" \
-    >"${JOB_LOG_DIR}/gpu_preflight.json" \
-    2>"${JOB_LOG_DIR}/gpu_preflight.stderr.log"
-
 set +e
 # Wrap the payload so a 55-minute OAR allocation gives the labeling CLI
 # 45 minutes, a 5-minute graceful checkpoint window, and scheduler margin.
