@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 from hashlib import sha256
@@ -521,6 +522,117 @@ class OperatorConfig:
             tokenizer_repo_id=validated_tokenizer_repo,
             tokenizer_revision=validated_tokenizer_revision,
             prompt_version=validated_prompt_version,
+        )
+
+    @classmethod
+    def from_persisted(cls, identity: Mapping[str, object]) -> OperatorConfig:
+        """Reconstruct a validated configuration from a persisted run_identity.
+
+        ``resume RUN_ID`` uses this to reattach or continue a historical run
+        without requiring the current local Git HEAD to match the run's
+        recorded source commit. The reconstruction is stage-aware: a split
+        identity never inherits label-only defaults, and vice versa.
+
+        Every field that was persisted in the original ``run_identity`` is
+        validated exactly as in :meth:`build`. The reconstructed
+        ``canonical_json`` therefore byte-matches the persisted one and the
+        ``run_id`` reproduces exactly.
+        """
+
+        def _opt(key: str, fallback: object) -> object:
+            value = identity.get(key)
+            return value if value not in (None, "") else fallback
+
+        identity_dict = cast("Mapping[str, str | int]", identity)
+        stage = _canonicalize_stage(cast(str, identity_dict["stage"]))
+        # Split identities never persisted label-only fields; we must NOT
+        # silently fall back to current defaults for those, because doing
+        # so would change the canonical JSON and break the run ID.
+        if stage is Stage.SPLIT:
+            return cls.build(
+                scope=cast(str, identity_dict["scope"]),
+                stage=Stage.SPLIT,
+                source_commit=cast(str, identity_dict["source_commit"]),
+                batch_size=identity_dict["batch_size"],
+                region=cast("str | None", identity_dict.get("region")),
+                input_revision=cast(
+                    "str | None", identity_dict.get("input_dataset_revision")
+                ),
+                input_dataset_id=cast(str, identity_dict["input_dataset_id"]),
+                output_dataset_id=cast(str, identity_dict["output_dataset_id"]),
+                pipeline_version=cast(str, _opt("pipeline_version", PIPELINE_VERSION)),
+                split_model=cast(str, _opt("split_model", DEFAULT_SPLIT_MODEL)),
+            )
+        if stage is Stage.LABEL:
+            return cls.build(
+                scope=cast(str, identity_dict["scope"]),
+                stage=Stage.LABEL,
+                source_commit=cast(str, identity_dict["source_commit"]),
+                batch_size=identity_dict["batch_size"],
+                row_limit=identity_dict["row_limit"],
+                llama_parallel=identity_dict["llama_parallel"],
+                llama_per_slot_context=identity_dict["llama_per_slot_context"],
+                llama_total_context=identity_dict["llama_total_context"],
+                request_concurrency=identity_dict["request_concurrency"],
+                region=cast("str | None", identity_dict.get("region")),
+                input_revision=cast(
+                    "str | None", identity_dict.get("input_dataset_revision")
+                ),
+                input_dataset_id=cast(str, identity_dict["input_dataset_id"]),
+                output_dataset_id=cast(str, identity_dict["output_dataset_id"]),
+                pipeline_version=cast(str, _opt("pipeline_version", PIPELINE_VERSION)),
+                model_repo_id=cast(
+                    str, _opt("model_repo_id", DEFAULT_LABEL_MODEL_REPO_ID)
+                ),
+                model_revision=cast(
+                    str, _opt("model_revision", DEFAULT_LABEL_MODEL_REVISION)
+                ),
+                model_file=cast(str, _opt("model_file", DEFAULT_LABEL_MODEL_FILE)),
+                model_file_sha256=cast(
+                    str, _opt("model_file_sha256", DEFAULT_LABEL_MODEL_FILE_SHA256)
+                ),
+                tokenizer_repo_id=cast(
+                    str, _opt("tokenizer_repo_id", DEFAULT_TOKENIZER_REPO_ID)
+                ),
+                tokenizer_revision=cast(
+                    str, _opt("tokenizer_revision", DEFAULT_TOKENIZER_REVISION)
+                ),
+                prompt_version=cast(str, _opt("prompt_version", PROMPT_VERSION)),
+            )
+        # Stage.ALL requires both split and label identity fields.
+        return cls.build(
+            scope=cast(str, identity_dict["scope"]),
+            stage=Stage.ALL,
+            source_commit=cast(str, identity_dict["source_commit"]),
+            batch_size=identity_dict["batch_size"],
+            row_limit=identity_dict["row_limit"],
+            llama_parallel=identity_dict["llama_parallel"],
+            llama_per_slot_context=identity_dict["llama_per_slot_context"],
+            llama_total_context=identity_dict["llama_total_context"],
+            request_concurrency=identity_dict["request_concurrency"],
+            region=cast("str | None", identity_dict.get("region")),
+            input_revision=cast(
+                "str | None", identity_dict.get("input_dataset_revision")
+            ),
+            input_dataset_id=cast(str, identity_dict["input_dataset_id"]),
+            output_dataset_id=cast(str, identity_dict["output_dataset_id"]),
+            pipeline_version=cast(str, _opt("pipeline_version", PIPELINE_VERSION)),
+            split_model=cast(str, _opt("split_model", DEFAULT_SPLIT_MODEL)),
+            model_repo_id=cast(str, _opt("model_repo_id", DEFAULT_LABEL_MODEL_REPO_ID)),
+            model_revision=cast(
+                str, _opt("model_revision", DEFAULT_LABEL_MODEL_REVISION)
+            ),
+            model_file=cast(str, _opt("model_file", DEFAULT_LABEL_MODEL_FILE)),
+            model_file_sha256=cast(
+                str, _opt("model_file_sha256", DEFAULT_LABEL_MODEL_FILE_SHA256)
+            ),
+            tokenizer_repo_id=cast(
+                str, _opt("tokenizer_repo_id", DEFAULT_TOKENIZER_REPO_ID)
+            ),
+            tokenizer_revision=cast(
+                str, _opt("tokenizer_revision", DEFAULT_TOKENIZER_REVISION)
+            ),
+            prompt_version=cast(str, _opt("prompt_version", PROMPT_VERSION)),
         )
 
     @property

@@ -7,11 +7,19 @@ import re
 import shlex
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
 from enum import StrEnum
+from zoneinfo import ZoneInfo
 
 from osm_polygon_sentence_relevance.operator.ssh import SshClient, SshRemoteError
 
 _JOB_ID_RE = re.compile(r"(?:OAR_JOB_ID=|^)([1-9][0-9]*)$", re.MULTILINE)
+
+#: Grid'5000 frontends report wall-clock times in the Europe/Paris zone.
+GRID5000_TZ: ZoneInfo = ZoneInfo("Europe/Paris")
+#: OAR emits ``scheduled_start`` either as an epoch integer or as a
+#: ``YYYY-MM-DD HH:MM:SS`` wall-clock string already in frontend local time.
+_TIMESTAMP_RE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}")
 
 
 class JobState(StrEnum):
@@ -58,6 +66,7 @@ class JobStatus:
     message: str = ""
     node: str | None = None
     scheduled_start: str | None = None
+    walltime_seconds: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,6 +81,89 @@ class CheckpointFacts:
 
 class OarError(RuntimeError):
     """Invalid scheduler response or operation."""
+
+
+#: OAR states that describe an allocation the operator must not duplicate.
+LIVE_STATES: frozenset[JobState] = frozenset(
+    {JobState.QUEUED, JobState.RUNNING, JobState.FINISHING}
+)
+
+
+def is_live_state(state: JobState) -> bool:
+    """Return True for queued, running, or finishing allocations."""
+
+    return state in LIVE_STATES
+
+
+def _parse_scheduled_start(raw: object) -> str | None:
+    """Render OAR's forecast start as an explicit Europe/Paris wall clock."""
+
+    if isinstance(raw, bool):
+        return None
+    if isinstance(raw, int):
+        if raw <= 0:
+            return None
+        return datetime.fromtimestamp(raw, tz=GRID5000_TZ).strftime("%Y-%m-%d %H:%M:%S")
+    if isinstance(raw, str) and _TIMESTAMP_RE.fullmatch(raw):
+        return raw
+    return None
+
+
+def _parse_walltime(raw: object) -> int | None:
+    """Parse OAR walltime expressed as seconds or an ``HH:MM:SS`` string."""
+
+    if isinstance(raw, bool):
+        return None
+    if isinstance(raw, int):
+        return raw if raw > 0 else None
+    if isinstance(raw, str):
+        matched = re.fullmatch(r"([0-9]+):([0-9]{2}):([0-9]{2})", raw)
+        if matched is not None:
+            hours, minutes, seconds = (int(group) for group in matched.groups())
+            return hours * 3600 + minutes * 60 + seconds
+        if raw.isdigit():
+            return int(raw)
+    return None
+
+
+def format_walltime(seconds: int) -> str:
+    """Format a strictly positive walltime in seconds as ``HH:MM:SS``.
+
+    OAR reports the requested walltime of an allocation. A zero or negative
+    walltime is never a valid request, so it is rejected here.
+    """
+
+    if seconds <= 0:
+        raise ValueError("walltime must be strictly positive")
+    hours, remainder = divmod(seconds, 3600)
+    minutes, secs = divmod(remainder, 60)
+    if minutes >= 60 or secs >= 60:
+        raise ValueError("walltime components must be within 00..59")
+    return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+
+
+def format_job_status(status: JobStatus) -> str:
+    """Render one concise, factual scheduler status."""
+
+    walltime = ""
+    if status.walltime_seconds is not None and status.walltime_seconds > 0:
+        walltime = f"; walltime {format_walltime(status.walltime_seconds)}"
+    if status.state is JobState.QUEUED:
+        if status.scheduled_start is not None:
+            return (
+                f"queued; scheduled start {status.scheduled_start} "
+                f"Europe/Paris{walltime}"
+            )
+        return f"queued; scheduler has no start-time prediction{walltime}"
+    if status.state is JobState.RUNNING:
+        node = f" on {status.node}" if status.node else ""
+        return f"running{node}{walltime}"
+    if (
+        status.state in {JobState.TERMINATED, JobState.ERROR, JobState.MISSING}
+        and status.exit_code is not None
+    ):
+        return f"{status.state.value} (exit {status.exit_code})"
+    return status.state.value
 
 
 def parse_job_id(output: str) -> int:
@@ -148,16 +240,7 @@ class OarClient:
             raise OarError("unsupported OAR job state")
         exit_code_raw = record.get("exit_code")
         exit_code = int(exit_code_raw) if exit_code_raw is not None else None
-        scheduled_start_raw = record.get("scheduled_start")
-        scheduled_start = (
-            scheduled_start_raw
-            if isinstance(scheduled_start_raw, str)
-            and re.fullmatch(
-                r"[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}",
-                scheduled_start_raw,
-            )
-            else None
-        )
+        scheduled_start = _parse_scheduled_start(record.get("scheduled_start"))
         return JobStatus(
             job_id=job_id,
             state=state,
@@ -165,6 +248,7 @@ class OarClient:
             message=str(record.get("message", "")),
             node=record.get("assigned_network_address"),
             scheduled_start=scheduled_start,
+            walltime_seconds=_parse_walltime(record.get("walltime")),
         )
 
     def cancel(self, job_id: int) -> None:
@@ -174,6 +258,8 @@ class OarClient:
 
 
 __all__ = [
+    "GRID5000_TZ",
+    "LIVE_STATES",
     "CheckpointFacts",
     "ExitClass",
     "JobState",
@@ -182,5 +268,8 @@ __all__ = [
     "OarError",
     "SubmissionRequest",
     "classify_exit",
+    "format_job_status",
+    "format_walltime",
+    "is_live_state",
     "parse_job_id",
 ]

@@ -180,7 +180,11 @@ def test_monitor_streams_logs_and_records_offset() -> None:
     assert state.value.phase is RunPhase.RUNNING
     assert state.value.facts["node"] == "gpu-1"
     assert state.value.facts["log_offset"] == 9
-    assert emitted[0].text == "progress\n"  # type: ignore[union-attr]
+    assert [item.text for item in emitted] == [
+        "running on gpu-1",
+        "progress\n",
+        "terminated (exit 0)",
+    ]  # type: ignore[union-attr]
 
 
 def test_monitor_handles_truncation_and_error_terminal() -> None:
@@ -191,4 +195,87 @@ def test_monitor_handles_truncation_and_error_terminal() -> None:
     )
     state.value.facts["log_offset"] = 99
     assert controller.monitor(42, log_name="stderr.log") is JobState.ERROR
-    assert emitted == []
+    assert [item.text for item in emitted] == ["error"]
+
+
+def test_monitor_reports_queued_schedule_before_payload_logs_exist() -> None:
+    controller, state, _oar, _stager, emitted = _controller(
+        phase=RunPhase.SUBMITTED,
+        statuses=[
+            JobStatus(
+                42,
+                JobState.QUEUED,
+                scheduled_start="2026-07-29 19:00:00",
+                walltime_seconds=3300,
+            ),
+            JobStatus(
+                42,
+                JobState.QUEUED,
+                scheduled_start="2026-07-29 19:00:00",
+                walltime_seconds=3300,
+            ),
+            JobStatus(42, JobState.TERMINATED, exit_code=0),
+        ],
+    )
+    state.value.facts["job_id"] = 42
+
+    assert controller.monitor(42, log_name="stdout.log") is JobState.TERMINATED
+    assert [item.text for item in emitted] == [
+        "queued; scheduled start 2026-07-29 19:00:00 Europe/Paris; walltime 00:55:00",
+        "terminated (exit 0)",
+    ]
+
+
+def test_monitor_explains_when_scheduler_has_no_start_prediction() -> None:
+    controller, state, _oar, _stager, emitted = _controller(
+        phase=RunPhase.SUBMITTED,
+        statuses=[
+            JobStatus(42, JobState.QUEUED, walltime_seconds=3300),
+            JobStatus(42, JobState.TERMINATED, exit_code=0),
+        ],
+    )
+    state.value.facts["job_id"] = 42
+
+    assert controller.monitor(42, log_name="stdout.log") is JobState.TERMINATED
+    assert emitted[0].text == (
+        "queued; scheduler has no start-time prediction; walltime 00:55:00"
+    )
+
+
+def test_monitor_running_reports_assigned_node_and_walltime() -> None:
+    controller, state, _oar, _stager, emitted = _controller(
+        phase=RunPhase.QUEUED,
+        statuses=[
+            JobStatus(42, JobState.RUNNING, node="chifflet-6", walltime_seconds=3600),
+            JobStatus(42, JobState.TERMINATED, exit_code=0),
+        ],
+    )
+    state.value.facts["job_id"] = 42
+
+    assert controller.monitor(42, log_name="stdout.log") is JobState.TERMINATED
+    assert emitted[0].text == "running on chifflet-6; walltime 01:00:00"
+
+
+def test_monitor_does_not_repeat_identical_scheduler_states() -> None:
+    queued = JobStatus(
+        42,
+        JobState.QUEUED,
+        scheduled_start="2026-07-29 19:00:00",
+        walltime_seconds=3300,
+    )
+    controller, state, _oar, _stager, emitted = _controller(
+        phase=RunPhase.SUBMITTED,
+        statuses=[
+            queued,
+            queued,
+            queued,
+            JobStatus(42, JobState.TERMINATED, exit_code=0),
+        ],
+    )
+    state.value.facts["job_id"] = 42
+
+    assert controller.monitor(42, log_name="stdout.log") is JobState.TERMINATED
+    assert [item.text for item in emitted] == [
+        "queued; scheduled start 2026-07-29 19:00:00 Europe/Paris; walltime 00:55:00",
+        "terminated (exit 0)",
+    ]

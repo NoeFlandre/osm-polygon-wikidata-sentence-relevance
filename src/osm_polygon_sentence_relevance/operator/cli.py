@@ -9,9 +9,10 @@ import shlex
 import subprocess
 import sys
 import time
-from pathlib import PurePosixPath
-from typing import Final
+from pathlib import Path, PurePosixPath
+from typing import Any, Final
 
+from osm_polygon_sentence_relevance.operator import recorded_job, relay
 from osm_polygon_sentence_relevance.operator.config import (
     DATA_ROOT,
     INPUT_DATASET_ID,
@@ -24,7 +25,14 @@ from osm_polygon_sentence_relevance.operator.controller import (
     Controller,
     LiveProgress,
 )
-from osm_polygon_sentence_relevance.operator.oar import JobState, JobStatus, OarClient
+from osm_polygon_sentence_relevance.operator.oar import (
+    ExitClass,
+    JobState,
+    JobStatus,
+    OarClient,
+    format_job_status,
+    is_live_state,
+)
 from osm_polygon_sentence_relevance.operator.quota import (
     QuotaUsage,
     parse_quota_output,
@@ -35,9 +43,14 @@ from osm_polygon_sentence_relevance.operator.sites import (
     SiteRequirements,
     select_site,
 )
+from osm_polygon_sentence_relevance.operator.sites_availability import (
+    AvailabilityProbe,
+    availability_command,
+    parse_availability_stdout,
+)
 from osm_polygon_sentence_relevance.operator.ssh import SshClient, SshError
 from osm_polygon_sentence_relevance.operator.staging import Stager
-from osm_polygon_sentence_relevance.operator.state import RunPhase, StateStore
+from osm_polygon_sentence_relevance.operator.state import RunPhase, RunState, StateStore
 from osm_polygon_sentence_relevance.operator.workflows import (
     RemoteLayout,
     llama_build_submission,
@@ -73,6 +86,12 @@ def _milestone(message: str) -> None:
     print(f"[operator] {message}", flush=True)
 
 
+#: Per-invocation active run ID. Set right after a validated
+#: ``store.load_or_create`` (or its persisted equivalent) and cleared in
+#: the enclosing ``finally``. Never scanned across unrelated runs.
+_ACTIVE_RUN_ID: str | None = None
+
+
 def _git_head() -> str:
     result = subprocess.run(
         ["git", "rev-parse", "HEAD"],
@@ -81,7 +100,7 @@ def _git_head() -> str:
         check=True,
         timeout=10,
     )
-    value = result.stdout.strip()
+    value = _result_text(result).strip()
     if len(value) != 40:
         raise RuntimeError("current source checkout has no immutable commit")
     dirty = subprocess.run(
@@ -112,75 +131,105 @@ def _resolve_input_revision(explicit: str | None, stage: str) -> str:
     return sha
 
 
-def _probe_target(target: str, run_id: str | None = None) -> SiteProbe:
+def _probe_target(
+    target: str,
+    run_id: str | None = None,
+    requirements: SiteRequirements | None = None,
+) -> SiteProbe:
+    """Probe a Grid'5000 frontend for factual availability.
+
+    Reads ``oarnodes -J`` via :func:`parse_availability_stdout` so the
+    ``idle_compatible`` flag is a direct OAR observation rather than a
+    queue-depth projection. ``queued_jobs`` is populated for diagnostics
+    only; it is never used as an ETA forecast.
+    """
+
     if run_id is not None and re.fullmatch(r"[0-9a-f]{20}", run_id) is None:
         raise ValueError("run ID must be twenty lowercase hexadecimal characters")
+    _validate_safe_path(target)
     ssh = SshClient(target=target, attempts=1, command_timeout=30)
-    # ``oarnodes -J`` is the authoritative OAR resource inventory. Restrict
-    # the maximum to currently Alive GPU resources; ``oarstat -p`` describes
-    # jobs and does not expose the node properties needed here.
     managed_probe = (
         f'test -f "$HOME/osm-polygon-operator/{run_id}/.operator-managed.json" '
         "&& managed=1"
         if run_id is not None
         else ":"
     )
-    command = r"""
+    probe = r"""
 set -euo pipefail
-command -v oarsub >/dev/null
 command -v oarnodes >/dev/null
 command -v jq >/dev/null
 free_kb=$(df -Pk "$HOME" | awk 'NR==2 {print $4}')
-inventory=$(oarnodes -J | jq -r '
-  (([.[] | select(.gpu_count > 0 and .state == "Alive") | .gpu_mem]
-    | max // 0 | tostring)
-   + " " +
-   ([.[] | select(.gpu_count > 0 and .state == "Alive")
-           | .gpu_compute_capability_major]
-    | max // 0 | tostring))
-')
-read -r gpu_mb gpu_major <<<"$inventory"
-waiting=$(oarstat -u 2>/dev/null | awk '$5 ~ /Waiting|Hold/ {n++} END {print n+0}')
 managed=0
 __MANAGED_PROBE__
-printf '%s %s %s %s %s\n' \
-  "$free_kb" "$gpu_mb" "$gpu_major" "$waiting" "$managed"
+printf '%s\n' "$free_kb"
 """.replace("__MANAGED_PROBE__", managed_probe).strip()
     try:
-        result = ssh.run(command)
-        (
-            free_kb_raw,
-            gpu_raw,
-            gpu_major_raw,
-            waiting_raw,
-            managed_raw,
-        ) = result.stdout.splitlines()[-1].split()
+        availability_text = _result_text(ssh.run(availability_command()))
+        avail = parse_availability_stdout(availability_text)
+        free_kb_raw = _result_text(ssh.run(probe)).splitlines()[-1].strip()
         quota = _read_remote_quota(ssh)
-        gpu_memory = int(gpu_raw)
-        gpu_major = int(gpu_major_raw)
+        gpu_memory, gpu_capability = _aggregate_peak_gpu(avail)
+        idle = avail.idle_compatible(requirements or SiteRequirements())
+        waiting = _queue_depth(ssh)
+    except (SshError, ValueError, IndexError):
         return SiteProbe(
             name=target.split("@")[-1].split(".")[0],
             target=target,
-            reachable=True,
-            gpu_memory_mb=gpu_memory,
-            cuda_capability=(gpu_major, 0) if gpu_memory > 0 else None,
-            persistent_free_bytes=min(
-                int(free_kb_raw) * 1024,
-                quota.soft_headroom_bytes,
-            ),
-            expected_start_seconds=int(waiting_raw) * 60,
-            has_managed_run=managed_raw == "1",
+            reachable=False,
+            gpu_memory_mb=0,
+            cuda_capability=None,
+            persistent_free_bytes=0,
+            queued_jobs=0,
         )
-    except (SshError, ValueError, IndexError):
-        return SiteProbe(
-            target,
-            target,
-            False,
-            0,
-            None,
-            0,
-            0,
-        )
+    return SiteProbe(
+        name=target.split("@")[-1].split(".")[0],
+        target=target,
+        reachable=True,
+        gpu_memory_mb=gpu_memory,
+        cuda_capability=gpu_capability,
+        persistent_free_bytes=min(
+            int(free_kb_raw) * 1024,
+            quota.soft_headroom_bytes,
+        ),
+        queued_jobs=waiting,
+        idle_compatible=idle,
+    )
+
+
+def _validate_safe_path(value: str) -> None:
+    """Reject any character that could subvert a shell interpolation."""
+
+    from osm_polygon_sentence_relevance.operator.relay import (
+        _validate_safe_path as _relay_validate,
+    )
+
+    _relay_validate(value)
+
+
+def _aggregate_peak_gpu(
+    probe: AvailabilityProbe,
+) -> tuple[int, tuple[int, int] | None]:
+    """Return the (memory_mb, capability) of the largest compatible node."""
+
+    if not probe.gpu_nodes:
+        return 0, None
+    best = max(probe.gpu_nodes, key=lambda n: n.gpu_memory_mb)
+    return best.gpu_memory_mb, best.cuda_capability
+
+
+def _queue_depth(ssh: SshClient) -> int:
+    """Return the number of jobs the user currently has Waiting or Hold.
+
+    This is a direct OAR observation; it is recorded for diagnostics but
+    never interpreted as an ETA forecast.
+    """
+
+    cmd = "oarstat -u 2>/dev/null | awk '$5 ~ /Waiting|Hold/ {n++} END {print n+0}'"
+    try:
+        result = ssh.run(cmd)
+        return int(_result_text(result).strip())
+    except (SshError, ValueError):
+        return 0
 
 
 def _storage_cleanup_can_help(
@@ -194,7 +243,6 @@ def _storage_cleanup_can_help(
         and probe.gpu_memory_mb >= requirements.gpu_memory_mb
         and probe.cuda_capability is not None
         and probe.cuda_capability >= requirements.cuda_capability
-        and probe.expected_start_seconds >= 0
         and probe.persistent_free_bytes < requirements.persistent_free_bytes
         for probe in probes
     )
@@ -211,10 +259,20 @@ def _required_staging_headroom(stage: str, requested_bytes: int) -> int:
 
 
 def _remote_home(ssh: SshClient) -> PurePosixPath:
-    value = ssh.run('printf "%s\\n" "$HOME"').stdout.strip()
+    result = ssh.run('printf "%s\\n" "$HOME"')
+    value = _result_text(result).strip()
     if not value.startswith("/") or "\n" in value or ".." in value.split("/"):
         raise RuntimeError("remote home path is invalid")
     return PurePosixPath(value)
+
+
+def _result_text(result: Any) -> str:
+    """Return ``result.text`` if available, else ``result.stdout``."""
+
+    text_attr = getattr(result, "text", None)
+    if text_attr is not None:
+        return text_attr
+    return getattr(result, "stdout", "")
 
 
 def _usage_policy_preflight(ssh: SshClient, site: str) -> None:
@@ -233,7 +291,7 @@ def _usage_policy_preflight(ssh: SshClient, site: str) -> None:
 def _read_remote_quota(ssh: SshClient) -> QuotaUsage:
     """Read the site's current home quota, including over-quota rc=1."""
 
-    return parse_quota_output(ssh.run(_REMOTE_QUOTA_COMMAND).stdout)
+    return parse_quota_output(_result_text(ssh.run(_REMOTE_QUOTA_COMMAND)))
 
 
 def _storage_preflight(
@@ -273,6 +331,578 @@ def _transition_terminal(
     state.transition(expected=current.phase, target=target, facts=facts)
 
 
+def _reattach_decision(
+    state: RunState,
+) -> tuple[str, int] | None:
+    """Return the stored (site, job_id) if a recorded allocation is tracked.
+
+    Conservative: it only returns a candidate. The reattach path then queries
+    OAR read-only and dispatches to live monitoring or terminal classification
+    without probing other sites or submitting a competing job.
+    """
+
+    if state.phase not in {
+        RunPhase.SUBMITTED,
+        RunPhase.QUEUED,
+        RunPhase.RUNNING,
+    }:
+        return None
+    job_id = state.facts.get("job_id")
+    site = state.facts.get("site")
+    if type(job_id) is not int or job_id <= 0:
+        return None
+    if not isinstance(site, str) or not site:
+        return None
+    return site, job_id
+
+
+def _resume_command(run_id: str) -> str:
+    """The exact command the operator prints after a local interrupt."""
+
+    return f"uv run osm-polygon-grid5000 resume {run_id}"
+
+
+def _checkpoint_root(layout: RemoteLayout) -> str:
+    """The remote root consumed by :class:`CheckpointStore`.
+
+    The real production layout written by :class:`CheckpointStore` is::
+
+        ${label_work}/progress.json
+        ${label_work}/timing.json   (optional)
+        ${label_work}/checkpoints/batch-NNNNNN.parquet
+        ${label_work}/checkpoints/batch-NNNNNN.json
+
+    There is no ``${label_work}/checkpoints/<run_id>`` directory.
+    """
+
+    return str(layout.label_work)
+
+
+def _attach_to_site(
+    store: StateStore,
+    config: OperatorConfig,
+    site: str,
+    *,
+    poll_seconds: float,
+) -> tuple[SshClient, RemoteLayout, OarClient, Controller]:
+    """Open one SSH connection to a recorded site and build the controller."""
+
+    ssh = SshClient(target=site, command_timeout=1800)
+    layout = RemoteLayout(_remote_home(ssh) / "osm-polygon-operator" / config.run_id)
+    oar = OarClient(ssh)
+    stager = Stager(ssh)
+    controller = Controller(
+        config=config,
+        state=store,
+        ssh=ssh,
+        oar=oar,
+        stager=stager,
+        layout=layout,
+        emit=_emit,
+        poll_seconds=poll_seconds,
+    )
+    return ssh, layout, oar, controller
+
+
+def _monitor_until_terminal(
+    controller: Controller, job_id: int, *, log_name: str
+) -> JobState:
+    """Stream the live log until OAR reports a terminal state, returning it."""
+
+    return controller.monitor(job_id, log_name=log_name)
+
+
+def _prepare_destination_for_resume(
+    *,
+    store: StateStore,
+    config: OperatorConfig,
+    site: str,
+    relay_root: Path | None,
+    poll_seconds: float,
+) -> None:
+    """Prepare a continuation site before allowing a new submission.
+
+    Same-site continuation reuses the already validated checkout and assets.
+    Cross-site continuation performs the normal policy, quota, checkout and
+    immutable-asset preflights before the validated relay is installed.
+    """
+
+    current = store.load()
+    if current.phase is not RunPhase.REMOTE_PREPARED:
+        store.transition(
+            expected=current.phase,
+            target=RunPhase.REMOTE_PREPARED,
+            facts={"site": site, "job_id": current.facts.get("job_id")},
+        )
+    if relay_root is not None:
+        ssh = SshClient(target=site, command_timeout=1800)
+        home = _remote_home(ssh)
+        layout = RemoteLayout(home / "osm-polygon-operator" / config.run_id)
+        _usage_policy_preflight(ssh, site)
+        _storage_preflight(
+            ssh,
+            protected_root=layout.root,
+            minimum_headroom_bytes=_LABEL_STAGING_HEADROOM_BYTES,
+        )
+        stager = Stager(ssh)
+        stager.prepare(config, layout)
+        assets = stager.prepare_label_assets(config, layout, download_input=True)
+        if not assets.llama_server_ready:
+
+            def submission_preflight() -> None:
+                _usage_policy_preflight(ssh, site)
+                _storage_preflight(
+                    ssh,
+                    protected_root=layout.root,
+                    minimum_headroom_bytes=_SUBMISSION_HEADROOM_BYTES,
+                )
+
+            oar = OarClient(
+                ssh,
+                preflight=submission_preflight,
+            )
+            _ensure_llama_server(ssh, oar, store, layout, poll_seconds)
+        store.transition(
+            expected=RunPhase.REMOTE_PREPARED,
+            target=RunPhase.REMOTE_PREPARED,
+            facts={"resume_relay_root": str(relay_root)},
+        )
+
+
+def _ensure_relay_at_destination(
+    *,
+    store: StateStore,
+    config: OperatorConfig,
+    site: str,
+    layout: RemoteLayout,
+    relay_root: Path,
+) -> None:
+    """Verify the validated relay is present at the destination site.
+
+    The Seagate-side ``relay_root`` is the canonical validated inventory.
+    For continuation we trust the staged destination (already done by
+    :func:`stage_to_destination`). This helper exists so the orchestrator
+    can re-check the relay directory exists before submitting.
+    """
+
+    if not relay_root.is_dir():
+        raise RuntimeError(
+            f"validated relay disappeared before submission: {relay_root}"
+        )
+
+
+def _apply_classification(
+    *,
+    store: StateStore,
+    config: OperatorConfig,
+    ssh: SshClient,
+    layout: RemoteLayout,
+    job_id: int,
+    active_stage: str,
+    classification: ExitClass,
+    resume_artifact_path: str | None = None,
+) -> None:
+    """Drive durable state transitions for a classified terminal allocation."""
+
+    is_label = active_stage == Stage.LABEL.value
+    if classification is ExitClass.FAILED:
+        _transition_terminal(
+            store,
+            expected=(RunPhase.RUNNING, RunPhase.QUEUED),
+            target=RunPhase.FAILED,
+            facts={"failed_job_id": job_id},
+        )
+        raise RuntimeError(
+            f"recorded allocation {job_id} failed deterministically; not "
+            "resubmitting automatically"
+        )
+    if classification is ExitClass.COMPLETE:
+        if is_label:
+            hub_commit: str | None = None
+            if config.requirements.row_limit == 0:
+                hub_commit = _label_publication_commit(ssh, layout, job_id)
+            facts: dict[str, object] = {"label_job_id": job_id}
+            if hub_commit is not None:
+                facts["hub_commit"] = hub_commit
+            _transition_terminal(
+                store,
+                expected=(RunPhase.RUNNING, RunPhase.QUEUED),
+                target=RunPhase.VALIDATED,
+                facts=facts,
+            )
+            store.transition(
+                expected=RunPhase.VALIDATED,
+                target=RunPhase.VERIFYING,
+                facts={"dataset_id": config.output_dataset_id},
+            )
+            store.transition(
+                expected=RunPhase.VERIFYING,
+                target=RunPhase.COMPLETE,
+                facts={"published": config.requirements.row_limit == 0},
+            )
+            print(f"Labeling complete: run {config.run_id}", flush=True)
+            _mark_remote_status(ssh, layout, "complete")
+            return
+        _transition_terminal(
+            store,
+            expected=(RunPhase.RUNNING, RunPhase.QUEUED),
+            target=RunPhase.CHECKPOINTED,
+            facts={"split_job_id": job_id},
+        )
+        print(
+            f"Sentence splitting checkpointed: run {config.run_id}; rerun to finalize.",
+            flush=True,
+        )
+        return
+    if classification is ExitClass.CONTINUE:
+        facts = {"continued_after_job": job_id}
+        if resume_artifact_path is not None:
+            facts["resume_relay_path"] = resume_artifact_path
+        _transition_terminal(
+            store,
+            expected=(RunPhase.RUNNING, RunPhase.QUEUED),
+            target=RunPhase.REMOTE_PREPARED,
+            facts=facts,
+        )
+        print(
+            "Validated checkpoints preserved; rerun to continue on the next "
+            "allocation (possibly another Grid'5000 site).",
+            flush=True,
+        )
+        return
+    raise RuntimeError(f"unhandled exit class: {classification}")
+
+
+def _classify_or_continue(
+    args: argparse.Namespace,
+    store: StateStore,
+    config: OperatorConfig,
+    site: str,
+    job_id: int,
+    *,
+    destination_site: str | None = None,
+) -> ExitClass:
+    """Reattach to the recorded site and classify the terminal allocation.
+
+    When the allocation is resumable, the orchestrator enters a continuation
+    loop:
+
+    1. retrieve and validate the checkpoint generation,
+    2. probe all compatible sites,
+    3. select the factual best site deterministically,
+    4. reuse the same site without relay when appropriate,
+    5. otherwise prepare exact historical source checkout/assets and stage
+       the validated relay to the destination site,
+    6. run usage-policy and quota preflights,
+    7. submit exactly one new short allocation,
+    8. atomically persist destination site/job ID before monitoring,
+    9. monitor it until terminal,
+    10. classify the new terminal state and repeat until complete.
+
+    No recursion. The allocation safety bound is enforced by the caller.
+    """
+
+    ssh, layout, oar, controller = _attach_to_site(
+        store, config, site, poll_seconds=args.poll_seconds
+    )
+    active = str(store.load().facts.get("active_stage", config.stage.value))
+    is_label = active == Stage.LABEL.value
+    log_name = "labeling.stdout.log" if is_label else "build.stdout.log"
+
+    status = oar.status(job_id)
+    if is_live_state(status.state):
+        terminal = _monitor_until_terminal(controller, job_id, log_name=log_name)
+        status = oar.status(job_id)
+        if terminal is not JobState.TERMINATED:
+            raise RuntimeError(
+                f"recorded allocation {job_id} ended in {terminal.value}"
+            )
+    # MISSING jobs are first inspected; if no durable evidence exists at
+    # all we treat it as an OAR bookkeeping loss and refuse to resubmit.
+    if status.state is JobState.MISSING:
+        log_dir = layout.logs / str(job_id)
+        listing = ssh.run(
+            f"test -d {log_dir!s} && find {log_dir!s} -mindepth 1 -maxdepth 1"
+        )
+        has_any = bool(_result_text(listing).strip())
+        if not has_any:
+            raise RuntimeError(
+                f"recorded allocation {job_id} is missing from OAR with no "
+                "durable evidence; refusing to resubmit"
+            )
+    # MISSING jobs with at least some durable evidence are classified from
+    # those artifacts alone (exit file, manifest, checkpoints, progress).
+
+    inspection = recorded_job.inspect_remote_resume(
+        ssh,
+        label_work_root=str(layout.label_work),
+        label_output_root=str(layout.label_output),
+        expected_identity=config.run_identity.to_dict(),
+        exit_file=str(layout.logs / str(job_id) / "labeling.exit_code"),
+    )
+    classification = recorded_job.classify_terminal(status, inspection)
+
+    relay_artifact_path: str | None = None
+    if (
+        classification is ExitClass.CONTINUE
+        and destination_site is not None
+        and destination_site != site
+    ):
+        relay_artifact_path = _relay_for_continuation(
+            store=store,
+            config=config,
+            source_site=site,
+            destination_site=destination_site,
+        )
+
+    _apply_classification(
+        store=store,
+        config=config,
+        ssh=ssh,
+        layout=layout,
+        job_id=job_id,
+        active_stage=active,
+        classification=classification,
+        resume_artifact_path=relay_artifact_path,
+    )
+
+    if classification is not ExitClass.CONTINUE:
+        return classification
+
+    # Without an explicit ``destination_site`` the caller is asking only
+    # for the classification of the recorded allocation. The continuation
+    # loop (relay + new submission) is driven by the CLI driver, not by
+    # this helper, so a ``None`` destination exits here with the recorded
+    # job's classification.
+    if destination_site is None:
+        return classification
+
+    # Continuation loop: select a site, optionally relay, submit exactly
+    # one new short allocation, monitor it, and reclassify. The new
+    # job ID is persisted atomically before monitoring starts. The
+    # allocation safety bound is enforced by this loop's iteration cap.
+    target_site = destination_site
+    _milestone(f"Continuation selecting site: {target_site} (recorded site was {site})")
+    relay_root: Path | None = None
+    if target_site != site:
+        # Same-site reuse: do not relay; the source already has the
+        # validated checkpoints. Cross-site: relay once, then continue.
+        if relay_artifact_path is None:
+            relay_root = Path(
+                _relay_for_continuation(
+                    store=store,
+                    config=config,
+                    source_site=site,
+                    destination_site=target_site,
+                )
+            )
+        else:
+            relay_root = Path(relay_artifact_path)
+
+    _prepare_destination_for_resume(
+        store=store,
+        config=config,
+        site=target_site,
+        relay_root=relay_root,
+        poll_seconds=args.poll_seconds,
+    )
+
+    for _iteration in range(1, 101):
+        # Attach to the destination site and submit exactly one allocation.
+        ssh_d, layout_d, oar_d, controller_d = _attach_to_site(
+            store, config, target_site, poll_seconds=args.poll_seconds
+        )
+        # Refresh label assets so the new allocation sees the relay on disk.
+        if relay_root is not None:
+            _ensure_relay_at_destination(
+                store=store,
+                config=config,
+                site=target_site,
+                layout=layout_d,
+                relay_root=relay_root,
+            )
+        new_job_id = controller_d.submit(
+            component=Stage.LABEL,
+            input_parquet=layout_d.root / "input/sentences.parquet",
+            model_file=layout_d.root / "model" / config.label_model_file,
+            tokenizer_dir=layout_d.root / "tokenizer",
+        )
+        # Controller.submit atomically persists SUBMITTED and the job ID
+        # before returning. Do not duplicate that state transition here.
+        current = store.load()
+        if current.phase is not RunPhase.SUBMITTED:
+            raise RuntimeError("continuation submit was not durably recorded")
+        store.transition(
+            expected=RunPhase.SUBMITTED,
+            target=RunPhase.SUBMITTED,
+            facts={"site": target_site, "destination_site": target_site},
+        )
+        print(
+            f"Submitted continuation job {new_job_id} (allocation {_iteration})",
+            flush=True,
+        )
+        terminal = controller_d.monitor(new_job_id, log_name="labeling.stdout.log")
+        if terminal is not JobState.TERMINATED:
+            raise RuntimeError("continuation allocation failed")
+        status_d = oar_d.status(new_job_id)
+        inspection_d = recorded_job.inspect_remote_resume(
+            ssh_d,
+            label_work_root=str(layout_d.label_work),
+            label_output_root=str(layout_d.label_output),
+            expected_identity=config.run_identity.to_dict(),
+            exit_file=str(layout_d.logs / str(new_job_id) / "labeling.exit_code"),
+        )
+        classification_d = recorded_job.classify_terminal(status_d, inspection_d)
+        _apply_classification(
+            store=store,
+            config=config,
+            ssh=ssh_d,
+            layout=layout_d,
+            job_id=new_job_id,
+            active_stage=active,
+            classification=classification_d,
+        )
+        if classification_d is ExitClass.COMPLETE:
+            return ExitClass.COMPLETE
+        if classification_d is ExitClass.CONTINUE:
+            # The state is REMOTE_PREPARED again; submit the next bounded
+            # allocation without requiring another local invocation.
+            relay_root = None
+            continue
+        # FAILED: stop.
+        raise RuntimeError(
+            f"continuation allocation {new_job_id} failed deterministically; "
+            "not resubmitting automatically"
+        )
+    raise RuntimeError("continuation exceeded allocation safety bound")
+
+
+def _relay_for_continuation(
+    *,
+    store: StateStore,
+    config: OperatorConfig,
+    source_site: str,
+    destination_site: str,
+) -> str:
+    """Retrieve, validate, and stage the resume set for a new site."""
+
+    source_ssh = SshClient(target=source_site, command_timeout=600)
+    source_layout = RemoteLayout(
+        _remote_home(source_ssh) / "osm-polygon-operator" / config.run_id
+    )
+    source_root = _checkpoint_root(source_layout)
+    inventory = relay.retrieve_to_seagate(
+        source=relay.RemoteTransfer(ssh_target=source_site),
+        source_checkpoint_root=source_root,
+        destination_root=DATA_ROOT / "runs",
+        run_id=config.run_id,
+        expected_run_identity=config.run_identity.to_dict(),
+    )
+    destination_ssh = SshClient(target=destination_site, command_timeout=600)
+    destination_layout = RemoteLayout(
+        _remote_home(destination_ssh) / "osm-polygon-operator" / config.run_id
+    )
+    destination_root = _checkpoint_root(destination_layout)
+    relay.stage_to_destination(
+        inventory=inventory,
+        destination=relay.RemoteTransfer(ssh_target=destination_site),
+        destination_checkpoint_root=destination_root,
+    )
+    store.transition(
+        expected=store.load().phase,
+        target=store.load().phase,
+        facts={"relay_destination_site": destination_site},
+    )
+    return str(inventory.root)
+
+
+def _resume_run(run_id: str, args: argparse.Namespace) -> int:
+    """Resume or classify a historical run by its durable run ID.
+
+    Loads the persisted ``state.json`` for ``run_id`` and reconstructs the
+    immutable operator configuration from ``run_identity``. Does not require
+    the current local Git HEAD to match the run's recorded source commit.
+    Never creates a new run ID. Never submits if the recorded job is live.
+    """
+
+    if not re.fullmatch(r"[0-9a-f]{20}", run_id):
+        raise RuntimeError("run ID must be twenty lowercase hexadecimal characters")
+    state_path = DATA_ROOT / "runs" / run_id / "state.json"
+    if not state_path.is_file():
+        raise RuntimeError(f"run state does not exist: {state_path}")
+    payload = json.loads(state_path.read_text(encoding="utf-8"))
+    config = OperatorConfig.from_persisted(payload["run_identity"])
+    if config.run_id != run_id:
+        raise RuntimeError(
+            "persisted run identity does not reproduce the requested run ID"
+        )
+    store = StateStore(DATA_ROOT)
+    store.load_or_create(config.run_identity)
+    global _ACTIVE_RUN_ID
+    _ACTIVE_RUN_ID = run_id
+    durable = store.load()
+    candidate = _reattach_decision(durable)
+    if candidate is None and durable.phase is RunPhase.REMOTE_PREPARED:
+        site_value = durable.facts.get("site")
+        if not isinstance(site_value, str) or not site_value:
+            raise RuntimeError("prepared continuation has no recorded site")
+        _milestone(f"Resuming prepared continuation on site {site_value}")
+        ssh, layout, oar, controller = _attach_to_site(
+            store, config, site_value, poll_seconds=args.poll_seconds
+        )
+        _usage_policy_preflight(ssh, site_value)
+        _storage_preflight(
+            ssh,
+            protected_root=layout.root,
+            minimum_headroom_bytes=_SUBMISSION_HEADROOM_BYTES,
+        )
+        stager = Stager(ssh)
+        stager.prepare(config, layout)
+        assets = stager.prepare_label_assets(config, layout, download_input=True)
+        if not assets.llama_server_ready:
+            _ensure_llama_server(ssh, oar, store, layout, args.poll_seconds)
+        relay_root_value = durable.facts.get("resume_relay_root")
+        if isinstance(relay_root_value, str):
+            _ensure_relay_at_destination(
+                store=store,
+                config=config,
+                site=site_value,
+                layout=layout,
+                relay_root=Path(relay_root_value),
+            )
+        job_id = controller.submit(
+            component=Stage.LABEL,
+            input_parquet=assets.input_parquet,
+            model_file=assets.model_file,
+            tokenizer_dir=assets.tokenizer_dir,
+        )
+        print(f"Submitted continuation job {job_id}", flush=True)
+        candidate = (site_value, job_id)
+    if candidate is None:
+        print(
+            f"[operator] run {run_id} has no recorded live allocation; nothing "
+            "to reattach",
+            flush=True,
+        )
+        return 0
+    site, job_id = candidate
+    _milestone(f"Resuming run {run_id} on site {site}, job {job_id}")
+    classification = _classify_or_continue(
+        args=args,
+        store=store,
+        config=config,
+        site=site,
+        job_id=job_id,
+        destination_site=site,
+    )
+    if classification is ExitClass.CONTINUE:
+        _milestone(
+            "Validated checkpoints preserved; submit the next allocation via "
+            f"{_resume_command(run_id)} or `run`."
+        )
+    return 0
+
+
 def _run(args: argparse.Namespace) -> int:
     if not DATA_ROOT.exists():
         raise RuntimeError(f"external data root is unavailable: {DATA_ROOT}")
@@ -296,7 +926,26 @@ def _run(args: argparse.Namespace) -> int:
     )
     store = StateStore(DATA_ROOT)
     store.load_or_create(config.run_identity)
+    global _ACTIVE_RUN_ID
+    _ACTIVE_RUN_ID = config.run_id
     _milestone(f"Durable run ID: {config.run_id}")
+
+    candidate = _reattach_decision(store.load())
+    if candidate is not None:
+        site, job_id = candidate
+        _milestone(
+            f"Reattaching to live Grid'5000 job {job_id} on {site} "
+            "(no new submission, no site probing)"
+        )
+        _classify_or_continue(
+            args=args,
+            store=store,
+            config=config,
+            site=site,
+            job_id=job_id,
+            destination_site=site,
+        )
+        return 0
 
     requirements = SiteRequirements(
         gpu_memory_mb=args.gpu_memory_mb,
@@ -308,7 +957,7 @@ def _run(args: argparse.Namespace) -> int:
     probes: list[SiteProbe] = []
     for target in dict.fromkeys(args.site):
         _milestone(f"Probing Grid'5000 site: {target}")
-        probe = _probe_target(target, config.run_id)
+        probe = _probe_target(target, config.run_id, requirements)
         probes.append(probe)
         if probe.reachable:
             _milestone(
@@ -331,7 +980,7 @@ def _run(args: argparse.Namespace) -> int:
         probes = []
         for target in dict.fromkeys(args.site):
             _milestone(f"Re-probing Grid'5000 site: {target}")
-            probes.append(_probe_target(target, config.run_id))
+            probes.append(_probe_target(target, config.run_id, requirements))
         selection = select_site(probes, requirements)
     target = selection.selected.target
     _milestone(f"Selected Grid'5000 site: {selection.selected.name}")
@@ -498,11 +1147,13 @@ def _run(args: argparse.Namespace) -> int:
                 raise RuntimeError("labeling allocation failed")
             _assert_remote_exit_zero(ssh, layout, job_id, "labeling.exit_code")
             complete = (
-                ssh.run(
-                    "if test -f "
-                    f"{layout.label_output!s}/manifest.json; "
-                    "then printf yes; else printf no; fi"
-                ).stdout
+                _result_text(
+                    ssh.run(
+                        "if test -f "
+                        f"{layout.label_output!s}/manifest.json; "
+                        "then printf yes; else printf no; fi"
+                    )
+                )
                 == "yes"
             )
             if complete:
@@ -558,7 +1209,9 @@ def _monitor_simple(
     poll_seconds: float,
 ) -> None:
     offset = 0
-    previous: tuple[JobState, str | None, str | None] | None = None
+    previous: tuple[JobState, str | None, str | None, int | None, int | None] | None = (
+        None
+    )
     while True:
         status = oar.status(job_id)
         previous = _report_job_status(status, previous)
@@ -577,11 +1230,13 @@ def _monitor_simple(
 
 def _llama_server_ready(ssh: SshClient, layout: RemoteLayout) -> bool:
     return (
-        ssh.run(
-            "if test -x "
-            f"{layout.root!s}/llama-server-bin/llama-server; "
-            "then printf yes; else printf no; fi"
-        ).stdout
+        _result_text(
+            ssh.run(
+                "if test -x "
+                f"{layout.root!s}/llama-server-bin/llama-server; "
+                "then printf yes; else printf no; fi"
+            )
+        )
         == "yes"
     )
 
@@ -647,7 +1302,9 @@ def _monitor_without_log(
     job_id: int,
     poll_seconds: float,
 ) -> None:
-    previous: tuple[JobState, str | None, str | None] | None = None
+    previous: tuple[JobState, str | None, str | None, int | None, int | None] | None = (
+        None
+    )
     while True:
         status = oar.status(job_id)
         previous = _report_job_status(status, previous)
@@ -662,29 +1319,25 @@ def _monitor_without_log(
 
 def _report_job_status(
     status: JobStatus,
-    previous: tuple[JobState, str | None, str | None] | None,
-) -> tuple[JobState, str | None, str | None]:
-    """Print a scheduler transition once and return its comparison key."""
+    previous: tuple[JobState, str | None, str | None, int | None, int | None] | None,
+) -> tuple[JobState, str | None, str | None, int | None, int | None]:
+    """Print a scheduler transition once and return its comparison key.
 
-    current = (status.state, status.node, status.scheduled_start)
+    The comparison key includes every field the operator surfaces to the
+    human reader so a walltime update (``HH:MM:SS`` rolls over) or an
+    exit-code change produces exactly one fresh emission.
+    """
+
+    current = (
+        status.state,
+        status.node,
+        status.scheduled_start,
+        status.walltime_seconds,
+        status.exit_code,
+    )
     if current == previous:
         return current
-    detail = ""
-    if status.state is JobState.QUEUED and status.scheduled_start is not None:
-        detail = f"; scheduled start {status.scheduled_start}"
-    elif status.state is JobState.RUNNING and status.node:
-        detail = f" on {status.node}"
-    elif (
-        status.state
-        in {
-            JobState.TERMINATED,
-            JobState.ERROR,
-            JobState.MISSING,
-        }
-        and status.exit_code is not None
-    ):
-        detail = f" (exit {status.exit_code})"
-    print(f"[job {status.job_id}] {status.state.value}{detail}", flush=True)
+    print(f"[job {status.job_id}] {format_job_status(status)}", flush=True)
     return current
 
 
@@ -697,7 +1350,7 @@ def _remote_exit_code(
     path = layout.logs / str(job_id) / filename
     result = ssh.run(f"test -f {path!s} && cat {path!s}")
     try:
-        return int(result.stdout.strip())
+        return int(_result_text(result).strip())
     except ValueError as exc:
         raise RuntimeError("remote payload exit status is invalid") from exc
 
@@ -729,7 +1382,7 @@ def _publish_split(
         for value in (str(layout.repo / ".venv/bin/python"), "-c", code)
     )
     result = ssh.run(command)
-    commit_id = result.stdout.strip()
+    commit_id = _result_text(result).strip()
     if len(commit_id) < 7:
         raise RuntimeError("Hugging Face publication did not return a commit")
     return commit_id
@@ -743,7 +1396,7 @@ def _label_publication_commit(
     """Read the verified label publisher's immutable Hub commit from its log."""
 
     path = layout.logs / str(job_id) / "labeling.stdout.log"
-    text = ssh.run(f"test -f {path!s} && cat {path!s}").stdout
+    text = _result_text(ssh.run(f"test -f {path!s} && cat {path!s}"))
     for line in reversed(text.splitlines()):
         try:
             payload = json.loads(line)
@@ -802,7 +1455,7 @@ while IFS= read -r -d '' candidate; do
 done
 """.strip()
     result = ssh.run(script)
-    return tuple(line for line in result.stdout.splitlines() if line)
+    return tuple(line for line in _result_text(result).splitlines() if line)
 
 
 def _status(args: argparse.Namespace) -> int:
@@ -812,6 +1465,10 @@ def _status(args: argparse.Namespace) -> int:
     payload = json.loads(path.read_text(encoding="utf-8"))
     print(json.dumps(payload, indent=2, sort_keys=True))
     return 0
+
+
+def _resume_handler(args: argparse.Namespace) -> int:
+    return _resume_run(args.run_id, args)
 
 
 def _cleanup(args: argparse.Namespace) -> int:
@@ -855,6 +1512,14 @@ def build_parser() -> argparse.ArgumentParser:
     status.add_argument("run_id")
     status.set_defaults(handler=_status)
 
+    resume = sub.add_parser(
+        "resume",
+        help="resume or classify a historical run by its durable run ID",
+    )
+    resume.add_argument("run_id")
+    resume.add_argument("--poll-seconds", type=float, default=30.0)
+    resume.set_defaults(handler=_resume_handler)
+
     cleanup = sub.add_parser(
         "cleanup",
         help="preview or remove completed pipeline-managed remote runs",
@@ -870,17 +1535,37 @@ def main(argv: list[str] | None = None) -> int:
 
     parser = build_parser()
     args = parser.parse_args(argv)
+    global _ACTIVE_RUN_ID
+    prior_active = _ACTIVE_RUN_ID
+    _ACTIVE_RUN_ID = None
     try:
         return int(args.handler(args))
     except KeyboardInterrupt:
-        print(
-            "Local monitoring stopped; the remote job and checkpoints were preserved.",
-            file=sys.stderr,
-        )
-        return 130
+        run_id = _ACTIVE_RUN_ID if _ACTIVE_RUN_ID else None
+        if run_id is None:
+            run_id = prior_active if prior_active else None
+        if run_id is None:
+            print(
+                "Local monitoring stopped; the remote job and checkpoints were "
+                "preserved.",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                "Local monitoring stopped; the remote job and checkpoints were "
+                "preserved.",
+                file=sys.stderr,
+            )
+            print(
+                f"Resume with: {_resume_command(run_id)}",
+                file=sys.stderr,
+            )
+        sys.exit(130)
     except Exception as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
+    finally:
+        _ACTIVE_RUN_ID = prior_active
 
 
 if __name__ == "__main__":

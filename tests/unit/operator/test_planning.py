@@ -46,8 +46,8 @@ from osm_polygon_sentence_relevance.operator.workflows import (
 )
 
 
-def _probe(name: str, *, delay: int = 10, memory: int = 80_000) -> SiteProbe:
-    return SiteProbe(name, name, True, memory, (8, 0), 100 * 1024**3, delay)
+def _probe(name: str, *, queued: int = 10, memory: int = 80_000) -> SiteProbe:
+    return SiteProbe(name, name, True, memory, (8, 0), 100 * 1024**3, queued)
 
 
 def _config(*, stage: str = "all") -> OperatorConfig:
@@ -62,13 +62,15 @@ def _config(*, stage: str = "all") -> OperatorConfig:
     )
 
 
-def test_site_selection_uses_delay_then_name() -> None:
+def test_site_selection_ties_break_by_name_when_all_queued() -> None:
     selection = select_site([_probe("rennes"), _probe("nancy"), _probe("nantes")])
     assert selection.selected.name == "nancy"
 
 
-def test_site_selection_prefers_compatible_existing_managed_run() -> None:
-    fresh = _probe("grenoble", delay=0)
+def test_site_selection_managed_run_is_only_a_runnable_tiebreaker() -> None:
+    # Both sites are factually available; the site already holding the managed
+    # run wins only as a deterministic tiebreaker (avoids a needless transfer).
+    fresh = SiteProbe("grenoble", "grenoble", True, 80_000, (8, 0), 100 * 1024**3, 0)
     resumed = SiteProbe(
         "sophia",
         "sophia",
@@ -76,10 +78,36 @@ def test_site_selection_prefers_compatible_existing_managed_run() -> None:
         80_000,
         (8, 0),
         100 * 1024**3,
-        100,
+        0,
         has_managed_run=True,
     )
     assert select_site([fresh, resumed]).selected.name == "sophia"
+
+
+def test_site_selection_factual_idle_capacity_wins_deterministically() -> None:
+    # The factual signal is "an idle compatible GPU resource is currently free
+    # on this frontend", derived from oarnodes -- not queue depth.
+    busy = SiteProbe(
+        "sophia",
+        "sophia",
+        True,
+        80_000,
+        (8, 0),
+        100 * 1024**3,
+        0,
+        idle_compatible=False,
+    )
+    idle = SiteProbe(
+        "rennes",
+        "rennes",
+        True,
+        80_000,
+        (8, 0),
+        100 * 1024**3,
+        10,
+        idle_compatible=True,
+    )
+    assert select_site([busy, idle]).selected.name == "rennes"
 
 
 def test_managed_run_requires_only_incremental_resume_headroom() -> None:
@@ -123,7 +151,7 @@ def test_site_decision_reports_each_hard_constraint() -> None:
         "insufficient_gpu_memory",
         "insufficient_cuda_capability",
         "insufficient_persistent_storage",
-        "invalid_queue_estimate",
+        "invalid_queue_count",
     )
     with pytest.raises(NoCompatibleSiteError, match="no Grid"):
         select_site([])
@@ -327,7 +355,7 @@ def test_oar_client_parses_all_supported_states(raw: str, expected: JobState) ->
         '{"42":{"state":"'
         + raw
         + '","exit_code":"0","message":"ok","assigned_network_address":"n1",'
-        '"scheduled_start":"2026-07-28 19:00:00"}}'
+        '"scheduled_start":"2026-07-28 19:00:00","walltime":3300}}'
     )
     client = OarClient(_FakeSsh([payload]))  # type: ignore[arg-type]
     status = client.status(42)
@@ -335,6 +363,17 @@ def test_oar_client_parses_all_supported_states(raw: str, expected: JobState) ->
     assert status.exit_code == 0
     assert status.node == "n1"
     assert status.scheduled_start == "2026-07-28 19:00:00"
+    assert status.walltime_seconds == 3300
+
+
+def test_oar_client_formats_epoch_schedule_in_grid5000_local_time() -> None:
+    payload = '{"42":{"state":"Waiting","scheduled_start":1785344400,"walltime":3300}}'
+    client = OarClient(_FakeSsh([payload]))  # type: ignore[arg-type]
+
+    status = client.status(42)
+
+    assert status.scheduled_start == "2026-07-29 19:00:00"
+    assert status.walltime_seconds == 3300
 
 
 def test_oar_client_submit_cancel_and_status_errors() -> None:
@@ -374,6 +413,110 @@ def test_oar_client_does_not_submit_when_policy_preflight_fails() -> None:
     with pytest.raises(RuntimeError, match="policy refused"):
         client.submit(SubmissionRequest(("oarsub", "payload")))
     assert ssh.commands == []
+
+
+def test_oar_client_status_maps_returncode_six_to_missing() -> None:
+    from osm_polygon_sentence_relevance.operator.ssh import SshRemoteError
+
+    class FailingSsh:
+        def run(self, command: str) -> object:
+            raise SshRemoteError(
+                "unknown job",
+                category="remote",
+                returncode=6,
+                attempts=1,
+            )
+
+    status = OarClient(FailingSsh()).status(42)  # type: ignore[arg-type]
+    assert status.state is JobState.MISSING
+
+
+def test_oar_client_status_reraises_non_six_ssh_errors() -> None:
+    from osm_polygon_sentence_relevance.operator.ssh import SshRemoteError
+
+    class FailingSsh:
+        def run(self, command: str) -> object:
+            raise SshRemoteError(
+                "network down",
+                category="remote",
+                returncode=255,
+                attempts=1,
+            )
+
+    with pytest.raises(SshRemoteError):
+        OarClient(FailingSsh()).status(42)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        (1785344400, "2026-07-29 19:00:00"),
+        ("2026-07-29 19:00:00", "2026-07-29 19:00:00"),
+        (0, None),
+        (-1, None),
+        (True, None),
+        ("not a timestamp", None),
+        (None, None),
+    ],
+)
+def test_parse_scheduled_start_handles_all_supported_shapes(
+    raw: object, expected: str | None
+) -> None:
+    from osm_polygon_sentence_relevance.operator.oar import _parse_scheduled_start
+
+    assert _parse_scheduled_start(raw) == expected
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        (3300, 3300),
+        ("3300", 3300),
+        ("01:00:00", 3600),
+        ("10:05:30", 36_330),
+        (0, None),
+        (-5, None),
+        (True, None),
+        ("not time", None),
+        (None, None),
+    ],
+)
+def test_parse_walltime_handles_all_supported_shapes(
+    raw: object, expected: int | None
+) -> None:
+    from osm_polygon_sentence_relevance.operator.oar import _parse_walltime
+
+    assert _parse_walltime(raw) == expected
+
+
+def test_format_walltime_rejects_negative_seconds() -> None:
+    from osm_polygon_sentence_relevance.operator.oar import format_walltime
+
+    assert format_walltime(1) == "00:00:01"
+    assert format_walltime(86_400) == "24:00:00"
+    with pytest.raises(ValueError, match="strictly positive"):
+        format_walltime(0)
+    with pytest.raises(ValueError, match="strictly positive"):
+        format_walltime(-1)
+
+
+@pytest.mark.parametrize(
+    ("state", "expected"),
+    [
+        (JobState.QUEUED, True),
+        (JobState.RUNNING, True),
+        (JobState.FINISHING, True),
+        (JobState.TERMINATED, False),
+        (JobState.ERROR, False),
+        (JobState.MISSING, False),
+    ],
+)
+def test_is_live_state_matches_only_non_terminal_states(
+    state: JobState, expected: bool
+) -> None:
+    from osm_polygon_sentence_relevance.operator.oar import is_live_state
+
+    assert is_live_state(state) is expected
 
 
 def test_exit_classification_complete_cancelled_and_failed() -> None:
@@ -428,3 +571,54 @@ def test_workflows_require_immutable_revision() -> None:
             model_file=PurePosixPath("/m"),
             tokenizer_dir=PurePosixPath("/t"),
         )
+
+
+def test_resumable_walltime_interruption_continues_from_valid_checkpoint() -> None:
+    # Only a resumable walltime interruption (valid checkpoint, interrupted) may
+    # trigger the next allocation automatically.
+    status = JobStatus(7, JobState.TERMINATED, 0, "EXPECTED_WALLTIME")
+    facts = CheckpointFacts(13_952, 54_462, True, interrupted=True)
+    assert classify_exit(status, facts) is ExitClass.CONTINUE
+
+
+@pytest.mark.parametrize(
+    "message",
+    ["request exceeds context size", "schema mismatch", "config error"],
+)
+def test_deterministic_failure_never_auto_resubmits(message: str) -> None:
+    status = JobStatus(8, JobState.ERROR, 512, message)
+    facts = CheckpointFacts(13_952, 54_462, True)
+    assert classify_exit(status, facts) is ExitClass.FAILED
+    assert classify_exit(status, facts) is not ExitClass.CONTINUE
+
+
+def test_cleanup_refuses_escape_and_preserves_unrelated_files(tmp_path: Path) -> None:
+    root = tmp_path / "managed"
+    root.mkdir()
+    candidate = root / "candidate"
+    candidate.mkdir()
+    unrelated = root / "unrelated-user-data"
+    unrelated.mkdir()
+    foreign = tmp_path / "outside-root"
+    foreign.mkdir()
+    plan = plan_cleanup(
+        root,
+        [ManagedEntry(candidate, ManagedStatus.COMPLETE, 10, 1)],
+        5,
+    )
+    assert execute_cleanup(plan) == 10
+    assert not candidate.exists()
+    # Unrelated user files inside the managed root are never touched.
+    assert unrelated.exists()
+    # An entry that escapes the managed root (symlink outside) is never a
+    # candidate, so cleanup cannot delete outside the operator-managed tree.
+    escape = root / "escape"
+    escape.symlink_to(foreign)
+    assert (
+        plan_cleanup(
+            root,
+            [ManagedEntry(escape, ManagedStatus.FAILED, 5, 1)],
+            5,
+        ).candidates
+        == ()
+    )

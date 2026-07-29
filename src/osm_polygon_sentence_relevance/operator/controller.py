@@ -10,8 +10,10 @@ from pathlib import PurePosixPath
 from osm_polygon_sentence_relevance.operator.config import OperatorConfig, Stage
 from osm_polygon_sentence_relevance.operator.oar import (
     JobState,
+    JobStatus,
     OarClient,
     SubmissionRequest,
+    format_job_status,
 )
 from osm_polygon_sentence_relevance.operator.ssh import LogChunk, SshClient
 from osm_polygon_sentence_relevance.operator.staging import Stager
@@ -157,9 +159,23 @@ class Controller:
         offset_raw = self.state.load().facts.get("log_offset", 0)
         offset = offset_raw if type(offset_raw) is int else 0
         remote_log = str(self.layout.logs / str(job_id) / log_name)
+        previous_status: (
+            tuple[JobState, str | None, str | None, int | None, int | None] | None
+        ) = None
 
         while True:
             status = self.oar.status(job_id)
+            status_key = _status_key(status)
+            if status_key != previous_status:
+                self.emit(
+                    LiveProgress(
+                        job_id,
+                        "scheduler",
+                        format_job_status(status),
+                        offset,
+                    )
+                )
+                previous_status = status_key
             current = self.state.load()
             if status.state is JobState.RUNNING and current.phase is RunPhase.QUEUED:
                 self.state.transition(
@@ -187,6 +203,18 @@ class Controller:
             }:
                 return status.state
             self.sleeper(self.poll_seconds)
+
+
+def _status_key(
+    status: JobStatus,
+) -> tuple[JobState, str | None, str | None, int | None, int | None]:
+    return (
+        status.state,
+        status.node,
+        status.scheduled_start,
+        status.exit_code,
+        status.walltime_seconds,
+    )
 
 
 __all__ = ["Controller", "ControllerError", "LiveProgress"]

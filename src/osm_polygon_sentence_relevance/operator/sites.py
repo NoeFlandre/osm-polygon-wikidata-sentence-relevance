@@ -1,4 +1,12 @@
-"""Deterministic Grid'5000 site compatibility and selection."""
+"""Deterministic Grid'5000 site compatibility and selection.
+
+Selection is driven by factual hard constraints (reachability, GPU memory,
+CUDA capability, persistent storage) and by the factual "an idle compatible
+GPU resource is currently free on this frontend" observation. It never ranks
+a site as immediately runnable from the user's queue count alone; it never
+projects a start time. For queued batch jobs the operator submits exactly
+once and reports OAR's forecast afterwards.
+"""
 
 from __future__ import annotations
 
@@ -7,7 +15,7 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True, slots=True)
 class SiteProbe:
-    """Observed capacity for one Grid'5000 site."""
+    """Observed capacity and factual availability for one Grid'5000 site."""
 
     name: str
     target: str
@@ -15,7 +23,8 @@ class SiteProbe:
     gpu_memory_mb: int
     cuda_capability: tuple[int, int] | None
     persistent_free_bytes: int
-    expected_start_seconds: int
+    queued_jobs: int
+    idle_compatible: bool = False
     has_managed_run: bool = False
 
 
@@ -70,8 +79,8 @@ def evaluate_site(probe: SiteProbe, requirements: SiteRequirements) -> SiteDecis
     )
     if probe.persistent_free_bytes < required_storage:
         reasons.append("insufficient_persistent_storage")
-    if probe.expected_start_seconds < 0:
-        reasons.append("invalid_queue_estimate")
+    if probe.queued_jobs < 0:
+        reasons.append("invalid_queue_count")
     return SiteDecision(probe=probe, compatible=not reasons, reasons=tuple(reasons))
 
 
@@ -79,7 +88,15 @@ def select_site(
     probes: list[SiteProbe] | tuple[SiteProbe, ...],
     requirements: SiteRequirements | None = None,
 ) -> SiteSelection:
-    """Choose the compatible site with earliest start and stable name tiebreak."""
+    """Choose the compatible site deterministically from factual observations.
+
+    Compatibility is enforced first (reachable, GPU memory, CUDA capability,
+    persistent storage). Among compatible sites, factual current idle
+    availability from ``oarnodes`` wins, then deterministic name order. Queue
+    depth is never used as a forecast. After submission, OAR's forecast is
+    reported from ``JobStatus.scheduled_start`` -- it is a forecast, not a
+    commitment.
+    """
 
     if not probes:
         raise NoCompatibleSiteError("no Grid'5000 sites were probed")
@@ -95,8 +112,8 @@ def select_site(
     selected = min(
         compatible,
         key=lambda probe: (
+            not probe.idle_compatible,
             not probe.has_managed_run,
-            probe.expected_start_seconds,
             probe.name,
         ),
     )
