@@ -243,7 +243,7 @@ class _FakeRemote:
 
 
 def _patch_subprocess(monkeypatch: pytest.MonkeyPatch, fake: _FakeRemote) -> None:
-    """Replace subprocess.run inside the relay with our stateful fake."""
+    """Replace subprocess.run across the relay and transport stack with our stateful fake."""
 
     def fake_run(
         argv: Sequence[str],
@@ -261,6 +261,10 @@ def _patch_subprocess(monkeypatch: pytest.MonkeyPatch, fake: _FakeRemote) -> Non
         return cp
 
     monkeypatch.setattr(relay.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        "osm_polygon_sentence_relevance.operator.relay_transport.subprocess.run",
+        fake_run,
+    )
 
 
 # ------------------------------------------------------------------
@@ -539,30 +543,6 @@ def test_relay_inventory_ordered_indexes_rejects_non_batch_names() -> None:
         inv.ordered_indexes()
 
 
-def test_validate_safe_path_blocks_all_dangerous_grammar() -> None:
-    """Every documented shell metacharacter is rejected up front."""
-
-    blocked = [
-        "foo bar",
-        "foo'bar",
-        "foo$bar",
-        "foo`bar`",
-        "foo;bar",
-        "foo|bar",
-        "foo\nbar",
-        "foo\tbar",
-        "../escape",
-        "foo:bar",
-    ]
-    for bad in blocked:
-        with pytest.raises(relay.RelayError):
-            relay._validate_safe_path(bad)
-
-
-def test_validate_safe_path_accepts_safe_segments() -> None:
-    relay._validate_safe_path("/home/u/abc/batch-000000.parquet")
-
-
 def test_relay_validate_destination_root_rejects_tmp(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -581,21 +561,3 @@ def test_relay_validate_destination_root_rejects_users(
 
     with pytest.raises(relay.RelayError, match="internal storage"):
         relay._validate_destination_root(Path("/Users/foo"))
-
-
-def test_remote_transfer_ssh_mkdir_0700_uses_explicit_argv(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """``install -d -m 0700`` is invoked with explicit argv via ssh."""
-
-    from osm_polygon_sentence_relevance.operator import relay
-
-    fake = _FakeRemote(root=tmp_path / "argv-mkdir")
-    fake.root.mkdir()
-    _patch_subprocess(monkeypatch, fake)
-    transfer = relay.RemoteTransfer(ssh_target="sophia")
-    transfer.ssh_mkdir_0700("/home/u/x")
-    assert any(
-        call[0] == "ssh" and "install -d -m 0700" in " ".join(call)
-        for call in fake.argv_calls
-    )

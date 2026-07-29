@@ -5,13 +5,13 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from osm_polygon_sentence_relevance.operator import relay
+from osm_polygon_sentence_relevance.operator.relay_transport import RemoteEntry
 from tests.unit.operator.test_relay import (
     _build_real_checkpoint_set,
     _FakeRemote,
@@ -84,62 +84,6 @@ def test_list_local_dir_reports_all_entry_types(tmp_path: Path) -> None:
         ("link", "symlink"),
         ("fifo", "other"),
     }
-
-
-def test_remote_transfer_rejects_invalid_target_and_local_source(
-    tmp_path: Path,
-) -> None:
-    transfer = relay.RemoteTransfer("")
-    with pytest.raises(relay.RelayError, match="ssh target"):
-        transfer.fetch("/home/u/file", tmp_path / "out")
-    transfer = relay.RemoteTransfer("nancy")
-    with pytest.raises(relay.RelayError, match="non-regular"):
-        transfer.push(tmp_path / "missing", "/home/u/file")
-
-
-@pytest.mark.parametrize(
-    "exception",
-    [
-        subprocess.CalledProcessError(1, ["scp"]),
-        subprocess.TimeoutExpired(["scp"], 1),
-    ],
-)
-def test_remote_transfer_fetch_wraps_transport_failures(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    exception: BaseException,
-) -> None:
-    def fail(*_args: object, **_kwargs: object) -> object:
-        raise exception
-
-    monkeypatch.setattr(relay.subprocess, "run", fail)
-    with pytest.raises(relay.RelayError, match="scp fetch failed"):
-        relay.RemoteTransfer("nancy").fetch("/home/u/file", tmp_path / "out")
-    assert not list(tmp_path.iterdir())
-
-
-def test_list_remote_dir_parses_file_dir_link_and_other(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    result = SimpleNamespace(stdout="f\tfile\nd\tdir\nl\tlink\np\tfifo\n")
-    monkeypatch.setattr(relay.subprocess, "run", lambda *_a, **_kw: result)
-    assert [
-        (entry.name, entry.kind)
-        for entry in relay._list_remote_dir("nancy", "/home/u/work")
-    ] == [
-        ("file", "file"),
-        ("dir", "dir"),
-        ("link", "symlink"),
-        ("fifo", "other"),
-    ]
-
-
-def test_list_remote_checkpoints_absent_is_empty(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    result = SimpleNamespace(returncode=1, stdout="")
-    monkeypatch.setattr(relay.subprocess, "run", lambda *_a, **_kw: result)
-    assert relay._list_remote_checkpoints("nancy", "/home/u/work") == []
 
 
 def test_inventory_ordered_indexes_sorts(tmp_path: Path) -> None:
@@ -260,8 +204,8 @@ def test_retrieve_requires_progress_and_rejects_remote_other(
     destination.mkdir()
     monkeypatch.setattr(
         relay,
-        "_list_remote_dir",
-        lambda *_a: [relay._ListedEntry("fifo", "other")],
+        "list_remote_dir",
+        lambda *_a: [RemoteEntry("fifo", "other")],
     )
     with pytest.raises(relay.RelayError, match="missing progress"):
         relay.retrieve_to_seagate(
@@ -282,48 +226,6 @@ def test_destination_root_rejects_symlink_and_missing(tmp_path: Path) -> None:
     link.symlink_to(real)
     with pytest.raises(relay.RelayError, match="symlink"):
         relay._validate_destination_root(link)
-
-
-def test_remote_transfer_rejects_control_target(tmp_path: Path) -> None:
-    with pytest.raises(relay.RelayError, match="control"):
-        relay.RemoteTransfer("nancy\nbad").fetch("/home/u/file", tmp_path / "out")
-
-
-def test_remote_transfer_chmod_and_rename_use_safe_commands(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls: list[list[str]] = []
-
-    def record(argv: list[str], **_kwargs: object) -> object:
-        calls.append(argv)
-        return SimpleNamespace(returncode=0, stdout="")
-
-    monkeypatch.setattr(relay.subprocess, "run", record)
-    transfer = relay.RemoteTransfer("nancy")
-    transfer.ssh_chmod("/home/u/work", 0o600)
-    transfer.ssh_atomic_rename("/home/u/staged", "/home/u/final")
-    assert "chmod -R 600" in calls[0][-1]
-    assert "rmdir -- /home/u/final" in calls[1][-1]
-    assert "mv -- /home/u/staged /home/u/final" in calls[1][-1]
-
-
-def test_list_remote_checkpoints_parses_all_kinds(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    result = SimpleNamespace(
-        returncode=0,
-        stdout="f\tfile\nd\tdir\nl\tlink\np\tfifo\n\t\n",
-    )
-    monkeypatch.setattr(relay.subprocess, "run", lambda *_a, **_kw: result)
-    assert [
-        (entry.name, entry.kind)
-        for entry in relay._list_remote_checkpoints("nancy", "/home/u/work")
-    ] == [
-        ("file", "file"),
-        ("dir", "dir"),
-        ("link", "symlink"),
-        ("fifo", "other"),
-    ]
 
 
 @pytest.mark.parametrize(
@@ -350,7 +252,7 @@ def test_stage_local_rejects_unsafe_top_entries(
     monkeypatch.setattr(
         relay,
         "_list_local_dir",
-        lambda _path: [relay._ListedEntry(entry_name, kind)],
+        lambda _path: [RemoteEntry(entry_name, kind)],
     )
     with pytest.raises(relay.RelayError, match=message):
         relay._stage_relay_local(
@@ -382,9 +284,9 @@ def test_stage_local_rejects_unsafe_checkpoint_entries(
     destination.mkdir()
     original = relay._list_local_dir
 
-    def listing(path: Path) -> list[relay._ListedEntry]:
+    def listing(path: Path) -> list[RemoteEntry]:
         if path.name == "checkpoints":
-            return [relay._ListedEntry(name, kind)]
+            return [RemoteEntry(name, kind)]
         return original(path)
 
     monkeypatch.setattr(relay, "_list_local_dir", listing)
@@ -451,23 +353,23 @@ def test_stage_local_preserves_previous_generation(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("top_entry", "checkpoint_entry", "message"),
     [
-        (relay._ListedEntry("link", "symlink"), None, "remote symlink"),
-        (relay._ListedEntry("extra", "dir"), None, "unexpected remote subdirectory"),
-        (relay._ListedEntry("fifo", "other"), None, "remote non-file"),
-        (relay._ListedEntry("extra.txt", "file"), None, "unexpected remote top-level"),
+        (RemoteEntry("link", "symlink"), None, "remote symlink"),
+        (RemoteEntry("extra", "dir"), None, "unexpected remote subdirectory"),
+        (RemoteEntry("fifo", "other"), None, "remote non-file"),
+        (RemoteEntry("extra.txt", "file"), None, "unexpected remote top-level"),
         (
             None,
-            relay._ListedEntry("batch-000000.json", "symlink"),
+            RemoteEntry("batch-000000.json", "symlink"),
             "remote symlink",
         ),
         (
             None,
-            relay._ListedEntry("batch-000000.json", "dir"),
+            RemoteEntry("batch-000000.json", "dir"),
             "remote non-file checkpoint",
         ),
         (
             None,
-            relay._ListedEntry("unexpected.txt", "file"),
+            RemoteEntry("unexpected.txt", "file"),
             "unexpected remote checkpoint",
         ),
     ],
@@ -475,19 +377,19 @@ def test_stage_local_preserves_previous_generation(tmp_path: Path) -> None:
 def test_retrieve_rejects_unsafe_remote_entries(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    top_entry: relay._ListedEntry | None,
-    checkpoint_entry: relay._ListedEntry | None,
+    top_entry: RemoteEntry | None,
+    checkpoint_entry: RemoteEntry | None,
     message: str,
 ) -> None:
     destination = tmp_path / "Seagate"
     destination.mkdir()
-    top = [relay._ListedEntry("progress.json", "file")]
+    top = [RemoteEntry("progress.json", "file")]
     if top_entry is not None:
         top.append(top_entry)
-    monkeypatch.setattr(relay, "_list_remote_dir", lambda *_a: top)
+    monkeypatch.setattr(relay, "list_remote_dir", lambda *_a: top)
     monkeypatch.setattr(
         relay,
-        "_list_remote_checkpoints",
+        "list_remote_checkpoints",
         lambda *_a: [checkpoint_entry] if checkpoint_entry is not None else [],
     )
 
@@ -529,13 +431,6 @@ def test_stage_destination_rejects_nonempty_and_hash_mismatch(
             destination=relay.RemoteTransfer("nancy"),
             destination_checkpoint_root="/home/u/work",
         )
-
-
-def test_safe_path_rejects_empty_and_surrounding_whitespace() -> None:
-    with pytest.raises(relay.RelayError, match="non-empty"):
-        relay._validate_safe_path("")
-    with pytest.raises(relay.RelayError, match="surrounding whitespace"):
-        relay._validate_safe_path(" /home/u/work")
 
 
 def test_stage_local_accepts_flat_batch_layout(tmp_path: Path) -> None:

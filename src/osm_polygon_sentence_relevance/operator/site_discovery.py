@@ -13,6 +13,9 @@ import re
 from typing import Final
 
 from osm_polygon_sentence_relevance.operator.quota import QuotaUsage, read_home_quota
+from osm_polygon_sentence_relevance.operator.relay_transport import (
+    validate_safe_remote_path,
+)
 from osm_polygon_sentence_relevance.operator.sites import SiteProbe, SiteRequirements
 from osm_polygon_sentence_relevance.operator.sites_availability import (
     AvailabilityProbe,
@@ -42,11 +45,7 @@ _RUN_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"[0-9a-f]{20}")
 def _validate_target(target: str) -> None:
     """Reject any character that could subvert a shell interpolation."""
 
-    from osm_polygon_sentence_relevance.operator.relay import (
-        _validate_safe_path as _relay_validate,
-    )
-
-    _relay_validate(target)
+    validate_safe_remote_path(target)
 
 
 def _site_name(target: str) -> str:

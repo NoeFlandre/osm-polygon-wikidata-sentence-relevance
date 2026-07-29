@@ -40,6 +40,9 @@ from osm_polygon_sentence_relevance.operator.oar import (
     JobState,
     JobStatus,
 )
+from osm_polygon_sentence_relevance.operator.relay_transport import (
+    validate_safe_remote_path,
+)
 from osm_polygon_sentence_relevance.operator.ssh import SshClient
 
 
@@ -105,16 +108,14 @@ def _read_remote_text(ssh: SshClient, path: str) -> str:
 
 
 def _read_remote_bytes_digest(ssh: SshClient, remote_path: str) -> str:
-    """SHA-256 of the Parquet bytes, computed via a fixed remote command.
+    """Read SHA-256 digest of a remote file safely.
 
     Uses ``sha256sum --`` with the literal path. The path is required to be
     safe (no whitespace/quotes/control chars). The digest is the first token
     of the output. Raises :class:`ResumeError` on any failure.
     """
 
-    from osm_polygon_sentence_relevance.operator.relay import _validate_safe_path
-
-    _validate_safe_path(remote_path)
+    validate_safe_remote_path(remote_path)
     chunk = ssh.run(f"sha256sum -- {remote_path}")
     text_attr = getattr(chunk, "text", None)
     text = (
@@ -174,10 +175,8 @@ def _enumerate_remote_checkpoint_files(
     that contain shell metacharacters.
     """
 
-    from osm_polygon_sentence_relevance.operator.relay import _validate_safe_path
-
     ckpts_dir = f"{label_work_root.rstrip('/')}/checkpoints"
-    _validate_safe_path(ckpts_dir)
+    validate_safe_remote_path(ckpts_dir)
     listing = ssh.run(
         f"find {ckpts_dir} -mindepth 1 -maxdepth 1 "
         "-printf '%y\\t%f\\n' 2>/dev/null | sort"
@@ -222,11 +221,9 @@ def inspect_remote_resume(
     paired ``checkpoints/batch-NNNNNN.{parquet,json}`` files underneath.
     """
 
-    from osm_polygon_sentence_relevance.operator.relay import _validate_safe_path
-
-    _validate_safe_path(label_work_root)
-    _validate_safe_path(label_output_root)
-    _validate_safe_path(exit_file)
+    validate_safe_remote_path(label_work_root)
+    validate_safe_remote_path(label_output_root)
+    validate_safe_remote_path(exit_file)
 
     exit_text = _read_remote_text(ssh, exit_file)
     try:
