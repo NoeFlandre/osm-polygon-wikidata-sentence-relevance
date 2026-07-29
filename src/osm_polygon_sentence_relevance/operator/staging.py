@@ -86,6 +86,13 @@ cleanup_uv_cache() {{
 }}
 trap cleanup_uv_cache EXIT
 "$UV_BIN" sync --locked --no-dev {extras} --project "$repo"
+egg_info="$repo/src/osm_polygon_sentence_relevance.egg-info"
+[ ! -L "$egg_info" ]
+if [ -d "$egg_info" ]; then
+  rm -rf -- "$egg_info"
+elif [ -e "$egg_info" ]; then
+  exit 70
+fi
 cleanup_uv_cache
 trap - EXIT
 printf 'STAGING_OK reused=%s\\n' "$reused"

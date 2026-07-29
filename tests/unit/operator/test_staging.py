@@ -50,6 +50,10 @@ def test_prepare_builds_clean_pinned_checkout() -> None:
     assert "export UV_CACHE_DIR" in command
     assert "trap cleanup_uv_cache EXIT" in command
     assert 'rm -rf -- "$UV_CACHE_DIR"' in command
+    assert 'egg_info="$repo/src/osm_polygon_sentence_relevance.egg-info"' in command
+    assert '[ ! -L "$egg_info" ]' in command
+    assert 'rm -rf -- "$egg_info"' in command
+    assert command.index('"$UV_BIN" sync') < command.index('rm -rf -- "$egg_info"')
     assert '"status":"active"' in command
 
 
