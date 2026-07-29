@@ -420,17 +420,12 @@ def test_run_label_reuses_checkpoints_and_completes(
     assert set(headroom) == {512 * 1024**2}
 
 
-def test_simple_monitors_and_public_helpers(
+def test_public_helpers(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     ssh = _FakeSsh()
     layout = cli.RemoteLayout(PurePosixPath("/r"))
-    oar = _FakeOar(ssh)
-    monkeypatch.setattr(cli.time, "sleep", lambda _seconds: None)
-    cli._monitor_simple(ssh, oar, layout, 1, "log", 0)  # type: ignore[arg-type]
-    cli._monitor_without_log(oar, 1, 0)  # type: ignore[arg-type]
-    assert "[job 1] terminated" in capsys.readouterr().out
     assert (
         cli._publish_split(  # type: ignore[arg-type]
             ssh, layout, PurePosixPath("/out"), "owner/data"
@@ -442,31 +437,58 @@ def test_simple_monitors_and_public_helpers(
         cli._mark_remote_status(ssh, layout, "unknown")  # type: ignore[arg-type]
 
 
-def test_monitor_reports_queue_schedule_and_running_node(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+def test_ensure_llama_server_delegates_to_monitor_job_with_log(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    class StatefulOar:
-        statuses = iter(
-            (
-                JobStatus(
-                    42,
-                    JobState.QUEUED,
-                    scheduled_start="2026-07-28 19:00:00",
-                ),
-                JobStatus(42, JobState.RUNNING, node="gpu-1"),
-                JobStatus(42, JobState.TERMINATED, exit_code=0),
-            )
+    """CLI _ensure_llama_server delegates job monitoring to monitor_job_with_log with exact arguments."""
+
+    state = _FakeStore(Path("/unused"))
+    state.value = SimpleNamespace(phase=RunPhase.REMOTE_PREPARED, facts={})
+    ssh = _FakeSsh()
+
+    class SubmitOar:
+        def submit(self, _request: object) -> int:
+            return 99
+
+    calls: list[dict[str, object]] = []
+
+    def mock_monitor(
+        ssh_arg: object,
+        oar_arg: object,
+        layout_arg: object,
+        job_id_arg: int,
+        log_name_arg: str,
+        poll_seconds_arg: float,
+    ) -> None:
+        calls.append(
+            {
+                "ssh": ssh_arg,
+                "oar": oar_arg,
+                "layout": layout_arg,
+                "job_id": job_id_arg,
+                "log_name": log_name_arg,
+                "poll_seconds": poll_seconds_arg,
+            }
         )
 
-        def status(self, _job_id: int) -> JobStatus:
-            return next(self.statuses)
+    monkeypatch.setattr(cli, "monitor_job_with_log", mock_monitor)
+    layout = cli.RemoteLayout(PurePosixPath("/r"))
 
-    monkeypatch.setattr(cli.time, "sleep", lambda _seconds: None)
-    cli._monitor_without_log(StatefulOar(), 42, 0)  # type: ignore[arg-type]
-    output = capsys.readouterr().out
-    assert "[job 42] queued; scheduled start 2026-07-28 19:00:00" in output
-    assert "[job 42] running on gpu-1" in output
-    assert "[job 42] terminated (exit 0)" in output
+    job_id = cli._ensure_llama_server(
+        ssh,
+        SubmitOar(),  # type: ignore[arg-type]
+        state,
+        layout,
+        5.0,
+    )
+
+    assert job_id == 99
+    assert len(calls) == 1
+    assert calls[0]["ssh"] is ssh
+    assert calls[0]["layout"] is layout
+    assert calls[0]["job_id"] == 99
+    assert calls[0]["log_name"] == "build.stdout.log"
+    assert calls[0]["poll_seconds"] == 5.0
 
 
 def test_llama_build_reattaches_to_recorded_queued_job(
@@ -604,22 +626,6 @@ def test_label_publication_commit_requires_immutable_json() -> None:
 
     with pytest.raises(RuntimeError, match="immutable Hub commit"):
         cli._label_publication_commit(InvalidSsh(), layout, 1)  # type: ignore[arg-type]
-
-
-def test_monitor_helpers_reject_remote_failures(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    class ErrorOar:
-        def status(self, job_id: int) -> JobStatus:
-            return JobStatus(job_id, JobState.ERROR, exit_code=1)
-
-    ssh = _FakeSsh()
-    layout = cli.RemoteLayout(PurePosixPath("/r"))
-    monkeypatch.setattr(cli.time, "sleep", lambda _seconds: None)
-    with pytest.raises(RuntimeError, match="allocation failed"):
-        cli._monitor_simple(ssh, ErrorOar(), layout, 1, "log", 0)  # type: ignore[arg-type]
-    with pytest.raises(RuntimeError, match="build allocation"):
-        cli._monitor_without_log(ErrorOar(), 1, 0)  # type: ignore[arg-type]
 
 
 def test_status_missing_and_cleanup_preview(
@@ -1049,66 +1055,3 @@ def test_keyboard_interrupt_prints_invocation_specific_run_id(
         assert "6578fb2269130a41d243" in err
     finally:
         cli._ACTIVE_RUN_ID = prior
-
-
-def test_report_job_status_emits_once_on_walltime_only_change(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """A walltime-only change produces exactly one fresh line emission.
-
-    The scheduler dedup key includes (state, node, scheduled_start,
-    walltime, exit_code). Walltime changes of one second must still
-    surface exactly once, never silently dropped.
-    """
-
-    from osm_polygon_sentence_relevance.operator.cli import _report_job_status
-    from osm_polygon_sentence_relevance.operator.oar import JobState, JobStatus
-
-    status_a = JobStatus(
-        job_id=42,
-        state=JobState.RUNNING,
-        node="chifflet-6",
-        walltime_seconds=3300,
-    )
-    status_b = JobStatus(
-        job_id=42,
-        state=JobState.RUNNING,
-        node="chifflet-6",
-        walltime_seconds=3301,
-    )
-    previous: tuple[object, ...] | None = None
-    previous = _report_job_status(status_a, previous)
-    previous = _report_job_status(status_b, previous)
-    previous = _report_job_status(status_b, previous)
-    captured = capsys.readouterr().out.splitlines()
-    assert len(captured) == 2
-    assert "walltime" in captured[1]
-
-
-def test_report_job_status_emits_on_exit_code_transition(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """A transition to a non-zero exit code produces exactly one emission."""
-
-    from osm_polygon_sentence_relevance.operator.cli import _report_job_status
-    from osm_polygon_sentence_relevance.operator.oar import JobState, JobStatus
-
-    status_a = JobStatus(
-        job_id=42,
-        state=JobState.RUNNING,
-        node="chifflet-6",
-        walltime_seconds=3300,
-    )
-    status_b = JobStatus(
-        job_id=42,
-        state=JobState.TERMINATED,
-        node="chifflet-6",
-        exit_code=137,
-        walltime_seconds=3300,
-    )
-    previous: tuple[object, ...] | None = None
-    previous = _report_job_status(status_a, previous)
-    previous = _report_job_status(status_b, previous)
-    previous = _report_job_status(status_b, previous)
-    captured = capsys.readouterr().out.splitlines()
-    assert len(captured) == 2

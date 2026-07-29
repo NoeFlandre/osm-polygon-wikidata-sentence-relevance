@@ -32,13 +32,12 @@ from osm_polygon_sentence_relevance.operator.earliest_start import (
     rank_replacement_candidates,
     should_seek_replacement,
 )
+from osm_polygon_sentence_relevance.operator.job_monitor import monitor_job_with_log
 from osm_polygon_sentence_relevance.operator.oar import (
     GRID5000_TZ,
     ExitClass,
     JobState,
-    JobStatus,
     OarClient,
-    format_job_status,
     is_live_state,
 )
 from osm_polygon_sentence_relevance.operator.site_discovery import (
@@ -1137,7 +1136,7 @@ def _run(args: argparse.Namespace) -> int:
             facts={"finalization_job_id": final_job},
         )
         print(f"Submitted finalization job {final_job}", flush=True)
-        _monitor_simple(
+        monitor_job_with_log(
             ssh,
             oar,
             layout,
@@ -1266,34 +1265,6 @@ def _run(args: argparse.Namespace) -> int:
     return 0
 
 
-def _monitor_simple(
-    ssh: SshClient,
-    oar: OarClient,
-    layout: RemoteLayout,
-    job_id: int,
-    log_name: str,
-    poll_seconds: float,
-) -> None:
-    offset = 0
-    previous: tuple[JobState, str | None, str | None, int | None, int | None] | None = (
-        None
-    )
-    while True:
-        status = oar.status(job_id)
-        previous = _report_job_status(status, previous)
-        chunk = ssh.read_since(str(layout.logs / str(job_id) / log_name), offset)
-        if chunk.reset:
-            offset = 0
-        elif chunk.text:
-            offset = chunk.next_offset
-            _emit(LiveProgress(job_id, log_name, chunk.text, offset))
-        if status.state is JobState.TERMINATED:
-            return
-        if status.state in {JobState.ERROR, JobState.MISSING}:
-            raise RuntimeError("remote allocation failed")
-        time.sleep(poll_seconds)
-
-
 def _llama_server_ready(ssh: SshClient, layout: RemoteLayout) -> bool:
     return (
         _result_text(
@@ -1350,7 +1321,7 @@ def _ensure_llama_server(
         )
         print(f"Submitted CUDA llama-server build job {job_id}", flush=True)
 
-    _monitor_simple(
+    monitor_job_with_log(
         ssh,
         oar,
         layout,
@@ -1361,50 +1332,6 @@ def _ensure_llama_server(
     if not _llama_server_ready(ssh, layout):
         raise RuntimeError("CUDA llama-server build did not produce a binary")
     return job_id
-
-
-def _monitor_without_log(
-    oar: OarClient,
-    job_id: int,
-    poll_seconds: float,
-) -> None:
-    previous: tuple[JobState, str | None, str | None, int | None, int | None] | None = (
-        None
-    )
-    while True:
-        status = oar.status(job_id)
-        previous = _report_job_status(status, previous)
-        if status.state is JobState.TERMINATED:
-            if status.exit_code not in {None, 0}:
-                raise RuntimeError("remote build allocation failed")
-            return
-        if status.state in {JobState.ERROR, JobState.MISSING}:
-            raise RuntimeError("remote build allocation failed")
-        time.sleep(poll_seconds)
-
-
-def _report_job_status(
-    status: JobStatus,
-    previous: tuple[JobState, str | None, str | None, int | None, int | None] | None,
-) -> tuple[JobState, str | None, str | None, int | None, int | None]:
-    """Print a scheduler transition once and return its comparison key.
-
-    The comparison key includes every field the operator surfaces to the
-    human reader so a walltime update (``HH:MM:SS`` rolls over) or an
-    exit-code change produces exactly one fresh emission.
-    """
-
-    current = (
-        status.state,
-        status.node,
-        status.scheduled_start,
-        status.walltime_seconds,
-        status.exit_code,
-    )
-    if current == previous:
-        return current
-    print(f"[job {status.job_id}] {format_job_status(status)}", flush=True)
-    return current
 
 
 def _remote_exit_code(
