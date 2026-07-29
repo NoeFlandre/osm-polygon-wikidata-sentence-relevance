@@ -40,6 +40,8 @@ def test_prepare_builds_clean_pinned_checkout() -> None:
     command = ssh.commands[0]
     assert "git clone --no-tags" in command
     assert "checkout --detach" in command
+    assert "cat-file -e" in command
+    assert "rev-parse origin/main" not in command
     assert 'UV_BIN="$(command -v uv || true)"' in command
     assert 'UV_BIN="$HOME/.local/bin/uv"' in command
     assert '"$UV_BIN" sync --locked --no-dev --extra hub' in command

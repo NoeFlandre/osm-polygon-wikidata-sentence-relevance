@@ -71,7 +71,7 @@ else
   reused=true
 fi
 git -C "$repo" fetch --no-tags origin main
-test "$(git -C "$repo" rev-parse origin/main)" = {_q(config.source_commit)}
+git -C "$repo" cat-file -e {_q(config.source_commit)}^{{commit}}
 git -C "$repo" checkout --detach {_q(config.source_commit)}
 test -z "$(git -C "$repo" status --porcelain)"
 UV_BIN="$(command -v uv || true)"

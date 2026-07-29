@@ -78,6 +78,17 @@ def test_resume_live_job_reattaches_without_submission(
     )
     monkeypatch.setattr(cli, "DATA_ROOT", tmp_path)
     seen: list[tuple[str, int, str | None]] = []
+    optimized: list[tuple[str, int]] = []
+
+    def optimize(
+        _args: Any,
+        _store: Any,
+        _config: Any,
+        site: str,
+        job_id: int,
+    ) -> tuple[str, int]:
+        optimized.append((site, job_id))
+        return ("nancy", 456)
 
     def classify(
         args: Any,
@@ -93,9 +104,11 @@ def test_resume_live_job_reattaches_without_submission(
         return ExitClass.COMPLETE
 
     monkeypatch.setattr(cli, "_classify_or_continue", classify)
+    monkeypatch.setattr(cli, "_optimize_queued_start", optimize)
     args = cli.build_parser().parse_args(["resume", config.run_id])
     assert cli._resume_run(config.run_id, args) == 0
-    assert seen == [("sophia", 123, "sophia")]
+    assert optimized == [("sophia", 123)]
+    assert seen == [("nancy", 456, "nancy")]
 
 
 def test_resume_prepared_continuation_validates_assets_and_submits(
@@ -166,6 +179,11 @@ def test_resume_prepared_continuation_validates_assets_and_submits(
         cli,
         "_classify_or_continue",
         lambda **kwargs: (seen.append(int(kwargs["job_id"])) or ExitClass.COMPLETE),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_optimize_queued_start",
+        lambda _args, _store, _config, site, job_id: (site, job_id),
     )
     args = cli.build_parser().parse_args(["resume", config.run_id])
     assert cli._resume_run(config.run_id, args) == 0

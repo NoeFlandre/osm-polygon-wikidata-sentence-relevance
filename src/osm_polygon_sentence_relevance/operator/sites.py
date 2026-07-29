@@ -26,6 +26,7 @@ class SiteProbe:
     queued_jobs: int
     idle_compatible: bool = False
     has_managed_run: bool = False
+    label_runtime_ready: bool = False
 
 
 @dataclass(frozen=True, slots=True)

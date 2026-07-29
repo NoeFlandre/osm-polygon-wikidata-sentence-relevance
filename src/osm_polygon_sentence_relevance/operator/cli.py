@@ -9,6 +9,7 @@ import shlex
 import subprocess
 import sys
 import time
+from datetime import datetime
 from pathlib import Path, PurePosixPath
 from typing import Any, Final
 
@@ -25,7 +26,14 @@ from osm_polygon_sentence_relevance.operator.controller import (
     Controller,
     LiveProgress,
 )
+from osm_polygon_sentence_relevance.operator.earliest_start import (
+    ReplacementCandidate,
+    attempt_immediate_replacement,
+    rank_replacement_candidates,
+    should_seek_replacement,
+)
 from osm_polygon_sentence_relevance.operator.oar import (
+    GRID5000_TZ,
     ExitClass,
     JobState,
     JobStatus,
@@ -53,6 +61,7 @@ from osm_polygon_sentence_relevance.operator.staging import Stager
 from osm_polygon_sentence_relevance.operator.state import RunPhase, RunState, StateStore
 from osm_polygon_sentence_relevance.operator.workflows import (
     RemoteLayout,
+    label_submission,
     llama_build_submission,
     split_finalization_submission,
 )
@@ -149,8 +158,9 @@ def _probe_target(
     _validate_safe_path(target)
     ssh = SshClient(target=target, attempts=1, command_timeout=30)
     managed_probe = (
-        f'test -f "$HOME/osm-polygon-operator/{run_id}/.operator-managed.json" '
-        "&& managed=1"
+        f'run_root="$HOME/osm-polygon-operator/{run_id}"; '
+        'test -f "$run_root/.operator-managed.json" && managed=1; '
+        'test -x "$run_root/llama-server-bin/llama-server" && runtime_ready=1'
         if run_id is not None
         else ":"
     )
@@ -160,13 +170,21 @@ command -v oarnodes >/dev/null
 command -v jq >/dev/null
 free_kb=$(df -Pk "$HOME" | awk 'NR==2 {print $4}')
 managed=0
+runtime_ready=0
 __MANAGED_PROBE__
-printf '%s\n' "$free_kb"
+printf '%s\n%s\n%s\n' "$free_kb" "$managed" "$runtime_ready"
 """.replace("__MANAGED_PROBE__", managed_probe).strip()
     try:
         availability_text = _result_text(ssh.run(availability_command()))
         avail = parse_availability_stdout(availability_text)
-        free_kb_raw = _result_text(ssh.run(probe)).splitlines()[-1].strip()
+        probe_lines = _result_text(ssh.run(probe)).splitlines()
+        if len(probe_lines) != 3:
+            raise ValueError("invalid site probe output")
+        free_kb_raw, managed_raw, runtime_ready_raw = (
+            line.strip() for line in probe_lines
+        )
+        if managed_raw not in {"0", "1"} or runtime_ready_raw not in {"0", "1"}:
+            raise ValueError("invalid managed-run probe output")
         quota = _read_remote_quota(ssh)
         gpu_memory, gpu_capability = _aggregate_peak_gpu(avail)
         idle = avail.idle_compatible(requirements or SiteRequirements())
@@ -193,6 +211,8 @@ printf '%s\n' "$free_kb"
         ),
         queued_jobs=waiting,
         idle_compatible=idle,
+        has_managed_run=managed_raw == "1",
+        label_runtime_ready=runtime_ready_raw == "1",
     )
 
 
@@ -816,6 +836,226 @@ def _relay_for_continuation(
     return str(inventory.root)
 
 
+def _optimize_queued_start(
+    args: argparse.Namespace,
+    store: StateStore,
+    config: OperatorConfig,
+    fallback_site: str,
+    fallback_job_id: int,
+) -> tuple[str, int]:
+    """Replace a distant queued job only after a trial is actually running."""
+
+    clients: dict[str, tuple[SshClient, RemoteLayout, OarClient]] = {}
+    assets: dict[str, Any] = {}
+
+    def client(site: str) -> tuple[SshClient, RemoteLayout, OarClient]:
+        cached = clients.get(site)
+        if cached is not None:
+            return cached
+        ssh = SshClient(target=site, command_timeout=1800)
+        layout = RemoteLayout(
+            _remote_home(ssh) / "osm-polygon-operator" / config.run_id
+        )
+
+        def preflight() -> None:
+            _usage_policy_preflight(ssh, site)
+            _storage_preflight(
+                ssh,
+                protected_root=layout.root,
+                minimum_headroom_bytes=_SUBMISSION_HEADROOM_BYTES,
+            )
+
+        cached = (ssh, layout, OarClient(ssh, preflight=preflight))
+        clients[site] = cached
+        return cached
+
+    fallback_status = client(fallback_site)[2].status(fallback_job_id)
+    durable = store.load()
+    replacement_status = durable.facts.get("replacement_status")
+    if replacement_status == "adopted":
+        old_site = durable.facts.get("fallback_site")
+        old_job = durable.facts.get("fallback_job_id")
+        if (
+            isinstance(old_site, str)
+            and type(old_job) is int
+            and old_job > 0
+            and durable.facts.get("fallback_cancelled") is not True
+        ):
+            old_status = client(old_site)[2].status(old_job)
+            if old_status.state is JobState.QUEUED:
+                client(old_site)[2].cancel(old_job)
+            current = store.load()
+            store.transition(
+                expected=current.phase,
+                target=current.phase,
+                facts={"fallback_cancelled": True},
+            )
+        return fallback_site, fallback_job_id
+
+    now = datetime.now(tz=GRID5000_TZ)
+    existing_trial: tuple[ReplacementCandidate, int, float] | None = None
+    if replacement_status == "trial":
+        trial_site = durable.facts.get("replacement_site")
+        trial_job = durable.facts.get("replacement_job_id")
+        deadline_at = durable.facts.get("replacement_deadline_at")
+        if (
+            isinstance(trial_site, str)
+            and type(trial_job) is int
+            and trial_job > 0
+            and isinstance(deadline_at, (int, float))
+        ):
+            trial_probe = _probe_target(
+                trial_site,
+                config.run_id,
+                SiteRequirements(
+                    gpu_memory_mb=getattr(args, "gpu_memory_mb", 40_000),
+                    persistent_free_bytes=_SUBMISSION_HEADROOM_BYTES,
+                ),
+            )
+            remaining = max(0.0, float(deadline_at) - time.time())
+            existing_trial = (
+                ReplacementCandidate(trial_probe),
+                trial_job,
+                time.monotonic() + remaining,
+            )
+
+    if existing_trial is None and not should_seek_replacement(
+        fallback_status,
+        now=now,
+    ):
+        return fallback_site, fallback_job_id
+
+    requirements = SiteRequirements(
+        gpu_memory_mb=getattr(args, "gpu_memory_mb", 40_000),
+        persistent_free_bytes=_SUBMISSION_HEADROOM_BYTES,
+    )
+    targets = tuple(dict.fromkeys(getattr(args, "site", DEFAULT_TARGETS)))
+    probes: list[SiteProbe] = []
+    _milestone(
+        "Queued start is distant; checking every site for an immediate "
+        "policy-compliant GPU"
+    )
+    for target in targets:
+        probe = _probe_target(target, config.run_id, requirements)
+        probes.append(probe)
+        if not probe.reachable:
+            _milestone(f"Immediate candidate {target}: unavailable")
+        elif not probe.idle_compatible:
+            _milestone(f"Immediate candidate {target}: no idle compatible GPU")
+        elif not probe.label_runtime_ready:
+            _milestone(f"Immediate candidate {target}: labeling runtime not staged")
+        else:
+            _milestone(f"Immediate candidate {target}: ready")
+    excluded_trial_sites = (
+        frozenset({existing_trial[0].site.name})
+        if existing_trial is not None
+        else frozenset()
+    )
+    candidates = rank_replacement_candidates(
+        probes,
+        requirements=requirements,
+        excluded_sites=excluded_trial_sites,
+    )
+    if existing_trial is None and not candidates:
+        _milestone(
+            "No demonstrably immediate replacement exists; retaining scheduled "
+            f"job {fallback_job_id}"
+        )
+        return fallback_site, fallback_job_id
+
+    def prepare(candidate: ReplacementCandidate) -> None:
+        site = candidate.site.name
+        ssh, layout, _oar = client(site)
+        _usage_policy_preflight(ssh, site)
+        _storage_preflight(
+            ssh,
+            protected_root=layout.root,
+            minimum_headroom_bytes=_SUBMISSION_HEADROOM_BYTES,
+        )
+        stager = Stager(ssh)
+        stager.prepare(config, layout)
+        label_assets = stager.prepare_label_assets(config, layout, download_input=True)
+        if not label_assets.llama_server_ready:
+            raise RuntimeError("CUDA llama-server is not staged")
+        assets[site] = label_assets
+
+    def submit(candidate: ReplacementCandidate) -> int:
+        site = candidate.site.name
+        current_fallback = client(fallback_site)[2].status(fallback_job_id)
+        if current_fallback.state is not JobState.QUEUED:
+            raise RuntimeError("fallback is no longer queued")
+        _ssh, layout, oar = client(site)
+        label_assets = assets[site]
+        return oar.submit(
+            label_submission(
+                config,
+                layout,
+                input_parquet=label_assets.input_parquet,
+                model_file=label_assets.model_file,
+                tokenizer_dir=label_assets.tokenizer_dir,
+            )
+        )
+
+    def persist_trial(site: str, job_id: int, deadline: float) -> None:
+        remaining = max(0.0, deadline - time.monotonic())
+        current = store.load()
+        store.transition(
+            expected=current.phase,
+            target=current.phase,
+            facts={
+                "fallback_site": fallback_site,
+                "fallback_job_id": fallback_job_id,
+                "fallback_cancelled": False,
+                "replacement_site": site,
+                "replacement_job_id": job_id,
+                "replacement_deadline_at": time.time() + remaining,
+                "replacement_status": "trial",
+            },
+        )
+
+    def adopt_trial(site: str, job_id: int) -> None:
+        current = store.load()
+        store.transition(
+            expected=current.phase,
+            target=current.phase,
+            facts={
+                "site": site,
+                "job_id": job_id,
+                "replacement_status": "adopted",
+                "fallback_cancelled": False,
+            },
+        )
+
+    def clear_trial(job_id: int) -> None:
+        current = store.load()
+        store.transition(
+            expected=current.phase,
+            target=current.phase,
+            facts={
+                "replacement_job_id": job_id,
+                "replacement_status": "inactive",
+            },
+        )
+
+    outcome = attempt_immediate_replacement(
+        fallback_site=fallback_site,
+        fallback_job_id=fallback_job_id,
+        candidates=candidates,
+        prepare=prepare,
+        submit=submit,
+        status=lambda site, job_id: client(site)[2].status(job_id),
+        cancel=lambda site, job_id: client(site)[2].cancel(job_id),
+        persist_trial=persist_trial,
+        adopt_trial=adopt_trial,
+        clear_trial=clear_trial,
+        emit=_milestone,
+        monotonic=time.monotonic,
+        sleep=time.sleep,
+        existing_trial=existing_trial,
+    )
+    return outcome.site, outcome.job_id
+
+
 def _resume_run(run_id: str, args: argparse.Namespace) -> int:
     """Resume or classify a historical run by its durable run ID.
 
@@ -886,6 +1126,13 @@ def _resume_run(run_id: str, args: argparse.Namespace) -> int:
         )
         return 0
     site, job_id = candidate
+    site, job_id = _optimize_queued_start(
+        args,
+        store,
+        config,
+        site,
+        job_id,
+    )
     _milestone(f"Resuming run {run_id} on site {site}, job {job_id}")
     classification = _classify_or_continue(
         args=args,
@@ -1517,6 +1764,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="resume or classify a historical run by its durable run ID",
     )
     resume.add_argument("run_id")
+    resume.add_argument("--site", action="append", default=list(DEFAULT_TARGETS))
+    resume.add_argument("--gpu-memory-mb", type=int, default=40_000)
     resume.add_argument("--poll-seconds", type=float, default=30.0)
     resume.set_defaults(handler=_resume_handler)
 

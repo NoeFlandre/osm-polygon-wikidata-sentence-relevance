@@ -146,7 +146,7 @@ def test_site_probe_parses_frontend_facts(monkeypatch: pytest.MonkeyPatch) -> No
                 return SimpleNamespace(stdout="3\n")
             if "quota" in command:
                 return SimpleNamespace(stdout=" 1000 25000000 100000000\n")
-            return SimpleNamespace(stdout="1000\n")
+            return SimpleNamespace(stdout="1000\n1\n1\n")
 
     monkeypatch.setattr(cli, "SshClient", FakeSsh)
     assert cli._probe_target("nancy", "a" * 20) == SiteProbe(
@@ -158,7 +158,8 @@ def test_site_probe_parses_frontend_facts(monkeypatch: pytest.MonkeyPatch) -> No
         1_024_000,  # min(1000*1024 free kb, quota headroom)
         3,
         True,  # idle_compatible from oarnodes idle node
-        False,
+        True,
+        True,
     )
     assert any("oarnodes -J" in c for c in FakeSsh.commands)
     assert not any("oarstat -p" in c for c in FakeSsh.commands)

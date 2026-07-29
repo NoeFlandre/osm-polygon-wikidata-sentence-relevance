@@ -88,6 +88,5 @@
 - [ ] Run `git diff --check` and audit the diff for secrets, tokens, personal
   paths, scheduler IDs, and generated runtime artifacts.
 - [ ] Commit only the reviewed implementation and push normally to `main`.
-- [ ] Inspect job `2895249` read-only. Do not cancel or resubmit it during code
-  acceptance.
-
+- [ ] Inspect the recorded fallback job read-only. Do not cancel or resubmit it
+  during code acceptance.

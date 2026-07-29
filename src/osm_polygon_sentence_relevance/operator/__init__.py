@@ -21,6 +21,12 @@ from osm_polygon_sentence_relevance.operator.config import (
     Scope,
     Stage,
 )
+from osm_polygon_sentence_relevance.operator.earliest_start import (
+    IMMEDIATE_START_LIMIT,
+    ReplacementCandidate,
+    rank_replacement_candidates,
+    should_seek_replacement,
+)
 from osm_polygon_sentence_relevance.operator.quota import (
     QuotaError,
     QuotaUsage,
@@ -48,6 +54,7 @@ from osm_polygon_sentence_relevance.operator.state import (
 
 __all__ = [
     "DATA_ROOT",
+    "IMMEDIATE_START_LIMIT",
     "INPUT_DATASET_ID",
     "OUTPUT_DATASET_ID",
     "Scope",
@@ -55,6 +62,7 @@ __all__ = [
     "Grid5000Requirements",
     "RunIdentity",
     "OperatorConfig",
+    "ReplacementCandidate",
     "QuotaError",
     "QuotaUsage",
     "RunState",
@@ -64,6 +72,8 @@ __all__ = [
     "StateIdentityMismatch",
     "StateTransitionError",
     "parse_quota_output",
+    "rank_replacement_candidates",
+    "should_seek_replacement",
     "StateSecurityError",
     "LogChunk",
     "SshClient",

@@ -211,6 +211,13 @@ def test_job_wrapper_invokes_deadline_helper() -> None:
     assert "45m 5m" in text
 
 
+def test_job_wrapper_acquires_nonblocking_run_lock_before_gpu_work() -> None:
+    text = _text("run_afghanistan_labeling_job.sh")
+    assert "flock -n" in text
+    assert "labeling.run.lock" in text
+    assert text.index("flock -n") < text.index("gpu_preflight.py")
+
+
 def test_job_wrapper_translates_submit_arguments_to_payload_contract() -> None:
     text = _text("run_afghanistan_labeling_job.sh")
     normalized = " ".join(text.replace("\\", "").split())

@@ -44,6 +44,26 @@ if ! validate_clean_checkout "${REPO_ROOT}" "${RUN_ROOT}"; then
     exit 1
 fi
 
+# Final protection against two schedulers running the same immutable labeling
+# identity at once. The Mac-side operator normally prevents this; the
+# allocation-local nonblocking lock also covers scheduler/start-time races.
+command -v flock >/dev/null || {
+    echo "run_afghanistan_labeling_job: flock is required" >&2
+    exit 1
+}
+RUN_LOCK="${RUN_ROOT}/labeling.run.lock"; readonly RUN_LOCK
+if [ -L "${RUN_LOCK}" ]; then
+    echo "run_afghanistan_labeling_job: run lock must not be a symlink" >&2
+    exit 1
+fi
+: >"${RUN_LOCK}"
+chmod 0600 "${RUN_LOCK}"
+exec 9<>"${RUN_LOCK}"
+if ! flock -n 9; then
+    echo "run_afghanistan_labeling_job: another allocation owns this run" >&2
+    exit 75
+fi
+
 case "${LLAMA_PARALLEL}" in
     1|2|4|8|16|32) ;;
     *) echo "run_afghanistan_labeling_job: LLAMA_PARALLEL must be one of 1, 2, 4, 8, 16, 32" >&2; exit 2;;
