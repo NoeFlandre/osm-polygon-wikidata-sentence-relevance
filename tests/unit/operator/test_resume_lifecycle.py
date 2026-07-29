@@ -485,7 +485,7 @@ def test_resume_reroutes_cross_site_and_submits_exactly_one_new_allocation(
     monkeypatch.setattr(cli, "SshClient", _fake_ssh_ctor)
     monkeypatch.setattr(cli, "_remote_home", lambda _s: Path("/home/u"))
     monkeypatch.setattr(cli, "_usage_policy_preflight", lambda *_a: None)
-    monkeypatch.setattr(cli, "_storage_preflight", lambda *_a, **_kw: None)
+    monkeypatch.setattr(cli, "ensure_home_headroom", lambda *_a, **_kw: None)
 
     class _Stager:
         def __init__(self, _ssh: Any) -> None:

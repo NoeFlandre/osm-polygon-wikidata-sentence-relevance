@@ -41,7 +41,6 @@ from osm_polygon_sentence_relevance.operator.oar import (
     format_job_status,
     is_live_state,
 )
-from osm_polygon_sentence_relevance.operator.quota import read_home_quota
 from osm_polygon_sentence_relevance.operator.site_discovery import (
     DEFAULT_SITES,
     probe_site,
@@ -55,6 +54,13 @@ from osm_polygon_sentence_relevance.operator.sites import (
 from osm_polygon_sentence_relevance.operator.ssh import SshClient
 from osm_polygon_sentence_relevance.operator.staging import Stager
 from osm_polygon_sentence_relevance.operator.state import RunPhase, RunState, StateStore
+from osm_polygon_sentence_relevance.operator.storage import (
+    LABEL_STAGING_HEADROOM_BYTES,
+    cleanup_can_restore_compatibility,
+    cleanup_managed_runs,
+    ensure_home_headroom,
+    required_staging_headroom,
+)
 from osm_polygon_sentence_relevance.operator.workflows import (
     RemoteLayout,
     label_submission,
@@ -63,7 +69,6 @@ from osm_polygon_sentence_relevance.operator.workflows import (
 )
 
 _SUBMISSION_HEADROOM_BYTES: Final[int] = 512 * 1024**2
-_LABEL_STAGING_HEADROOM_BYTES: Final[int] = 22 * 1024**3
 
 
 def _milestone(message: str) -> None:
@@ -117,32 +122,6 @@ def _resolve_input_revision(explicit: str | None, stage: str) -> str:
     return sha
 
 
-def _storage_cleanup_can_help(
-    probes: list[SiteProbe],
-    requirements: SiteRequirements,
-) -> bool:
-    """Return whether storage is the only failed hard constraint anywhere."""
-
-    return any(
-        probe.reachable
-        and probe.gpu_memory_mb >= requirements.gpu_memory_mb
-        and probe.cuda_capability is not None
-        and probe.cuda_capability >= requirements.cuda_capability
-        and probe.persistent_free_bytes < requirements.persistent_free_bytes
-        for probe in probes
-    )
-
-
-def _required_staging_headroom(stage: str, requested_bytes: int) -> int:
-    """Reserve measured label-environment space before persistent staging."""
-
-    if requested_bytes < 0:
-        raise ValueError("requested storage headroom must be non-negative")
-    if stage in {Stage.LABEL.value, Stage.ALL.value}:
-        return max(requested_bytes, _LABEL_STAGING_HEADROOM_BYTES)
-    return requested_bytes
-
-
 def _remote_home(ssh: SshClient) -> PurePosixPath:
     result = ssh.run('printf "%s\\n" "$HOME"')
     value = _result_text(result).strip()
@@ -171,25 +150,6 @@ def _usage_policy_preflight(ssh: SshClient, site: str) -> None:
         f"usagepolicycheck -l --sites {quoted_site} >/dev/null && "
         "usagepolicycheck -t >/dev/null"
     )
-
-
-def _storage_preflight(
-    ssh: SshClient,
-    *,
-    protected_root: PurePosixPath,
-    minimum_headroom_bytes: int,
-) -> None:
-    """Reclaim terminal managed runs, then fail closed above the soft quota."""
-
-    if minimum_headroom_bytes < 0:
-        raise ValueError("minimum storage headroom must be non-negative")
-    quota = read_home_quota(ssh)
-    if quota.soft_headroom_bytes >= minimum_headroom_bytes:
-        return
-    _cleanup_remote(ssh, execute=True, protected_root=protected_root)
-    quota = read_home_quota(ssh)
-    if quota.soft_headroom_bytes < minimum_headroom_bytes:
-        raise RuntimeError("Grid'5000 home soft quota has insufficient safe headroom")
 
 
 def _emit(progress: LiveProgress) -> None:
@@ -318,10 +278,10 @@ def _prepare_destination_for_resume(
         home = _remote_home(ssh)
         layout = RemoteLayout(home / "osm-polygon-operator" / config.run_id)
         _usage_policy_preflight(ssh, site)
-        _storage_preflight(
+        ensure_home_headroom(
             ssh,
             protected_root=layout.root,
-            minimum_headroom_bytes=_LABEL_STAGING_HEADROOM_BYTES,
+            minimum_headroom_bytes=LABEL_STAGING_HEADROOM_BYTES,
         )
         stager = Stager(ssh)
         stager.prepare(config, layout)
@@ -330,7 +290,7 @@ def _prepare_destination_for_resume(
 
             def submission_preflight() -> None:
                 _usage_policy_preflight(ssh, site)
-                _storage_preflight(
+                ensure_home_headroom(
                     ssh,
                     protected_root=layout.root,
                     minimum_headroom_bytes=_SUBMISSION_HEADROOM_BYTES,
@@ -718,7 +678,7 @@ def _optimize_queued_start(
 
         def preflight() -> None:
             _usage_policy_preflight(ssh, site)
-            _storage_preflight(
+            ensure_home_headroom(
                 ssh,
                 protected_root=layout.root,
                 minimum_headroom_bytes=_SUBMISSION_HEADROOM_BYTES,
@@ -826,7 +786,7 @@ def _optimize_queued_start(
         site = candidate.site.name
         ssh, layout, _oar = client(site)
         _usage_policy_preflight(ssh, site)
-        _storage_preflight(
+        ensure_home_headroom(
             ssh,
             protected_root=layout.root,
             minimum_headroom_bytes=_SUBMISSION_HEADROOM_BYTES,
@@ -950,7 +910,7 @@ def _resume_run(run_id: str, args: argparse.Namespace) -> int:
             store, config, site_value, poll_seconds=args.poll_seconds
         )
         _usage_policy_preflight(ssh, site_value)
-        _storage_preflight(
+        ensure_home_headroom(
             ssh,
             protected_root=layout.root,
             minimum_headroom_bytes=_SUBMISSION_HEADROOM_BYTES,
@@ -1055,7 +1015,7 @@ def _run(args: argparse.Namespace) -> int:
 
     requirements = SiteRequirements(
         gpu_memory_mb=args.gpu_memory_mb,
-        persistent_free_bytes=_required_staging_headroom(
+        persistent_free_bytes=required_staging_headroom(
             args.stage,
             args.remote_free_bytes,
         ),
@@ -1075,14 +1035,14 @@ def _run(args: argparse.Namespace) -> int:
     try:
         selection = select_site(probes, requirements)
     except NoCompatibleSiteError:
-        if not _storage_cleanup_can_help(probes, requirements):
+        if not cleanup_can_restore_compatibility(probes, requirements):
             raise
         _milestone(
             "No compatible site; reclaiming only completed or failed managed runs"
         )
         for probe in probes:
             if probe.reachable:
-                _cleanup_remote(SshClient(target=probe.target), execute=True)
+                cleanup_managed_runs(SshClient(target=probe.target), execute=True)
         probes = []
         for target in dict.fromkeys(args.site):
             _milestone(f"Re-probing Grid'5000 site: {target}")
@@ -1102,7 +1062,7 @@ def _run(args: argparse.Namespace) -> int:
         if selection.selected.has_managed_run
         else requirements.persistent_free_bytes
     )
-    _storage_preflight(
+    ensure_home_headroom(
         ssh,
         protected_root=layout.root,
         minimum_headroom_bytes=initial_headroom,
@@ -1111,7 +1071,7 @@ def _run(args: argparse.Namespace) -> int:
 
     def submission_preflight() -> None:
         _usage_policy_preflight(ssh, selection.selected.name)
-        _storage_preflight(
+        ensure_home_headroom(
             ssh,
             protected_root=layout.root,
             minimum_headroom_bytes=_SUBMISSION_HEADROOM_BYTES,
@@ -1535,35 +1495,6 @@ def _mark_remote_status(ssh: SshClient, layout: RemoteLayout, status: str) -> No
     )
 
 
-def _cleanup_remote(
-    ssh: SshClient,
-    *,
-    execute: bool,
-    protected_root: PurePosixPath | None = None,
-) -> tuple[str, ...]:
-    action = "delete" if execute else "preview"
-    protected = str(protected_root) if protected_root is not None else ""
-    script = f"""
-set -euo pipefail
-root="$HOME/osm-polygon-operator"
-protected={shlex.quote(protected)}
-[ -d "$root" ] || exit 0
-find "$root" -mindepth 1 -maxdepth 1 -type d -print0 |
-while IFS= read -r -d '' candidate; do
-  [ ! -L "$candidate" ] || continue
-  [ -z "$protected" ] || [ "$candidate" != "$protected" ] || continue
-  marker="$candidate/.operator-managed.json"
-  [ -f "$marker" ] && [ ! -L "$marker" ] || continue
-  status=$(sed -n 's/.*"status":"\\([^"]*\\)".*/\\1/p' "$marker")
-  case "$status" in complete|failed) ;; *) continue ;; esac
-  printf '%s\\n' "$candidate"
-  if [ {shlex.quote(action)} = delete ]; then rm -rf -- "$candidate"; fi
-done
-""".strip()
-    result = ssh.run(script)
-    return tuple(line for line in _result_text(result).splitlines() if line)
-
-
 def _status(args: argparse.Namespace) -> int:
     path = DATA_ROOT / "runs" / args.run_id / "state.json"
     if not path.is_file():
@@ -1578,7 +1509,7 @@ def _resume_handler(args: argparse.Namespace) -> int:
 
 
 def _cleanup(args: argparse.Namespace) -> int:
-    removed = _cleanup_remote(
+    removed = cleanup_managed_runs(
         SshClient(target=args.site),
         execute=args.execute,
     )

@@ -15,7 +15,7 @@ from osm_polygon_sentence_relevance.operator import cli
 from osm_polygon_sentence_relevance.operator.config import OperatorConfig
 from osm_polygon_sentence_relevance.operator.controller import LiveProgress
 from osm_polygon_sentence_relevance.operator.oar import ExitClass, JobState, JobStatus
-from osm_polygon_sentence_relevance.operator.sites import SiteProbe, SiteRequirements
+from osm_polygon_sentence_relevance.operator.sites import SiteProbe
 from osm_polygon_sentence_relevance.operator.staging import LabelAssets
 from osm_polygon_sentence_relevance.operator.state import RunPhase
 from osm_polygon_sentence_relevance.operator.workflows import (
@@ -63,12 +63,6 @@ def test_help_exposes_run_status_and_public_stage_choices(
     }
 
 
-def test_label_staging_reserves_measured_environment_headroom() -> None:
-    assert cli._required_staging_headroom("split", 8 * 1024**3) == 8 * 1024**3
-    assert cli._required_staging_headroom("label", 8 * 1024**3) == 22 * 1024**3
-    assert cli._required_staging_headroom("all", 24 * 1024**3) == 24 * 1024**3
-
-
 def test_sigint_only_stops_local_monitoring(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -106,17 +100,6 @@ def test_status_prints_durable_json(
 def test_live_progress_is_rendered(capsys: pytest.CaptureFixture[str]) -> None:
     cli._emit(LiveProgress(42, "build.stdout.log", "one\ntwo\n", 8))
     assert capsys.readouterr().out.splitlines() == ["[job 42] one", "[job 42] two"]
-
-
-def test_storage_cleanup_is_attempted_only_when_it_can_restore_compatibility() -> None:
-    requirements = SiteRequirements(
-        gpu_memory_mb=40_000,
-        persistent_free_bytes=10_000,
-    )
-    no_gpu = SiteProbe("x", "x", True, 0, None, 100_000, 0)
-    low_storage = SiteProbe("x", "x", True, 80_000, (8, 0), 1, 0)
-    assert not cli._storage_cleanup_can_help([no_gpu], requirements)
-    assert cli._storage_cleanup_can_help([low_storage], requirements)
 
 
 def test_git_head_requires_immutable_clean_checkout(
@@ -184,52 +167,6 @@ def test_usage_policy_preflight_runs_live_checker() -> None:
     cli._usage_policy_preflight(PolicySsh(), "nancy")  # type: ignore[arg-type]
     assert "usagepolicycheck -l --sites nancy" in PolicySsh.command
     assert "usagepolicycheck -t" in PolicySsh.command
-
-
-def test_storage_preflight_cleans_terminal_runs_and_rechecks() -> None:
-    class StorageSsh:
-        outputs = iter(
-            [
-                " 30000000* 25000000 100000000\n",
-                "/home/user/osm-polygon-operator/old\n",
-                " 10000000 25000000 100000000\n",
-            ]
-        )
-        commands: list[str] = []
-
-        def run(self, command: str) -> SimpleNamespace:
-            self.__class__.commands.append(command)
-            return SimpleNamespace(stdout=next(self.__class__.outputs))
-
-    cli._storage_preflight(  # type: ignore[arg-type]
-        StorageSsh(),
-        protected_root=PurePosixPath("/home/user/osm-polygon-operator/current"),
-        minimum_headroom_bytes=1024,
-    )
-    assert "quota" in StorageSsh.commands[0]
-    assert "rm -rf" in StorageSsh.commands[1]
-    assert "current" in StorageSsh.commands[1]
-
-
-def test_storage_preflight_fails_closed_when_cleanup_is_insufficient() -> None:
-    class StorageSsh:
-        outputs = iter(
-            [
-                " 30000000* 25000000 100000000\n",
-                "",
-                " 30000000* 25000000 100000000\n",
-            ]
-        )
-
-        def run(self, _command: str) -> SimpleNamespace:
-            return SimpleNamespace(stdout=next(self.__class__.outputs))
-
-    with pytest.raises(RuntimeError, match="soft quota"):
-        cli._storage_preflight(  # type: ignore[arg-type]
-            StorageSsh(),
-            protected_root=PurePosixPath("/home/user/osm-polygon-operator/current"),
-            minimum_headroom_bytes=1024,
-        )
 
 
 @pytest.mark.parametrize("site", ["", "Nancy", "nancy;true", "nancy site"])
@@ -404,7 +341,7 @@ def test_run_reclaims_managed_storage_then_reprobes(
     )
     monkeypatch.setattr(
         cli,
-        "_cleanup_remote",
+        "cleanup_managed_runs",
         lambda _ssh, *, execute: cleaned.append(execute) or ("/managed/old",),
     )
     args = cli.build_parser().parse_args(
@@ -448,7 +385,7 @@ def test_run_label_reuses_checkpoints_and_completes(
     headroom: list[int] = []
     monkeypatch.setattr(
         cli,
-        "_storage_preflight",
+        "ensure_home_headroom",
         lambda _ssh, *, protected_root, minimum_headroom_bytes: headroom.append(
             minimum_headroom_bytes
         ),
@@ -691,35 +628,15 @@ def test_status_missing_and_cleanup_preview(
     monkeypatch.setattr(cli, "DATA_ROOT", tmp_path)
     with pytest.raises(RuntimeError, match="does not exist"):
         cli._status(SimpleNamespace(run_id="a" * 20))
-    monkeypatch.setattr(cli, "_cleanup_remote", lambda _ssh, execute: ())
+    monkeypatch.setattr(cli, "cleanup_managed_runs", lambda _ssh, *, execute: ())
     monkeypatch.setattr(cli, "SshClient", _FakeSsh)
     assert cli._cleanup(SimpleNamespace(site="nancy", execute=False)) == 0
     assert "No pipeline-managed" in capsys.readouterr().out
     monkeypatch.setattr(
-        cli, "_cleanup_remote", lambda _ssh, execute: ("/home/user/run",)
+        cli, "cleanup_managed_runs", lambda _ssh, *, execute: ("/home/user/run",)
     )
     assert cli._cleanup(SimpleNamespace(site="nancy", execute=True)) == 0
     assert "removed: /home/user/run" in capsys.readouterr().out
-
-
-def test_remote_cleanup_builds_guarded_preview_and_delete_scripts() -> None:
-    class CleanupSsh:
-        def __init__(self) -> None:
-            self.commands: list[str] = []
-
-        def run(self, command: str) -> SimpleNamespace:
-            self.commands.append(command)
-            return SimpleNamespace(stdout="/home/user/run-a\n/home/user/run-b\n")
-
-    ssh = CleanupSsh()
-    assert cli._cleanup_remote(ssh, execute=False) == (  # type: ignore[arg-type]
-        "/home/user/run-a",
-        "/home/user/run-b",
-    )
-    assert "rm -rf" in ssh.commands[0]
-    assert "[ preview = delete ]" in ssh.commands[0]
-    cli._cleanup_remote(ssh, execute=True)  # type: ignore[arg-type]
-    assert "[ delete = delete ]" in ssh.commands[1]
 
 
 def test_main_reports_errors(

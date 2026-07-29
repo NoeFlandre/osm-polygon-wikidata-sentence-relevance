@@ -130,7 +130,7 @@ def test_cli_adopts_running_trial_then_cancels_fallback(
     monkeypatch.setattr(cli, "Stager", _Stager)
     monkeypatch.setattr(cli, "_remote_home", lambda _ssh: PurePosixPath("/home/u"))
     monkeypatch.setattr(cli, "_usage_policy_preflight", lambda *_a: None)
-    monkeypatch.setattr(cli, "_storage_preflight", lambda *_a, **_kw: None)
+    monkeypatch.setattr(cli, "ensure_home_headroom", lambda *_a, **_kw: None)
     monkeypatch.setattr(
         cli,
         "probe_site",

@@ -1,127 +1,113 @@
-"""Safe planning for pipeline-owned Grid'5000 storage reclamation."""
+"""Production Grid'5000 remote-storage management.
+
+Owns the staging-headroom reservation, storage-only compatibility diagnosis,
+managed-run cleanup (preview and execute), and home-quota headroom enforcement
+that the operator CLI delegates to. All remote actions go through the injected
+SSH transport.
+"""
 
 from __future__ import annotations
 
-import os
-import shutil
-import stat
-from dataclasses import dataclass
-from enum import StrEnum
-from pathlib import Path
+import shlex
+from pathlib import PurePosixPath
+from typing import TYPE_CHECKING, Final
+
+from osm_polygon_sentence_relevance.operator.config import Stage
+from osm_polygon_sentence_relevance.operator.quota import read_home_quota
+from osm_polygon_sentence_relevance.operator.sites import SiteProbe, SiteRequirements
+
+if TYPE_CHECKING:
+    from osm_polygon_sentence_relevance.operator.ssh import SshClient
+
+LABEL_STAGING_HEADROOM_BYTES: Final[int] = 22 * 1024**3
 
 
-class ManagedStatus(StrEnum):
-    """Lifecycle status recorded in the operator inventory."""
+def required_staging_headroom(stage: str, requested_bytes: int) -> int:
+    """Reserve measured label-environment space before persistent staging."""
 
-    ACTIVE = "active"
-    COMPLETE = "complete"
-    FAILED = "failed"
-    CACHE = "cache"
-    PROTECTED = "protected"
-
-
-@dataclass(frozen=True, slots=True)
-class ManagedEntry:
-    """One inventory-bound directory beneath the managed root."""
-
-    path: Path
-    status: ManagedStatus
-    bytes_used: int
-    updated_epoch: int
-    pipeline_owned: bool = True
+    if requested_bytes < 0:
+        raise ValueError("requested storage headroom must be non-negative")
+    if stage in {Stage.LABEL.value, Stage.ALL.value}:
+        return max(requested_bytes, LABEL_STAGING_HEADROOM_BYTES)
+    return requested_bytes
 
 
-@dataclass(frozen=True, slots=True)
-class CleanupPlan:
-    """Ordered deletion candidates and expected reclaimed bytes."""
+def cleanup_can_restore_compatibility(
+    probes: list[SiteProbe],
+    requirements: SiteRequirements,
+) -> bool:
+    """Return whether storage is the only failed hard constraint anywhere."""
 
-    managed_root: Path
-    candidates: tuple[ManagedEntry, ...]
-    expected_reclaimed_bytes: int
-
-
-class StorageSafetyError(RuntimeError):
-    """A cleanup candidate violates the managed-storage boundary."""
-
-
-_PROTECTED_NAMES = frozenset({".ssh", ".bashrc", ".profile", ".bash_profile"})
-
-
-def _is_beneath(path: Path, root: Path) -> bool:
-    try:
-        path.relative_to(root)
-    except ValueError:
-        return False
-    return path != root
+    return any(
+        probe.reachable
+        and probe.gpu_memory_mb >= requirements.gpu_memory_mb
+        and probe.cuda_capability is not None
+        and probe.cuda_capability >= requirements.cuda_capability
+        and probe.persistent_free_bytes < requirements.persistent_free_bytes
+        for probe in probes
+    )
 
 
-def plan_cleanup(
-    managed_root: Path,
-    entries: list[ManagedEntry] | tuple[ManagedEntry, ...],
-    required_bytes: int,
-) -> CleanupPlan:
-    """Plan oldest safe deletions without mutating the filesystem."""
+def cleanup_managed_runs(
+    ssh: SshClient,
+    *,
+    execute: bool,
+    protected_root: PurePosixPath | None = None,
+) -> tuple[str, ...]:
+    """Preview or delete terminal pipeline-managed runs on one frontend.
 
-    if required_bytes < 0:
-        raise ValueError("required_bytes must be non-negative")
-    root = managed_root.resolve(strict=True)
-    if managed_root.is_symlink() or not root.is_dir():
-        raise StorageSafetyError("managed root must be a real directory")
+    Confined to direct children of ``$HOME/osm-polygon-operator``. Only
+    directories with a real ``.operator-managed.json`` marker whose status is
+    ``complete`` or ``failed`` are eligible. Symlink candidates and markers are
+    ignored, the managed root and the protected run root are never removed.
+    """
 
-    eligible: list[ManagedEntry] = []
-    for entry in entries:
-        if not entry.pipeline_owned:
-            continue
-        if entry.status not in {ManagedStatus.COMPLETE, ManagedStatus.FAILED}:
-            continue
-        if entry.path.name in _PROTECTED_NAMES or entry.path.is_symlink():
-            continue
-        try:
-            candidate = entry.path.resolve(strict=True)
-        except OSError:
-            continue
-        if not _is_beneath(candidate, root) or not candidate.is_dir():
-            continue
-        eligible.append(entry)
-
-    selected: list[ManagedEntry] = []
-    reclaimed = 0
-    for entry in sorted(
-        eligible, key=lambda item: (item.updated_epoch, str(item.path))
-    ):
-        if reclaimed >= required_bytes:
-            break
-        selected.append(entry)
-        reclaimed += max(0, entry.bytes_used)
-    return CleanupPlan(root, tuple(selected), reclaimed)
+    action = "delete" if execute else "preview"
+    protected = str(protected_root) if protected_root is not None else ""
+    script = f"""
+set -euo pipefail
+root="$HOME/osm-polygon-operator"
+protected={shlex.quote(protected)}
+[ -d "$root" ] || exit 0
+find "$root" -mindepth 1 -maxdepth 1 -type d -print0 |
+while IFS= read -r -d '' candidate; do
+  [ ! -L "$candidate" ] || continue
+  [ -z "$protected" ] || [ "$candidate" != "$protected" ] || continue
+  marker="$candidate/.operator-managed.json"
+  [ -f "$marker" ] && [ ! -L "$marker" ] || continue
+  status=$(sed -n 's/.*"status":"\\([^"]*\\)".*/\\1/p' "$marker")
+  case "$status" in complete|failed) ;; *) continue ;; esac
+  printf '%s\\n' "$candidate"
+  if [ {shlex.quote(action)} = delete ]; then rm -rf -- "$candidate"; fi
+done
+""".strip()
+    result = ssh.run(script)
+    return tuple(line for line in result.stdout.splitlines() if line)
 
 
-def execute_cleanup(plan: CleanupPlan) -> int:
-    """Execute a precomputed plan after immediate containment revalidation."""
+def ensure_home_headroom(
+    ssh: SshClient,
+    *,
+    protected_root: PurePosixPath,
+    minimum_headroom_bytes: int,
+) -> None:
+    """Reclaim terminal managed runs, then fail closed above the soft quota."""
 
-    root = plan.managed_root.resolve(strict=True)
-    reclaimed = 0
-    for entry in plan.candidates:
-        if entry.path.is_symlink():
-            raise StorageSafetyError("cleanup candidate became a symlink")
-        candidate = entry.path.resolve(strict=True)
-        if not _is_beneath(candidate, root):
-            raise StorageSafetyError("cleanup candidate escaped managed root")
-        metadata = os.lstat(candidate)
-        if not stat.S_ISDIR(metadata.st_mode):
-            raise StorageSafetyError("cleanup candidate is not a directory")
-        if hasattr(os, "getuid") and metadata.st_uid != os.getuid():
-            raise StorageSafetyError("cleanup candidate owner changed")
-        shutil.rmtree(candidate)
-        reclaimed += max(0, entry.bytes_used)
-    return reclaimed
+    if minimum_headroom_bytes < 0:
+        raise ValueError("minimum storage headroom must be non-negative")
+    quota = read_home_quota(ssh)
+    if quota.soft_headroom_bytes >= minimum_headroom_bytes:
+        return
+    cleanup_managed_runs(ssh, execute=True, protected_root=protected_root)
+    quota = read_home_quota(ssh)
+    if quota.soft_headroom_bytes < minimum_headroom_bytes:
+        raise RuntimeError("Grid'5000 home soft quota has insufficient safe headroom")
 
 
 __all__ = [
-    "CleanupPlan",
-    "ManagedEntry",
-    "ManagedStatus",
-    "StorageSafetyError",
-    "execute_cleanup",
-    "plan_cleanup",
+    "LABEL_STAGING_HEADROOM_BYTES",
+    "cleanup_can_restore_compatibility",
+    "cleanup_managed_runs",
+    "ensure_home_headroom",
+    "required_staging_headroom",
 ]

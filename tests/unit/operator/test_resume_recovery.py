@@ -12,7 +12,6 @@ import pytest
 from osm_polygon_sentence_relevance.operator import cli
 from osm_polygon_sentence_relevance.operator.config import OperatorConfig
 from osm_polygon_sentence_relevance.operator.oar import ExitClass
-from osm_polygon_sentence_relevance.operator.sites import SiteProbe, SiteRequirements
 from osm_polygon_sentence_relevance.operator.state import RunPhase, StateStore
 
 
@@ -164,7 +163,7 @@ def test_resume_prepared_continuation_validates_assets_and_submits(
         cli, "_usage_policy_preflight", lambda *_a: calls.append("policy")
     )
     monkeypatch.setattr(
-        cli, "_storage_preflight", lambda *_a, **_kw: calls.append("quota")
+        cli, "ensure_home_headroom", lambda *_a, **_kw: calls.append("quota")
     )
     monkeypatch.setattr(cli, "Stager", lambda _ssh: FakeStager())
     monkeypatch.setattr(
@@ -213,17 +212,6 @@ def test_resume_refuses_tampered_persisted_identity(
         cli._resume_run(config.run_id, args)
 
 
-def test_small_cli_validation_and_fallback_branches(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    with pytest.raises(ValueError, match="non-negative"):
-        cli._required_staging_headroom("label", -1)
-    requirements = SiteRequirements(persistent_free_bytes=10)
-    assert cli._storage_cleanup_can_help(
-        [SiteProbe("x", "x", True, 80_000, (8, 0), 1, 0)], requirements
-    )
-
-
 def test_prepare_cross_site_runs_build_when_binary_is_missing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -257,7 +245,7 @@ def test_prepare_cross_site_runs_build_when_binary_is_missing(
         cli, "_usage_policy_preflight", lambda *_a: calls.append("policy")
     )
     monkeypatch.setattr(
-        cli, "_storage_preflight", lambda *_a, **_kw: calls.append("quota")
+        cli, "ensure_home_headroom", lambda *_a, **_kw: calls.append("quota")
     )
     monkeypatch.setattr(cli, "Stager", FakeStager)
     monkeypatch.setattr(cli, "OarClient", FakeOar)

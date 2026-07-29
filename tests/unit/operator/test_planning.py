@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pathlib import Path, PurePosixPath
+from pathlib import PurePosixPath
 from types import SimpleNamespace
 
 import pytest
@@ -25,13 +25,6 @@ from osm_polygon_sentence_relevance.operator.sites import (
     SiteRequirements,
     evaluate_site,
     select_site,
-)
-from osm_polygon_sentence_relevance.operator.storage import (
-    ManagedEntry,
-    ManagedStatus,
-    StorageSafetyError,
-    execute_cleanup,
-    plan_cleanup,
 )
 from osm_polygon_sentence_relevance.operator.token_budget import (
     TokenBudgetError,
@@ -155,69 +148,6 @@ def test_site_decision_reports_each_hard_constraint() -> None:
     )
     with pytest.raises(NoCompatibleSiteError, match="no Grid"):
         select_site([])
-
-
-def test_cleanup_only_removes_inventory_owned_terminal_entries(tmp_path: Path) -> None:
-    root = tmp_path / "managed"
-    root.mkdir()
-    old = root / "old"
-    old.mkdir()
-    active = root / "active"
-    active.mkdir()
-    plan = plan_cleanup(
-        root,
-        [
-            ManagedEntry(old, ManagedStatus.COMPLETE, 10, 1),
-            ManagedEntry(active, ManagedStatus.ACTIVE, 100, 0),
-        ],
-        5,
-    )
-    assert [entry.path for entry in plan.candidates] == [old]
-    assert execute_cleanup(plan) == 10
-    assert not old.exists()
-    assert active.exists()
-
-
-def test_cleanup_filters_unsafe_and_unneeded_entries(tmp_path: Path) -> None:
-    root = tmp_path / "managed"
-    root.mkdir()
-    safe = root / "safe"
-    safe.mkdir()
-    foreign = tmp_path / "foreign"
-    foreign.mkdir()
-    missing = root / "missing"
-    link = root / "link"
-    link.symlink_to(safe)
-    protected = root / ".ssh"
-    protected.mkdir()
-    entries = [
-        ManagedEntry(safe, ManagedStatus.COMPLETE, -10, 3, pipeline_owned=False),
-        ManagedEntry(safe, ManagedStatus.ACTIVE, 10, 3),
-        ManagedEntry(foreign, ManagedStatus.FAILED, 10, 3),
-        ManagedEntry(missing, ManagedStatus.FAILED, 10, 3),
-        ManagedEntry(link, ManagedStatus.FAILED, 10, 3),
-        ManagedEntry(protected, ManagedStatus.FAILED, 10, 3),
-    ]
-    assert plan_cleanup(root, entries, 0).candidates == ()
-    assert plan_cleanup(root, entries, 100).candidates == ()
-    with pytest.raises(ValueError, match="non-negative"):
-        plan_cleanup(root, entries, -1)
-    with pytest.raises(StorageSafetyError, match="real directory"):
-        plan_cleanup(link, entries, 1)
-
-
-def test_cleanup_revalidates_symlink_and_containment(tmp_path: Path) -> None:
-    root = tmp_path / "managed"
-    root.mkdir()
-    candidate = root / "candidate"
-    candidate.mkdir()
-    plan = plan_cleanup(
-        root, [ManagedEntry(candidate, ManagedStatus.COMPLETE, 10, 1)], 10
-    )
-    candidate.rmdir()
-    candidate.symlink_to(tmp_path)
-    with pytest.raises(StorageSafetyError, match="symlink"):
-        execute_cleanup(plan)
 
 
 def test_oar_parsing_and_expected_walltime_continuation() -> None:
@@ -590,35 +520,3 @@ def test_deterministic_failure_never_auto_resubmits(message: str) -> None:
     facts = CheckpointFacts(13_952, 54_462, True)
     assert classify_exit(status, facts) is ExitClass.FAILED
     assert classify_exit(status, facts) is not ExitClass.CONTINUE
-
-
-def test_cleanup_refuses_escape_and_preserves_unrelated_files(tmp_path: Path) -> None:
-    root = tmp_path / "managed"
-    root.mkdir()
-    candidate = root / "candidate"
-    candidate.mkdir()
-    unrelated = root / "unrelated-user-data"
-    unrelated.mkdir()
-    foreign = tmp_path / "outside-root"
-    foreign.mkdir()
-    plan = plan_cleanup(
-        root,
-        [ManagedEntry(candidate, ManagedStatus.COMPLETE, 10, 1)],
-        5,
-    )
-    assert execute_cleanup(plan) == 10
-    assert not candidate.exists()
-    # Unrelated user files inside the managed root are never touched.
-    assert unrelated.exists()
-    # An entry that escapes the managed root (symlink outside) is never a
-    # candidate, so cleanup cannot delete outside the operator-managed tree.
-    escape = root / "escape"
-    escape.symlink_to(foreign)
-    assert (
-        plan_cleanup(
-            root,
-            [ManagedEntry(escape, ManagedStatus.FAILED, 5, 1)],
-            5,
-        ).candidates
-        == ()
-    )
