@@ -27,8 +27,10 @@ from osm_polygon_sentence_relevance.operator.controller import (
     LiveProgress,
 )
 from osm_polygon_sentence_relevance.operator.earliest_start import (
+    UNPREDICTED_TRIAL_SECONDS,
     ReplacementCandidate,
     attempt_immediate_replacement,
+    policy_type_for,
     rank_replacement_candidates,
     should_seek_replacement,
 )
@@ -69,6 +71,7 @@ from osm_polygon_sentence_relevance.operator.storage import (
     required_staging_headroom,
 )
 from osm_polygon_sentence_relevance.operator.workflows import (
+    MICRO_LABEL_WALLTIME_SECONDS,
     RemoteLayout,
     label_submission,
     split_finalization_submission,
@@ -572,6 +575,12 @@ def _classify_or_continue(
             input_parquet=layout_d.root / "input/sentences.parquet",
             model_file=layout_d.root / "model" / config.label_model_file,
             tokenizer_dir=layout_d.root / "tokenizer",
+            walltime_seconds=MICRO_LABEL_WALLTIME_SECONDS,
+            policy_type=policy_type_for(
+                datetime.now(tz=GRID5000_TZ),
+                walltime_seconds=MICRO_LABEL_WALLTIME_SECONDS,
+            ),
+            gpu_memory_mb=getattr(args, "gpu_memory_mb", 40_000),
         )
         # Controller.submit atomically persists SUBMITTED and the job ID
         # before returning. Do not duplicate that state transition here.
@@ -819,6 +828,12 @@ def _optimize_queued_start(
                 input_parquet=label_assets.input_parquet,
                 model_file=label_assets.model_file,
                 tokenizer_dir=label_assets.tokenizer_dir,
+                walltime_seconds=MICRO_LABEL_WALLTIME_SECONDS,
+                policy_type=policy_type_for(
+                    datetime.now(tz=GRID5000_TZ),
+                    walltime_seconds=MICRO_LABEL_WALLTIME_SECONDS,
+                ),
+                gpu_memory_mb=getattr(args, "gpu_memory_mb", 40_000),
             )
         )
 
@@ -877,7 +892,9 @@ def _optimize_queued_start(
         emit=_milestone,
         monotonic=time.monotonic,
         sleep=time.sleep,
+        wall_clock=lambda: datetime.now(tz=GRID5000_TZ),
         existing_trial=existing_trial,
+        trial_seconds=UNPREDICTED_TRIAL_SECONDS,
     )
     return outcome.site, outcome.job_id
 
@@ -941,6 +958,12 @@ def _resume_run(run_id: str, args: argparse.Namespace) -> int:
             input_parquet=assets.input_parquet,
             model_file=assets.model_file,
             tokenizer_dir=assets.tokenizer_dir,
+            walltime_seconds=MICRO_LABEL_WALLTIME_SECONDS,
+            policy_type=policy_type_for(
+                datetime.now(tz=GRID5000_TZ),
+                walltime_seconds=MICRO_LABEL_WALLTIME_SECONDS,
+            ),
+            gpu_memory_mb=getattr(args, "gpu_memory_mb", 40_000),
         )
         print(f"Submitted continuation job {job_id}", flush=True)
         candidate = (site_value, job_id)
@@ -1211,6 +1234,12 @@ def _run(args: argparse.Namespace) -> int:
                 input_parquet=assets.input_parquet,
                 model_file=assets.model_file,
                 tokenizer_dir=assets.tokenizer_dir,
+                walltime_seconds=MICRO_LABEL_WALLTIME_SECONDS,
+                policy_type=policy_type_for(
+                    datetime.now(tz=GRID5000_TZ),
+                    walltime_seconds=MICRO_LABEL_WALLTIME_SECONDS,
+                ),
+                gpu_memory_mb=getattr(args, "gpu_memory_mb", 40_000),
             )
             print(
                 f"Submitted labeling job {job_id} (allocation {allocation})",

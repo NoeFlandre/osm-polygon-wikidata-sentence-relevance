@@ -102,6 +102,8 @@ def test_cli_adopts_running_trial_then_cancels_fallback(
     config, store = _queued_store(tmp_path)
     cancelled: list[tuple[str, int]] = []
 
+    submitted_requests: list[Any] = []
+
     class _Oar:
         def __init__(self, ssh: _Ssh, *, preflight: Any = None) -> None:
             self.site = ssh.target
@@ -117,9 +119,10 @@ def test_cli_adopts_running_trial_then_cancels_fallback(
                 )
             return JobStatus(job_id, JobState.RUNNING, walltime_seconds=3300)
 
-        def submit(self, _request: Any) -> int:
+        def submit(self, request: Any) -> int:
             if self.preflight is not None:
                 self.preflight()
+            submitted_requests.append(request)
             return 101
 
         def cancel(self, job_id: int) -> None:
@@ -146,6 +149,8 @@ def test_cli_adopts_running_trial_then_cancels_fallback(
     assert durable.facts["job_id"] == 101
     assert durable.facts["replacement_status"] == "adopted"
     assert cancelled == [("sophia", 42)]
+    assert len(submitted_requests) == 1
+    assert submitted_requests[0].command[1:4] == ("40000", "00:20:00", "day")
 
 
 def test_cli_retains_fallback_when_no_runtime_ready_candidate(

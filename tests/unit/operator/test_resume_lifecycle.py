@@ -217,6 +217,9 @@ class _FakeController:
         input_parquet: Any = None,
         model_file: Any = None,
         tokenizer_dir: Any = None,
+        walltime_seconds: int = 3_300,
+        policy_type: str | None = None,
+        gpu_memory_mb: int = 40_000,
     ) -> int:
         self.next_job_id += 1
         self.submitted.append(self.next_job_id)

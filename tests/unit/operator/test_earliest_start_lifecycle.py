@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 
 import pytest
 
@@ -10,8 +11,9 @@ from osm_polygon_sentence_relevance.operator.earliest_start import (
     ReplacementCandidate,
     ReplacementOutcome,
     attempt_immediate_replacement,
+    policy_type_for,
 )
-from osm_polygon_sentence_relevance.operator.oar import JobState, JobStatus
+from osm_polygon_sentence_relevance.operator.oar import GRID5000_TZ, JobState, JobStatus
 from osm_polygon_sentence_relevance.operator.sites import SiteProbe
 
 
@@ -97,6 +99,7 @@ def _run(
         emit=harness.emitted.append,
         monotonic=lambda: harness.clock,
         sleep=harness.sleep,
+        wall_clock=lambda: datetime(2026, 7, 30, 14, 0, tzinfo=GRID5000_TZ),
         trial_seconds=timeout,
         poll_seconds=30,
     )
@@ -127,6 +130,59 @@ def test_trial_timeout_cancels_only_trial_and_retains_fallback() -> None:
     assert harness.adopted == []
     assert harness.clock == 30
     assert harness.cleared == [101]
+
+
+def test_late_scheduler_forecast_cancels_without_waiting_and_tries_next() -> None:
+    harness = _Harness(
+        statuses={
+            101: [
+                JobStatus(
+                    101,
+                    JobState.QUEUED,
+                    scheduled_start="2026-07-30 19:00:00",
+                )
+            ],
+            102: [JobStatus(102, JobState.RUNNING)],
+        }
+    )
+
+    outcome = _run(harness, (_candidate("grenoble"), _candidate("nancy")))
+
+    assert outcome == ReplacementOutcome("nancy", 102, replaced=True)
+    assert harness.submitted == ["grenoble", "nancy"]
+    assert harness.cancelled == [("grenoble", 101), ("sophia", 42)]
+    assert harness.cleared == [101]
+    assert harness.clock == 0
+    assert any(
+        "forecast 2026-07-30 19:00:00 exceeds immediate-start window" in line
+        for line in harness.emitted
+    )
+
+
+@pytest.mark.parametrize(
+    ("now", "expected"),
+    [
+        (datetime(2026, 7, 30, 10, 0, tzinfo=GRID5000_TZ), "day"),
+        (datetime(2026, 7, 30, 18, 50, tzinfo=GRID5000_TZ), "night"),
+        (datetime(2026, 7, 30, 8, 50, tzinfo=GRID5000_TZ), "day"),
+        (datetime(2026, 7, 30, 8, 30, tzinfo=GRID5000_TZ), "night"),
+        (datetime(2026, 8, 1, 12, 0, tzinfo=GRID5000_TZ), "night"),
+    ],
+)
+def test_policy_type_chooses_window_that_can_fit_micro_allocation(
+    now: datetime, expected: str
+) -> None:
+    assert policy_type_for(now, walltime_seconds=1_200) == expected
+
+
+def test_policy_type_rejects_invalid_inputs() -> None:
+    with pytest.raises(ValueError, match="timezone-aware"):
+        policy_type_for(datetime(2026, 7, 30, 10, 0), walltime_seconds=1_200)
+    with pytest.raises(ValueError, match="positive"):
+        policy_type_for(
+            datetime(2026, 7, 30, 10, 0, tzinfo=GRID5000_TZ),
+            walltime_seconds=0,
+        )
 
 
 def test_failed_candidate_preparation_moves_to_next_candidate() -> None:

@@ -90,15 +90,19 @@ JOB_LOG_DIR="${LOG_ROOT}/${OAR_JOB_ID}"
 mkdir -m 0700 -- "${JOB_LOG_DIR}"
 
 set +e
-# Wrap the payload so a 55-minute OAR allocation gives the labeling CLI
-# 45 minutes, a 5-minute graceful checkpoint window, and scheduler margin.
+# Defaults preserve the historical 55-minute allocation contract. The
+# autonomous operator may provide a shorter validated duration and grace via
+# environment variables while keeping the immutable 17-argument payload
+# contract compatible with existing runs.
 # The labelling CLI handles SIGINT by writing ``interrupted=true`` and
 # exiting 0 so the helper propagates 0 and the next allocation can
 # resume from the same checkpoint directory.
 #
 # shellcheck source=scripts/grid5000/_deadline_helper.sh
 . "$(dirname "${BASH_SOURCE[0]}")/_deadline_helper.sh"
-deadline_helper_run 45m 5m "${PAYLOAD}" \
+DEADLINE_DURATION="${LABEL_DEADLINE_DURATION:-45m}"; readonly DEADLINE_DURATION
+DEADLINE_GRACE="${LABEL_DEADLINE_GRACE:-5m}"; readonly DEADLINE_GRACE
+deadline_helper_run "${DEADLINE_DURATION}" "${DEADLINE_GRACE}" "${PAYLOAD}" \
     "${REPO_ROOT}" "$4" "$5" "$6" "$7" "$8" "$9" \
     "${10}" "${11}" "${12}" "${13}" "${14}" "${LLAMA_PARALLEL}" \
     "${LLAMA_PER_SLOT_CONTEXT}" "${REQUEST_CONCURRENCY}" \

@@ -18,6 +18,7 @@ from osm_polygon_sentence_relevance.operator.sites import (
 )
 
 IMMEDIATE_START_LIMIT = timedelta(minutes=10)
+UNPREDICTED_TRIAL_SECONDS = 120.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,6 +59,43 @@ def should_seek_replacement(
         raise ValueError("now must be timezone-aware")
     if immediate_start_limit <= timedelta(0):
         raise ValueError("immediate_start_limit must be positive")
+    if status.state is not JobState.QUEUED:
+        return False
+    forecast = _forecast_datetime(status.scheduled_start)
+    if forecast is None:
+        return False
+    return forecast > now.astimezone(GRID5000_TZ) + immediate_start_limit
+
+
+def policy_type_for(now: datetime, *, walltime_seconds: int) -> str:
+    """Return the earliest policy window that can contain the whole job."""
+
+    if now.tzinfo is None or now.utcoffset() is None:
+        raise ValueError("now must be timezone-aware")
+    if walltime_seconds <= 0:
+        raise ValueError("walltime_seconds must be positive")
+    local = now.astimezone(GRID5000_TZ)
+    if local.weekday() < 5:
+        duration = timedelta(seconds=walltime_seconds)
+        day_start = local.replace(hour=9, minute=0, second=0, microsecond=0)
+        day_end = local.replace(hour=19, minute=0, second=0, microsecond=0)
+        if local < day_start:
+            return "night" if local + duration <= day_start else "day"
+        if local < day_end:
+            return "day" if local + duration <= day_end else "night"
+    return "night"
+
+
+def forecast_exceeds_immediate_window(
+    status: JobStatus,
+    *,
+    now: datetime,
+    immediate_start_limit: timedelta = IMMEDIATE_START_LIMIT,
+) -> bool:
+    """Return whether OAR predicts this queued trial too late for the exception."""
+
+    if now.tzinfo is None or now.utcoffset() is None:
+        raise ValueError("now must be timezone-aware")
     if status.state is not JobState.QUEUED:
         return False
     forecast = _forecast_datetime(status.scheduled_start)
@@ -108,6 +146,7 @@ def attempt_immediate_replacement(
     emit: Callable[[str], None],
     monotonic: Callable[[], float],
     sleep: Callable[[float], None],
+    wall_clock: Callable[[], datetime],
     existing_trial: tuple[ReplacementCandidate, int, float] | None = None,
     trial_seconds: float = 600.0,
     poll_seconds: float = 30.0,
@@ -167,6 +206,17 @@ def attempt_immediate_replacement(
                     f"cancelled fallback job {fallback_job_id}"
                 )
                 return ReplacementOutcome(site, job_id, replaced=True)
+            if forecast_exceeds_immediate_window(
+                observed,
+                now=wall_clock(),
+            ):
+                cancel(site, job_id)
+                clear_trial(job_id)
+                emit(
+                    f"Trial job {job_id} forecast {observed.scheduled_start} "
+                    "exceeds immediate-start window; cancelled"
+                )
+                break
             if observed.state in {
                 JobState.TERMINATED,
                 JobState.ERROR,
@@ -190,9 +240,12 @@ def attempt_immediate_replacement(
 
 __all__ = [
     "IMMEDIATE_START_LIMIT",
+    "UNPREDICTED_TRIAL_SECONDS",
     "ReplacementCandidate",
     "ReplacementOutcome",
     "attempt_immediate_replacement",
+    "forecast_exceeds_immediate_window",
+    "policy_type_for",
     "rank_replacement_candidates",
     "should_seek_replacement",
 ]

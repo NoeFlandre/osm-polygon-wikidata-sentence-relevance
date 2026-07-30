@@ -207,8 +207,16 @@ def test_job_wrapper_invokes_deadline_helper() -> None:
     text = _text("run_afghanistan_labeling_job.sh")
     assert "_deadline_helper.sh" in text
     assert "deadline_helper_run" in text
-    # The wrapper checkpoints at 45m, leaving grace before the 55m OAR limit.
-    assert "45m 5m" in text
+    assert 'DEADLINE_DURATION="${LABEL_DEADLINE_DURATION:-45m}"' in text
+    assert 'DEADLINE_GRACE="${LABEL_DEADLINE_GRACE:-5m}"' in text
+
+
+def test_job_wrapper_accepts_bounded_operational_deadline_override() -> None:
+    text = _text("run_afghanistan_labeling_job.sh")
+
+    assert 'DEADLINE_DURATION="${LABEL_DEADLINE_DURATION:-45m}"' in text
+    assert 'DEADLINE_GRACE="${LABEL_DEADLINE_GRACE:-5m}"' in text
+    assert 'deadline_helper_run "${DEADLINE_DURATION}" "${DEADLINE_GRACE}"' in text
 
 
 def test_job_wrapper_acquires_nonblocking_run_lock_before_gpu_work() -> None:

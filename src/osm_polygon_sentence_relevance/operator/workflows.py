@@ -2,11 +2,20 @@
 
 from __future__ import annotations
 
+import shlex
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 
 from osm_polygon_sentence_relevance.operator.config import OperatorConfig, Scope
-from osm_polygon_sentence_relevance.operator.oar import SubmissionRequest
+from osm_polygon_sentence_relevance.operator.oar import (
+    SubmissionRequest,
+    format_walltime,
+)
+
+DEFAULT_LABEL_WALLTIME_SECONDS = 3_300
+MICRO_LABEL_WALLTIME_SECONDS = 1_200
+_LABEL_GRACE_SECONDS = 300
+_LABEL_SCHEDULER_MARGIN_SECONDS = 300
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,6 +107,9 @@ def label_submission(
     input_parquet: PurePosixPath,
     model_file: PurePosixPath,
     tokenizer_dir: PurePosixPath,
+    walltime_seconds: int = DEFAULT_LABEL_WALLTIME_SECONDS,
+    policy_type: str | None = None,
+    gpu_memory_mb: int = 40_000,
 ) -> SubmissionRequest:
     """Build one resumable labeling allocation."""
 
@@ -105,8 +117,8 @@ def label_submission(
     if revision is None:
         raise ValueError("immutable input revision is required")
     requirements = config.requirements
-    command = (
-        str(layout.repo / "scripts/grid5000/submit_afghanistan_labeling.sh"),
+    wrapper_args = (
+        str(layout.repo / "scripts/grid5000/run_afghanistan_labeling_job.sh"),
         str(layout.repo),
         str(layout.hf_home),
         str(layout.logs),
@@ -124,6 +136,37 @@ def label_submission(
         str(requirements.llama_parallel),
         str(requirements.llama_per_slot_context),
         str(requirements.request_concurrency),
+    )
+    if walltime_seconds == DEFAULT_LABEL_WALLTIME_SECONDS and policy_type is None:
+        return SubmissionRequest(
+            (
+                str(layout.repo / "scripts/grid5000/submit_afghanistan_labeling.sh"),
+                *wrapper_args[1:],
+            )
+        )
+    if not 900 <= walltime_seconds <= 3_600:
+        raise ValueError("label walltime must be between 15 and 60 minutes")
+    if policy_type not in {"day", "night"}:
+        raise ValueError("label policy type must be day or night")
+    if gpu_memory_mb <= 0:
+        raise ValueError("GPU memory must be positive")
+    duration_seconds = (
+        walltime_seconds - _LABEL_GRACE_SECONDS - _LABEL_SCHEDULER_MARGIN_SECONDS
+    )
+    payload = "exec " + shlex.join(
+        (
+            "env",
+            f"LABEL_DEADLINE_DURATION={duration_seconds}s",
+            f"LABEL_DEADLINE_GRACE={_LABEL_GRACE_SECONDS}s",
+            *wrapper_args,
+        )
+    )
+    command = (
+        str(layout.repo / "scripts/grid5000/_submit_gpu_job.sh"),
+        str(gpu_memory_mb),
+        format_walltime(walltime_seconds),
+        policy_type,
+        payload,
     )
     return SubmissionRequest(command)
 
@@ -166,6 +209,8 @@ def llama_build_submission(layout: RemoteLayout) -> SubmissionRequest:
 
 __all__ = [
     "RemoteLayout",
+    "DEFAULT_LABEL_WALLTIME_SECONDS",
+    "MICRO_LABEL_WALLTIME_SECONDS",
     "label_submission",
     "llama_build_submission",
     "split_finalization_submission",

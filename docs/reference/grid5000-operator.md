@@ -40,12 +40,22 @@ that is factually idle now. A site is eligible only when the same immutable
 run already has its CUDA labeling runtime staged there and the live
 usage-policy and home-quota checks pass.
 
-The queued job remains the fallback. The operator submits at most one trial
-replacement and gives it ten minutes to become `Running`. If the trial misses
-that deadline or fails, the trial is cancelled and the fallback is retained.
-Only after the trial is confirmed running does the operator adopt its job ID
-and cancel the old queued reservation. During the trial it also watches the
-fallback; if the fallback starts first, the trial is cancelled.
+The queued job remains the fallback. Replacement trials request a 20-minute
+allocation, which is easier for OAR to backfill than the normal 55-minute
+allocation. If OAR already forecasts a start more than ten minutes away, the
+operator cancels that trial immediately and checks the next site. When OAR
+provides no forecast, the operator observes the trial for at most two minutes.
+Only after a trial is confirmed `Running` does it adopt that job ID and cancel
+the old queued reservation. During the trial it also watches the fallback; if
+the fallback starts first, the trial is cancelled.
+
+The trial is tagged `day` or `night` using Europe/Paris time and its complete
+20-minute walltime. Near the 09:00 and 19:00 weekday boundaries, the operator
+selects the next window when the job cannot fit entirely in the current one.
+Inside the allocation, inference receives ten minutes, followed by five
+minutes for graceful checkpointing and five minutes of scheduler margin. The
+same immutable run identity and checkpoint directory are reused by every
+allocation.
 
 This uses Grid'5000's documented exception for immediately available jobs of
 at most one hour. It does not infer an ETA from queue depth and does not submit

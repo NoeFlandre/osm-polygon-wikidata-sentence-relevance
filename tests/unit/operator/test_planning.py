@@ -241,6 +241,56 @@ def test_label_serializes_context_and_concurrency() -> None:
     assert request.command[-2:] == ("8192", "8")
 
 
+def test_label_micro_allocation_uses_existing_helper_and_wrapper_contract() -> None:
+    request = label_submission(
+        _config(stage="label"),
+        RemoteLayout(PurePosixPath("/r")),
+        input_parquet=PurePosixPath("/r/input.parquet"),
+        model_file=PurePosixPath("/r/model.gguf"),
+        tokenizer_dir=PurePosixPath("/r/tokenizer"),
+        walltime_seconds=1200,
+        policy_type="day",
+    )
+
+    assert request.command[:4] == (
+        "/r/repo/scripts/grid5000/_submit_gpu_job.sh",
+        "40000",
+        "00:20:00",
+        "day",
+    )
+    payload = request.command[4]
+    assert payload.startswith(
+        "exec env LABEL_DEADLINE_DURATION=600s LABEL_DEADLINE_GRACE=300s "
+    )
+    assert "/r/repo/scripts/grid5000/run_afghanistan_labeling_job.sh" in payload
+    assert payload.count("run_afghanistan_labeling_job.sh") == 1
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"walltime_seconds": 899, "policy_type": "day"}, "between 15 and 60"),
+        ({"walltime_seconds": 1200, "policy_type": "besteffort"}, "day or night"),
+        (
+            {"walltime_seconds": 1200, "policy_type": "day", "gpu_memory_mb": 0},
+            "GPU memory must be positive",
+        ),
+    ],
+)
+def test_label_micro_allocation_rejects_unsafe_scheduler_parameters(
+    overrides: dict[str, object], message: str
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        label_submission(
+            _config(stage="label"),
+            RemoteLayout(PurePosixPath("/r")),
+            input_parquet=PurePosixPath("/r/input.parquet"),
+            model_file=PurePosixPath("/r/model.gguf"),
+            tokenizer_dir=PurePosixPath("/r/tokenizer"),
+            **overrides,
+        )
+
+
 @pytest.mark.parametrize("output", ["", "OAR_JOB_ID=1\nOAR_JOB_ID=2", "0"])
 def test_job_id_parser_rejects_ambiguous_or_invalid_output(output: str) -> None:
     with pytest.raises(OarError):

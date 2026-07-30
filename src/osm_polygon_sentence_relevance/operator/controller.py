@@ -19,6 +19,7 @@ from osm_polygon_sentence_relevance.operator.ssh import LogChunk, SshClient
 from osm_polygon_sentence_relevance.operator.staging import Stager
 from osm_polygon_sentence_relevance.operator.state import RunPhase, StateStore
 from osm_polygon_sentence_relevance.operator.workflows import (
+    DEFAULT_LABEL_WALLTIME_SECONDS,
     RemoteLayout,
     label_submission,
     split_submission,
@@ -102,6 +103,9 @@ class Controller:
         input_parquet: PurePosixPath | None = None,
         model_file: PurePosixPath | None = None,
         tokenizer_dir: PurePosixPath | None = None,
+        walltime_seconds: int = DEFAULT_LABEL_WALLTIME_SECONDS,
+        policy_type: str | None = None,
+        gpu_memory_mb: int = 40_000,
     ) -> int:
         """Submit exactly once from REMOTE_PREPARED."""
 
@@ -134,6 +138,9 @@ class Controller:
                 input_parquet=input_parquet,
                 model_file=model_file,
                 tokenizer_dir=tokenizer_dir,
+                walltime_seconds=walltime_seconds,
+                policy_type=policy_type,
+                gpu_memory_mb=gpu_memory_mb,
             )
         else:
             raise ControllerError("stage=all requires an explicit component")
@@ -142,7 +149,16 @@ class Controller:
         self.state.transition(
             expected=RunPhase.REMOTE_PREPARED,
             target=RunPhase.SUBMITTED,
-            facts={"job_id": job_id, "log_offset": 0, "active_stage": selected.value},
+            facts={
+                "job_id": job_id,
+                "log_offset": 0,
+                "active_stage": selected.value,
+                **(
+                    {"requested_walltime_seconds": walltime_seconds}
+                    if selected is Stage.LABEL
+                    else {}
+                ),
+            },
         )
         return job_id
 
