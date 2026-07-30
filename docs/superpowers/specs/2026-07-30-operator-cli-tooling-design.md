@@ -1,7 +1,7 @@
 # Operator CLI and Developer Tooling Design
 
 **Date:** 2026-07-30
-**Status:** Proposed
+**Status:** Approved
 **Scope:** Public Grid'5000 operator CLI and repository developer workflow
 
 ## Goal
