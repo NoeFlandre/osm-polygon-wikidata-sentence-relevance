@@ -41,6 +41,13 @@ from osm_polygon_sentence_relevance.operator.oar import (
     OarClient,
     is_live_state,
 )
+from osm_polygon_sentence_relevance.operator.remote_completion import (
+    assert_remote_exit_zero,
+    label_publication_commit,
+    mark_remote_status,
+    publish_split,
+    remote_exit_code,
+)
 from osm_polygon_sentence_relevance.operator.site_discovery import (
     DEFAULT_SITES,
     probe_site,
@@ -350,7 +357,7 @@ def _apply_classification(
             target=RunPhase.FAILED,
             facts={"failed_job_id": job_id},
         )
-        _mark_remote_status(ssh, layout, "failed")
+        mark_remote_status(ssh, layout, "failed")
         raise RuntimeError(
             f"recorded allocation {job_id} failed deterministically; not "
             "resubmitting automatically"
@@ -359,7 +366,7 @@ def _apply_classification(
         if is_label:
             hub_commit: str | None = None
             if config.requirements.row_limit == 0:
-                hub_commit = _label_publication_commit(ssh, layout, job_id)
+                hub_commit = label_publication_commit(ssh, layout, job_id)
             facts: dict[str, object] = {"label_job_id": job_id}
             if hub_commit is not None:
                 facts["hub_commit"] = hub_commit
@@ -380,7 +387,7 @@ def _apply_classification(
                 facts={"published": config.requirements.row_limit == 0},
             )
             print(f"Labeling complete: run {config.run_id}", flush=True)
-            _mark_remote_status(ssh, layout, "complete")
+            mark_remote_status(ssh, layout, "complete")
             return
         _transition_terminal(
             store,
@@ -1108,7 +1115,7 @@ def _run(args: argparse.Namespace) -> int:
             outcome = controller.monitor(job_id, log_name="build.stdout.log")
             if outcome is not JobState.TERMINATED:
                 raise RuntimeError("sentence splitting allocation failed")
-            split_exit_code = _remote_exit_code(ssh, layout, job_id, "build.exit_code")
+            split_exit_code = remote_exit_code(ssh, layout, job_id, "build.exit_code")
             if split_exit_code == 0:
                 break
             if split_exit_code != 130:
@@ -1146,7 +1153,7 @@ def _run(args: argparse.Namespace) -> int:
             args.poll_seconds,
             sleeper=time.sleep,
         )
-        _assert_remote_exit_zero(ssh, layout, final_job, "finalize.exit_code")
+        assert_remote_exit_zero(ssh, layout, final_job, "finalize.exit_code")
         store.transition(
             expected=RunPhase.FINALIZING,
             target=RunPhase.VALIDATED,
@@ -1154,7 +1161,7 @@ def _run(args: argparse.Namespace) -> int:
         )
         if config.stage is Stage.SPLIT:
             output_dir = layout.logs / str(final_job) / "output"
-            hub_commit = _publish_split(
+            hub_commit = publish_split(
                 ssh, layout, output_dir, config.output_dataset_id
             )
             store.transition(
@@ -1163,7 +1170,7 @@ def _run(args: argparse.Namespace) -> int:
                 facts={"published": True, "hub_commit": hub_commit},
             )
             print(f"Sentence splitting complete: run {config.run_id}", flush=True)
-            _mark_remote_status(ssh, layout, "complete")
+            mark_remote_status(ssh, layout, "complete")
             return 0
 
     if config.stage in {Stage.LABEL, Stage.ALL}:
@@ -1212,7 +1219,7 @@ def _run(args: argparse.Namespace) -> int:
             outcome = controller.monitor(job_id, log_name="labeling.stdout.log")
             if outcome is not JobState.TERMINATED:
                 raise RuntimeError("labeling allocation failed")
-            _assert_remote_exit_zero(ssh, layout, job_id, "labeling.exit_code")
+            assert_remote_exit_zero(ssh, layout, job_id, "labeling.exit_code")
             complete = (
                 _result_text(
                     ssh.run(
@@ -1244,7 +1251,7 @@ def _run(args: argparse.Namespace) -> int:
         )
         label_hub_commit: str | None = None
         if config.requirements.row_limit == 0:
-            label_hub_commit = _label_publication_commit(ssh, layout, job_id)
+            label_hub_commit = label_publication_commit(ssh, layout, job_id)
         store.transition(
             expected=RunPhase.VALIDATED,
             target=RunPhase.VERIFYING,
@@ -1263,96 +1270,8 @@ def _run(args: argparse.Namespace) -> int:
             facts={"published": config.requirements.row_limit == 0},
         )
         print(f"Labeling complete: run {config.run_id}", flush=True)
-        _mark_remote_status(ssh, layout, "complete")
+        mark_remote_status(ssh, layout, "complete")
     return 0
-
-
-def _remote_exit_code(
-    ssh: SshClient,
-    layout: RemoteLayout,
-    job_id: int,
-    filename: str,
-) -> int:
-    path = layout.logs / str(job_id) / filename
-    result = ssh.run(f"test -f {path!s} && cat {path!s}")
-    try:
-        return int(_result_text(result).strip())
-    except ValueError as exc:
-        raise RuntimeError("remote payload exit status is invalid") from exc
-
-
-def _assert_remote_exit_zero(
-    ssh: SshClient,
-    layout: RemoteLayout,
-    job_id: int,
-    filename: str,
-) -> None:
-    if _remote_exit_code(ssh, layout, job_id, filename) != 0:
-        raise RuntimeError("remote payload returned non-zero status")
-
-
-def _publish_split(
-    ssh: SshClient,
-    layout: RemoteLayout,
-    output_dir: PurePosixPath,
-    dataset_id: str,
-) -> str:
-    code = (
-        "from osm_polygon_sentence_relevance.publishing import "
-        "publish_export_directory; "
-        f"r=publish_export_directory({str(output_dir)!r},{dataset_id!r},"
-        "target_revision='main'); print(r.commit_id)"
-    )
-    command = " ".join(
-        shlex.quote(value)
-        for value in (str(layout.repo / ".venv/bin/python"), "-c", code)
-    )
-    result = ssh.run(command)
-    commit_id = _result_text(result).strip()
-    if len(commit_id) < 7:
-        raise RuntimeError("Hugging Face publication did not return a commit")
-    return commit_id
-
-
-def _label_publication_commit(
-    ssh: SshClient,
-    layout: RemoteLayout,
-    job_id: int,
-) -> str:
-    """Read the verified label publisher's immutable Hub commit from its log."""
-
-    path = layout.logs / str(job_id) / "labeling.stdout.log"
-    text = _result_text(ssh.run(f"test -f {path!s} && cat {path!s}"))
-    for line in reversed(text.splitlines()):
-        try:
-            payload = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        commit_id = payload.get("commit_id") if isinstance(payload, dict) else None
-        if (
-            isinstance(commit_id, str)
-            and len(commit_id) == 40
-            and all(character in "0123456789abcdef" for character in commit_id)
-        ):
-            return commit_id
-    raise RuntimeError("label publication did not report an immutable Hub commit")
-
-
-def _mark_remote_status(ssh: SshClient, layout: RemoteLayout, status: str) -> None:
-    if status not in {"active", "complete", "failed"}:
-        raise ValueError("invalid managed status")
-    marker = layout.root / ".operator-managed.json"
-    ssh.run(
-        "printf '%s\\n' "
-        + shlex.quote(
-            json.dumps(
-                {"schema_version": 1, "status": status},
-                sort_keys=True,
-                separators=(",", ":"),
-            )
-        )
-        + f" > {shlex.quote(str(marker))} && chmod 0600 {shlex.quote(str(marker))}"
-    )
 
 
 def _status(args: argparse.Namespace) -> int:

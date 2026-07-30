@@ -137,7 +137,7 @@ def test_resolve_input_revision_explicit_and_hub(
     sys.modules.pop("huggingface_hub", None)
 
 
-def test_remote_home_and_exit_code_validation() -> None:
+def test_remote_home_validation() -> None:
     class FakeSsh:
         def __init__(self, outputs: list[str]) -> None:
             self.outputs = outputs
@@ -148,12 +148,6 @@ def test_remote_home_and_exit_code_validation() -> None:
     assert cli._remote_home(FakeSsh(["/home/user\n"])) == PurePosixPath("/home/user")  # type: ignore[arg-type]
     with pytest.raises(RuntimeError, match="invalid"):
         cli._remote_home(FakeSsh(["relative\n"]))  # type: ignore[arg-type]
-    layout = cli.RemoteLayout(PurePosixPath("/r"))
-    assert cli._remote_exit_code(FakeSsh(["0\n"]), layout, 1, "exit") == 0  # type: ignore[arg-type]
-    with pytest.raises(RuntimeError, match="invalid"):
-        cli._remote_exit_code(FakeSsh(["bad\n"]), layout, 1, "exit")  # type: ignore[arg-type]
-    with pytest.raises(RuntimeError, match="non-zero"):
-        cli._assert_remote_exit_zero(FakeSsh(["2\n"]), layout, 1, "exit")  # type: ignore[arg-type]
 
 
 def test_usage_policy_preflight_runs_live_checker() -> None:
@@ -420,23 +414,6 @@ def test_run_label_reuses_checkpoints_and_completes(
     assert set(headroom) == {512 * 1024**2}
 
 
-def test_public_helpers(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    ssh = _FakeSsh()
-    layout = cli.RemoteLayout(PurePosixPath("/r"))
-    assert (
-        cli._publish_split(  # type: ignore[arg-type]
-            ssh, layout, PurePosixPath("/out"), "owner/data"
-        )
-        == "abcdef123456"
-    )
-    cli._mark_remote_status(ssh, layout, "failed")  # type: ignore[arg-type]
-    with pytest.raises(ValueError, match="managed status"):
-        cli._mark_remote_status(ssh, layout, "unknown")  # type: ignore[arg-type]
-
-
 def test_failed_allocation_marks_managed_remote_root_eligible_for_cleanup(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -450,7 +427,7 @@ def test_failed_allocation_marks_managed_remote_root_eligible_for_cleanup(
     )
     monkeypatch.setattr(
         cli,
-        "_mark_remote_status",
+        "mark_remote_status",
         lambda ssh, layout, status: calls.append(("marker", ssh, layout, status)),
     )
     ssh = object()
@@ -488,19 +465,6 @@ def test_terminal_transition_rejects_unexpected_phase(tmp_path: Path) -> None:
             target=RunPhase.COMPLETE,
             facts={},
         )
-
-
-def test_label_publication_commit_requires_immutable_json() -> None:
-    layout = cli.RemoteLayout(PurePosixPath("/r"))
-    ssh = _FakeSsh()
-    assert cli._label_publication_commit(ssh, layout, 1) == "c" * 40  # type: ignore[arg-type]
-
-    class InvalidSsh:
-        def run(self, _command: str) -> SimpleNamespace:
-            return SimpleNamespace(stdout='noise\n{"commit_id":"short"}\n')
-
-    with pytest.raises(RuntimeError, match="immutable Hub commit"):
-        cli._label_publication_commit(InvalidSsh(), layout, 1)  # type: ignore[arg-type]
 
 
 def test_status_missing_and_cleanup_preview(

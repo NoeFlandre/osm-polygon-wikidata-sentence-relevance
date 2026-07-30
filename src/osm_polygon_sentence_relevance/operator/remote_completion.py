@@ -1,0 +1,124 @@
+"""Remote completion evidence, publication results, and status marking."""
+
+from __future__ import annotations
+
+import json
+import shlex
+from pathlib import PurePosixPath
+
+from osm_polygon_sentence_relevance.operator.ssh import SshClient
+from osm_polygon_sentence_relevance.operator.workflows import RemoteLayout
+
+
+def _result_text(result: object) -> str:
+    """Return ``result.text`` if available, else ``result.stdout``."""
+
+    text_attr = getattr(result, "text", None)
+    if text_attr is not None:
+        return str(text_attr)
+    return str(getattr(result, "stdout", ""))
+
+
+def remote_exit_code(
+    ssh: SshClient,
+    layout: RemoteLayout,
+    job_id: int,
+    filename: str,
+) -> int:
+    """Read and parse the payload exit-code file for a remote job."""
+
+    path = layout.logs / str(job_id) / filename
+    result = ssh.run(f"test -f {path!s} && cat {path!s}")
+    try:
+        return int(_result_text(result).strip())
+    except ValueError as exc:
+        raise RuntimeError("remote payload exit status is invalid") from exc
+
+
+def assert_remote_exit_zero(
+    ssh: SshClient,
+    layout: RemoteLayout,
+    job_id: int,
+    filename: str,
+) -> None:
+    """Require that the remote payload exit status is zero."""
+
+    if remote_exit_code(ssh, layout, job_id, filename) != 0:
+        raise RuntimeError("remote payload returned non-zero status")
+
+
+def publish_split(
+    ssh: SshClient,
+    layout: RemoteLayout,
+    output_dir: PurePosixPath,
+    dataset_id: str,
+) -> str:
+    """Invoke export publication remotely and return the Hub commit SHA."""
+
+    code = (
+        "from osm_polygon_sentence_relevance.publishing import "
+        "publish_export_directory; "
+        f"r=publish_export_directory({str(output_dir)!r},{dataset_id!r},"
+        "target_revision='main'); print(r.commit_id)"
+    )
+    command = " ".join(
+        shlex.quote(value)
+        for value in (str(layout.repo / ".venv/bin/python"), "-c", code)
+    )
+    result = ssh.run(command)
+    commit_id = _result_text(result).strip()
+    if len(commit_id) < 7:
+        raise RuntimeError("Hugging Face publication did not return a commit")
+    return commit_id
+
+
+def label_publication_commit(
+    ssh: SshClient,
+    layout: RemoteLayout,
+    job_id: int,
+) -> str:
+    """Read the verified label publisher's immutable Hub commit from its log."""
+
+    path = layout.logs / str(job_id) / "labeling.stdout.log"
+    text = _result_text(ssh.run(f"test -f {path!s} && cat {path!s}"))
+    for line in reversed(text.splitlines()):
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        commit_id = payload.get("commit_id") if isinstance(payload, dict) else None
+        if (
+            isinstance(commit_id, str)
+            and len(commit_id) == 40
+            and all(character in "0123456789abcdef" for character in commit_id)
+        ):
+            return commit_id
+    raise RuntimeError("label publication did not report an immutable Hub commit")
+
+
+def mark_remote_status(ssh: SshClient, layout: RemoteLayout, status: str) -> None:
+    """Write the pipeline-managed status marker file on the remote site."""
+
+    if status not in {"active", "complete", "failed"}:
+        raise ValueError("invalid managed status")
+    marker = layout.root / ".operator-managed.json"
+    ssh.run(
+        "printf '%s\\n' "
+        + shlex.quote(
+            json.dumps(
+                {"schema_version": 1, "status": status},
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+        )
+        + f" > {shlex.quote(str(marker))} && chmod 0600 {shlex.quote(str(marker))}"
+    )
+
+
+__all__ = [
+    "assert_remote_exit_zero",
+    "label_publication_commit",
+    "mark_remote_status",
+    "publish_split",
+    "remote_exit_code",
+]
