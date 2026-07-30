@@ -29,6 +29,9 @@ classifiers = [
 ]
 dependencies = [
     "pyarrow",
+    "rich>=15,<16",
+    "tqdm>=4.68,<5",
+    "typer>=0.26,<0.27",
 ]
 
 [project.urls]
@@ -61,6 +64,7 @@ hub = [
 
 [dependency-groups]
 dev = [
+    "pre-commit>=4,<5",
     "pytest",
     "pytest-cov",
     "ruff>=0.14,<0.15",
