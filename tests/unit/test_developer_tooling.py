@@ -29,10 +29,12 @@ def _names(requirements: list[str]) -> set[str]:
 def test_required_runtime_and_development_tools_are_direct() -> None:
     project = _pyproject()
     runtime = _names(project["project"]["dependencies"])
+    operator = _names(project["project"]["optional-dependencies"]["operator"])
     development = _names(project["dependency-groups"]["dev"])
-    assert {"typer", "rich", "tqdm"} <= runtime
+    assert runtime == {"pyarrow"}
+    assert {"typer", "rich", "tqdm"} <= operator
     assert {"pytest", "pytest-cov", "ruff", "ty", "pre-commit"} <= development
-    assert "mypy" not in runtime | development
+    assert "mypy" not in runtime | operator | development
 
 
 def test_justfile_exposes_required_recipes() -> None:

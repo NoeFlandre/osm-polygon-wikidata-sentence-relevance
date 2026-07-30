@@ -65,6 +65,13 @@ just ci
 suite. `just ci` additionally builds and verifies the wheel and sdist.
 Use the underlying `uv run ...` commands for focused diagnosis.
 
+```bash
+uv run ruff format --check .
+uv run ruff check .
+uv run ty check
+uv run pytest -q
+```
+
 ## Public API compatibility expectations
 
 - `osm_polygon_sentence_relevance.cli.main(args=None, *, model_factory,

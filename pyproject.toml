@@ -29,9 +29,6 @@ classifiers = [
 ]
 dependencies = [
     "pyarrow",
-    "rich>=15,<16",
-    "tqdm>=4.68,<5",
-    "typer>=0.26,<0.27",
 ]
 
 [project.urls]
@@ -60,6 +57,11 @@ hub = [
     "matplotlib>=3.8",
     "numpy>=1.26",
     "pillow>=10.0",
+]
+operator = [
+    "rich>=15,<16",
+    "tqdm>=4.68,<5",
+    "typer>=0.26,<0.27",
 ]
 
 [dependency-groups]

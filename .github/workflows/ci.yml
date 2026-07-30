@@ -41,6 +41,7 @@ jobs:
         run: cargo install just --locked --version 1.40.0
 
       - name: Quality and tests
+        # just typecheck delegates to: uv run ty check
         run: just check
 
       - name: Build and verify distributions
@@ -55,4 +56,7 @@ jobs:
         run: uv run --isolated --no-project --with dist/*.whl osm-polygon-sentence-relevance --help
 
       - name: Operator CLI --help
-        run: uv run --isolated --no-project --with dist/*.whl osm-polygon-grid5000 --help
+        run: >-
+          uv run --isolated --no-project
+          --with dist/*.whl --with typer --with rich --with tqdm
+          osm-polygon-grid5000 --help

@@ -33,6 +33,7 @@ then prepare the complete development environment:
 ```bash
 uv sync --locked --all-extras --dev
 uv run pre-commit install
+uv sync --extra hub --locked --dev  # Hub acquisition and publishing only
 ```
 
 ## Test-driven development

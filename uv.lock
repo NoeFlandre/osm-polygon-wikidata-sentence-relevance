@@ -994,9 +994,6 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "pyarrow" },
-    { name = "rich" },
-    { name = "tqdm" },
-    { name = "typer" },
 ]
 
 [package.optional-dependencies]
@@ -1005,6 +1002,11 @@ hub = [
     { name = "matplotlib" },
     { name = "numpy" },
     { name = "pillow" },
+]
+operator = [
+    { name = "rich" },
+    { name = "tqdm" },
+    { name = "typer" },
 ]
 segmentation = [
     { name = "torch" },
@@ -1027,13 +1029,13 @@ requires-dist = [
     { name = "numpy", marker = "extra == 'hub'", specifier = ">=1.26" },
     { name = "pillow", marker = "extra == 'hub'", specifier = ">=10.0" },
     { name = "pyarrow" },
-    { name = "rich", specifier = ">=15,<16" },
+    { name = "rich", marker = "extra == 'operator'", specifier = ">=15,<16" },
     { name = "torch", marker = "extra == 'segmentation'", specifier = ">=2.2,<3" },
-    { name = "tqdm", specifier = ">=4.68,<5" },
-    { name = "typer", specifier = ">=0.26,<0.27" },
+    { name = "tqdm", marker = "extra == 'operator'", specifier = ">=4.68,<5" },
+    { name = "typer", marker = "extra == 'operator'", specifier = ">=0.26,<0.27" },
     { name = "wtpsplit", marker = "extra == 'segmentation'", specifier = "==2.2.1" },
 ]
-provides-extras = ["segmentation", "hub"]
+provides-extras = ["segmentation", "hub", "operator"]
 
 [package.metadata.requires-dev]
 dev = [
