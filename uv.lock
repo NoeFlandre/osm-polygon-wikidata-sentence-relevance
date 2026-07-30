@@ -1004,6 +1004,7 @@ hub = [
     { name = "pillow" },
 ]
 operator = [
+    { name = "click" },
     { name = "rich" },
     { name = "tqdm" },
     { name = "typer" },
@@ -1024,6 +1025,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "click", marker = "extra == 'operator'", specifier = ">=8.4,<9" },
     { name = "huggingface-hub", marker = "extra == 'hub'", specifier = ">=0.20.0" },
     { name = "matplotlib", marker = "extra == 'hub'", specifier = ">=3.8" },
     { name = "numpy", marker = "extra == 'hub'", specifier = ">=1.26" },

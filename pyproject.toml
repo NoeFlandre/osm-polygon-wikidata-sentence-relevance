@@ -59,6 +59,7 @@ hub = [
     "pillow>=10.0",
 ]
 operator = [
+    "click>=8.4,<9",
     "rich>=15,<16",
     "tqdm>=4.68,<5",
     "typer>=0.26,<0.27",

@@ -32,7 +32,7 @@ def test_required_runtime_and_development_tools_are_direct() -> None:
     operator = _names(project["project"]["optional-dependencies"]["operator"])
     development = _names(project["dependency-groups"]["dev"])
     assert runtime == {"pyarrow"}
-    assert {"typer", "rich", "tqdm"} <= operator
+    assert {"click", "typer", "rich", "tqdm"} <= operator
     assert {"pytest", "pytest-cov", "ruff", "ty", "pre-commit"} <= development
     assert "mypy" not in runtime | operator | development
 
@@ -77,6 +77,8 @@ def test_ci_uses_just_recipes_and_keeps_locked_sync() -> None:
     assert "run: just check" in text
     assert "run: just verify-dist" in text
     assert "osm-polygon-grid5000 --help" in text
+    assert "--with click==8.4.2 --with typer==0.26.8" in text
+    assert "--with rich==15.0.0 --with tqdm==4.68.4" in text
     assert "mypy" not in text
 
 

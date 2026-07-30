@@ -58,5 +58,7 @@ jobs:
       - name: Operator CLI --help
         run: >-
           uv run --isolated --no-project
-          --with dist/*.whl --with typer --with rich --with tqdm
+          --with dist/*.whl
+          --with click==8.4.2 --with typer==0.26.8
+          --with rich==15.0.0 --with tqdm==4.68.4
           osm-polygon-grid5000 --help
