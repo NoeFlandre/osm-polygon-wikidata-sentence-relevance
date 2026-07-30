@@ -239,6 +239,27 @@ def test_prepare_cross_site_runs_build_when_binary_is_missing(
             preflight()
             calls.append("oar")
 
+    llama_calls: list[dict[str, Any]] = []
+
+    def mock_ensure_llama_server(
+        ssh_arg: Any,
+        oar_arg: Any,
+        store_arg: Any,
+        layout_arg: Any,
+        poll_seconds_arg: float,
+    ) -> int:
+        calls.append("llama")
+        llama_calls.append(
+            {
+                "ssh": ssh_arg,
+                "oar": oar_arg,
+                "store": store_arg,
+                "layout": layout_arg,
+                "poll_seconds": poll_seconds_arg,
+            }
+        )
+        return 42
+
     monkeypatch.setattr(cli, "SshClient", lambda **_kw: fake_ssh)
     monkeypatch.setattr(cli, "_remote_home", lambda _ssh: Path("/home/u"))
     monkeypatch.setattr(
@@ -249,7 +270,7 @@ def test_prepare_cross_site_runs_build_when_binary_is_missing(
     )
     monkeypatch.setattr(cli, "Stager", FakeStager)
     monkeypatch.setattr(cli, "OarClient", FakeOar)
-    monkeypatch.setattr(cli, "_ensure_llama_server", lambda *_a: calls.append("llama"))
+    monkeypatch.setattr(cli, "ensure_llama_server", mock_ensure_llama_server)
     relay_root = tmp_path / "relay"
     relay_root.mkdir()
     cli._prepare_destination_for_resume(
@@ -270,6 +291,14 @@ def test_prepare_cross_site_runs_build_when_binary_is_missing(
         "oar",
         "llama",
     ]
+    assert len(llama_calls) == 1
+    assert llama_calls[0]["ssh"] is fake_ssh
+    assert isinstance(llama_calls[0]["oar"], FakeOar)
+    assert llama_calls[0]["store"] is store
+    assert llama_calls[0]["layout"].root == Path(
+        f"/home/u/osm-polygon-operator/{config.run_id}"
+    )
+    assert llama_calls[0]["poll_seconds"] == 0
 
 
 def test_ensure_relay_refuses_disappeared_generation(tmp_path: Path) -> None:

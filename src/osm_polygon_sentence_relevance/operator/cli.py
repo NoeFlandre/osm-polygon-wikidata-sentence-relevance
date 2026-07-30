@@ -33,6 +33,7 @@ from osm_polygon_sentence_relevance.operator.earliest_start import (
     should_seek_replacement,
 )
 from osm_polygon_sentence_relevance.operator.job_monitor import monitor_job_with_log
+from osm_polygon_sentence_relevance.operator.llama_server import ensure_llama_server
 from osm_polygon_sentence_relevance.operator.oar import (
     GRID5000_TZ,
     ExitClass,
@@ -63,7 +64,6 @@ from osm_polygon_sentence_relevance.operator.storage import (
 from osm_polygon_sentence_relevance.operator.workflows import (
     RemoteLayout,
     label_submission,
-    llama_build_submission,
     split_finalization_submission,
 )
 
@@ -299,7 +299,7 @@ def _prepare_destination_for_resume(
                 ssh,
                 preflight=submission_preflight,
             )
-            _ensure_llama_server(ssh, oar, store, layout, poll_seconds)
+            ensure_llama_server(ssh, oar, store, layout, poll_seconds)
         store.transition(
             expected=RunPhase.REMOTE_PREPARED,
             target=RunPhase.REMOTE_PREPARED,
@@ -919,7 +919,7 @@ def _resume_run(run_id: str, args: argparse.Namespace) -> int:
         stager.prepare(config, layout)
         assets = stager.prepare_label_assets(config, layout, download_input=True)
         if not assets.llama_server_ready:
-            _ensure_llama_server(ssh, oar, store, layout, args.poll_seconds)
+            ensure_llama_server(ssh, oar, store, layout, args.poll_seconds)
         relay_root_value = durable.facts.get("resume_relay_root")
         if isinstance(relay_root_value, str):
             _ensure_relay_at_destination(
@@ -1184,7 +1184,7 @@ def _run(args: argparse.Namespace) -> int:
         )
         _milestone("Input, model, and tokenizer assets are ready")
         if not assets.llama_server_ready:
-            _ensure_llama_server(ssh, oar, store, layout, args.poll_seconds)
+            ensure_llama_server(ssh, oar, store, layout, args.poll_seconds)
         if config.stage is Stage.ALL:
             assets = type(assets)(
                 input_parquet,
@@ -1265,76 +1265,6 @@ def _run(args: argparse.Namespace) -> int:
         print(f"Labeling complete: run {config.run_id}", flush=True)
         _mark_remote_status(ssh, layout, "complete")
     return 0
-
-
-def _llama_server_ready(ssh: SshClient, layout: RemoteLayout) -> bool:
-    return (
-        _result_text(
-            ssh.run(
-                "if test -x "
-                f"{layout.root!s}/llama-server-bin/llama-server; "
-                "then printf yes; else printf no; fi"
-            )
-        )
-        == "yes"
-    )
-
-
-def _ensure_llama_server(
-    ssh: SshClient,
-    oar: OarClient,
-    state: StateStore,
-    layout: RemoteLayout,
-    poll_seconds: float,
-) -> int:
-    """Submit or reattach to the durable auxiliary CUDA build job."""
-
-    durable = state.load()
-    raw_job_id = durable.facts.get("llama_build_job_id")
-    job_id = raw_job_id if type(raw_job_id) is int and raw_job_id > 0 else None
-    if job_id is not None:
-        status = oar.status(job_id)
-        if status.state in {
-            JobState.QUEUED,
-            JobState.RUNNING,
-            JobState.FINISHING,
-        }:
-            print(f"Reattaching to CUDA llama-server build job {job_id}", flush=True)
-        elif (
-            status.state is JobState.TERMINATED
-            and status.exit_code in {None, 0}
-            and _llama_server_ready(ssh, layout)
-        ):
-            print(f"Reusing completed CUDA llama-server build job {job_id}", flush=True)
-            return job_id
-        else:
-            job_id = None
-
-    if job_id is None:
-        _milestone("CUDA llama-server binary is absent; submitting its build")
-        job_id = oar.submit(llama_build_submission(layout))
-        current = state.load()
-        if current.phase is not RunPhase.REMOTE_PREPARED:
-            raise RuntimeError("CUDA build submission has invalid durable phase")
-        state.transition(
-            expected=RunPhase.REMOTE_PREPARED,
-            target=RunPhase.REMOTE_PREPARED,
-            facts={"llama_build_job_id": job_id},
-        )
-        print(f"Submitted CUDA llama-server build job {job_id}", flush=True)
-
-    monitor_job_with_log(
-        ssh,
-        oar,
-        layout,
-        job_id,
-        "build.stdout.log",
-        poll_seconds,
-        sleeper=time.sleep,
-    )
-    if not _llama_server_ready(ssh, layout):
-        raise RuntimeError("CUDA llama-server build did not produce a binary")
-    return job_id
 
 
 def _remote_exit_code(
