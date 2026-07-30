@@ -35,6 +35,9 @@ pre-1.0 package.
 
 ### Changed
 
+- Migrated the Grid'5000 operator command to a typed Typer boundary with
+  terminal-safe Rich/tqdm progress while retaining plain machine output, and
+  unified local and CI quality commands through uv, just, and pre-commit.
 - Production sentence segmentation now defaults to the multilingual
   `sat-12l-sm` model. A conservative post-model repair separates only
   high-confidence residual punctuation boundaries across scripts before

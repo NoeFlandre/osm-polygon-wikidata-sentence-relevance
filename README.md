@@ -118,8 +118,8 @@ This project uses [uv](https://github.com/astral-sh/uv) for Python
 package and environment management. Requires Python 3.12+.
 
 ```bash
-uv sync --extra hub --extra segmentation
-uv run pytest -q
+uv sync --locked --all-extras --dev
+just check
 ```
 
 See [`docs/guides/development.md`](docs/guides/development.md) for the

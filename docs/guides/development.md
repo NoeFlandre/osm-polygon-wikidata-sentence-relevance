@@ -6,11 +6,12 @@ verification gates used in CI.
 ## Environment setup
 
 ```bash
-uv sync --extra hub --extra segmentation
+uv sync --locked --all-extras --dev
+uv run pre-commit install
 ```
 
-Add `pytest-cov` is part of the dev dependency group, so coverage runs
-locally without extra steps.
+`pytest-cov`, Ruff, ty, and pre-commit are locked development dependencies.
+The root `justfile` provides the same command façade locally and in CI.
 
 ## Repository layout
 
@@ -34,6 +35,8 @@ locally without extra steps.
   - `publishing/` — `huggingface.py` (programmatic, one-commit publishing
     of a validated export to an existing Hub dataset; `PublicationResult`,
     `PublicationError`).
+  - `operator/` — the Typer-based Mac-side Grid'5000 orchestration command,
+    durable state, scheduling, transport, storage, and terminal presentation.
 - `tests/` — mirrored `unit/`, `integration/`, `compatibility/`,
   `support/` layout. `tests/support/` holds the shared Arrow factories
   and fake-result builders.
@@ -54,17 +57,13 @@ refactors are protected by characterization tests before any move. See
 Run all of these before opening a pull request:
 
 ```bash
-uv sync --locked
-uv run ruff format --check .
-uv run ruff check .
-uv run ty check
-uv run pytest -q
-uv run pytest --cov=osm_polygon_sentence_relevance --cov-branch --cov-report=term-missing
-uv build
-uv run python scripts/verify_distribution.py dist/<wheel> dist/<sdist>
-uv run osm-polygon-sentence-relevance --help
-uv run python -c "import osm_polygon_sentence_relevance; print(osm_polygon_sentence_relevance.__version__)"
+just check
+just ci
 ```
+
+`just check` verifies formatting, Ruff, ty, and the coverage-gated pytest
+suite. `just ci` additionally builds and verifies the wheel and sdist.
+Use the underlying `uv run ...` commands for focused diagnosis.
 
 ## Public API compatibility expectations
 
@@ -89,7 +88,7 @@ Edit `pyproject.toml`, then regenerate the lock:
 
 ```bash
 uv lock
-uv sync --locked
+uv sync --locked --all-extras --dev
 ```
 
 The committed `uv.lock` pins every transitive dependency, so a given

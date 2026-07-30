@@ -76,3 +76,31 @@ def test_ci_uses_just_recipes_and_keeps_locked_sync() -> None:
     assert "run: just verify-dist" in text
     assert "osm-polygon-grid5000 --help" in text
     assert "mypy" not in text
+
+
+def test_contributing_documents_one_supported_toolchain() -> None:
+    text = (ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
+    for command in (
+        "uv sync --locked --all-extras --dev",
+        "just check",
+        "just ci",
+        "uv run pre-commit install",
+        "uv run ty check",
+    ):
+        assert command in text
+    assert "mypy" not in text.lower()
+
+
+def test_readme_names_operator_and_primary_quality_command() -> None:
+    text = (ROOT / "README.md").read_text(encoding="utf-8")
+    assert "osm-polygon-grid5000" in text
+    assert "just check" in text
+
+
+def test_development_guide_matches_shared_quality_workflow() -> None:
+    text = (ROOT / "docs/guides/development.md").read_text(encoding="utf-8")
+    assert "uv sync --locked --all-extras --dev" in text
+    assert "just check" in text
+    assert "just ci" in text
+    assert "uv run pre-commit install" in text
+    assert "mypy" not in text.lower()

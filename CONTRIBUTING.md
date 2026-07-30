@@ -21,19 +21,18 @@ Out of scope (do not add in a normal pull request unless explicitly
 planned):
 - Hugging Face dataset repository creation (the publisher targets an
   existing repository only).
-- Sentence classification or labelling.
 - Parallel shard processing.
 - Performance rewrites that change output bytes.
 
 ## Environment setup
 
-We use [`uv`](https://github.com/astral-sh/uv) for dependency and
-environment management. No system Python packages are required.
+We use [`uv`](https://github.com/astral-sh/uv) for locked Python environments
+and [`just`](https://just.systems/) as the command façade. Install both tools,
+then prepare the complete development environment:
 
 ```bash
-uv sync
-uv sync --extra segmentation   # install wtpsplit SaT adapter + its PyTorch runtime (SaT weights still download lazily on first model construction)
-uv sync --extra hub            # enable read-only Hugging Face acquisition and programmatic publishing
+uv sync --locked --all-extras --dev
+uv run pre-commit install
 ```
 
 ## Test-driven development
@@ -50,17 +49,22 @@ by characterization tests before any move.
 
 ## Required quality commands
 
-All of these must pass before opening a pull request:
+Run the same acceptance commands locally and in CI:
+
+```bash
+just format       # apply Ruff formatting
+just check        # format check, Ruff, ty, and the full pytest suite
+just ci           # check, build, and verify distribution contents
+```
+
+The recipes delegate to the locked `uv` environment. Their underlying commands
+remain available for focused diagnosis:
 
 ```bash
 uv run ruff format --check .
 uv run ruff check .
 uv run ty check
 uv run pytest -q
-uv run pytest --cov=osm_polygon_sentence_relevance --cov-branch --cov-report=term-missing
-uv build
-uv run python scripts/verify_distribution.py <wheel> <sdist>
-uv run osm-polygon-sentence-relevance --help
 ```
 
 ## Architecture rules
