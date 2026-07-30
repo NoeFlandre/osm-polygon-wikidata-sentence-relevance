@@ -357,8 +357,11 @@ def _stage_relay_local(
                 raise RelayError("checkpoint metadata is malformed") from exc
             if not isinstance(payload, Mapping):
                 raise RelayError("checkpoint metadata is not a mapping")
+            raw_identity = payload.get("identity")
+            if not isinstance(raw_identity, Mapping):
+                raise RelayError(f"checkpoint identity missing: {path.name}")
             identity = _string_object_mapping(
-                payload.get("identity"), f"checkpoint identity: {path.name}"
+                raw_identity, f"checkpoint identity: {path.name}"
             )
             expected_sha = payload.get("parquet_sha256")
             if not isinstance(expected_sha, str):
@@ -378,8 +381,11 @@ def _stage_relay_local(
         progress_payload = _string_object_mapping(
             json.loads(progress_path.read_text()), "progress.json payload"
         )
+        raw_progress_identity = progress_payload.get("identity")
+        if not isinstance(raw_progress_identity, Mapping):
+            raise RelayError("progress.json identity is missing")
         progress_identity = _string_object_mapping(
-            progress_payload.get("identity"), "progress.json identity"
+            raw_progress_identity, "progress.json identity"
         )
         if progress_identity != canonical_identity:
             raise RelayError("progress.json identity does not match checkpoints")

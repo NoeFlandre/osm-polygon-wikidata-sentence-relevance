@@ -43,9 +43,9 @@ def test_internal_configuration_modules_exist() -> None:
 
 def test_public_config_is_a_pure_explicit_facade() -> None:
     tree = ast.parse((OPERATOR / "config.py").read_text())
-    assert (
-        ast.get_docstring(tree, clean=False) is not None
-    ), "config facade requires a module docstring"
+    assert ast.get_docstring(tree, clean=False) is not None, (
+        "config facade requires a module docstring"
+    )
 
     assignments = 0
     for node in tree.body[1:]:
