@@ -53,27 +53,29 @@ def acquire_dataset_snapshot(
         raise ValueError("requested_revision must be a non-blank string")
 
     # 2. Lazy-import only when an uninjected HfApi or snapshot_download is actually required
+    hub_module: Any | None = None
     if hub_api is None or download_fn is None:
         try:
-            import huggingface_hub
+            import huggingface_hub as imported_hub_module
         except ImportError as exc:
             raise AcquisitionError(
                 "huggingface_hub is not installed. Please install it using: "
                 "uv sync --extra hub"
             ) from exc
+        hub_module = imported_hub_module
 
     # 3. Resolve revision using HfApi
+    api: Any = hub_api
     if hub_api is None:
+        if hub_module is None:
+            raise AcquisitionError("Failed to initialize HfApi")
         try:
             # ``HfApi`` returns an Any-typed object from the perspective
             # of this module; treat it as ``Any`` so callers can also
             # inject their own Hub-API-compatible object.
-            api: Any = huggingface_hub.HfApi()
+            api = hub_module.HfApi()
         except Exception as exc:
             raise AcquisitionError("Failed to initialize HfApi") from exc
-    else:
-        api = hub_api
-
     try:
         repo_info = api.repo_info(
             repo_id=dataset_id,
@@ -109,7 +111,9 @@ def acquire_dataset_snapshot(
 
     # 6. Download the exact dataset snapshot (Parquet files only, exclude articles/)
     if download_fn is None:
-        download_fn = huggingface_hub.snapshot_download
+        if hub_module is None:
+            raise AcquisitionError("Failed to initialize snapshot download")
+        download_fn = hub_module.snapshot_download
 
     try:
         snapshot_dir = download_fn(

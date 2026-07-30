@@ -220,6 +220,12 @@ class LabelingRunner:
 
     @staticmethod
     def _prompt(row: dict[str, object]) -> PromptInput:
+        def optional_text(field: str) -> str | None:
+            value = row[field]
+            if value is not None and not isinstance(value, str):
+                raise ValueError("input row has invalid prompt context")
+            return value
+
         tags = row["osm_tags"]
         section_path = row["section_path"]
         if not isinstance(tags, list) or not isinstance(section_path, list):
@@ -227,11 +233,11 @@ class LabelingRunner:
         return PromptInput(
             sentence_id=str(row["sentence_id"]),
             sentence_text=str(row["sentence_text_raw"]),
-            previous_sentence=row["previous_sentence"],  # type: ignore[arg-type]
-            next_sentence=row["next_sentence"],  # type: ignore[arg-type]
-            polygon_name=row["polygon_name"],  # type: ignore[arg-type]
+            previous_sentence=optional_text("previous_sentence"),
+            next_sentence=optional_text("next_sentence"),
+            polygon_name=optional_text("polygon_name"),
             region=str(row["region"]),
-            osm_primary_tag=row["osm_primary_tag"],  # type: ignore[arg-type]
+            osm_primary_tag=optional_text("osm_primary_tag"),
             osm_tags=tuple(cast(list[dict[str, str]], tags)),
             language=str(row["language"]),
             page_title=str(row["page_title"]),

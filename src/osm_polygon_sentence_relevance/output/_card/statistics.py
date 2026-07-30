@@ -565,7 +565,7 @@ def statistics_from_dict(data: Any) -> DatasetStatistics:
     if not isinstance(data, dict):
         raise ValueError("statistics object must be a JSON object")
 
-    unknown = set(data) - set(_STATISTICS_KEYS)
+    unknown = {key for key in data if isinstance(key, str)} - set(_STATISTICS_KEYS)
     if unknown:
         raise ValueError(
             "statistics object has unknown keys: " + ", ".join(sorted(unknown))

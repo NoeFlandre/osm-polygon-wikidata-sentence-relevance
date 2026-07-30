@@ -57,7 +57,7 @@ Run all of these before opening a pull request:
 uv sync --locked
 uv run ruff format --check .
 uv run ruff check .
-uv run mypy src
+uv run ty check
 uv run pytest -q
 uv run pytest --cov=osm_polygon_sentence_relevance --cov-branch --cov-report=term-missing
 uv build

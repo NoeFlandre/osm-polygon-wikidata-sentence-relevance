@@ -146,26 +146,80 @@ def _validate_progress_payload(
         raise RelayError("progress.json payload is not a mapping")
     if payload.get("identity") != expected_identity:
         raise RelayError("progress.json identity mismatch")
-    try:
-        completed = int(payload.get("completed", 0))
-    except (TypeError, ValueError) as exc:
-        raise RelayError("progress.json completed is invalid") from exc
+    completed = _coerce_progress_int(payload.get("completed", 0), "completed")
     if "total" in payload:
-        try:
-            total = int(payload["total"])
-        except (TypeError, ValueError) as exc:
-            raise RelayError("progress.json total is invalid") from exc
+        total = _coerce_progress_int(payload.get("total"), "total")
     elif "remaining" in payload:
-        try:
-            remaining = int(payload["remaining"])
-        except (TypeError, ValueError) as exc:
-            raise RelayError("progress.json remaining is invalid") from exc
+        remaining = _coerce_progress_int(payload.get("remaining"), "remaining")
         total = completed + remaining
     else:
         raise RelayError("progress.json missing total/remaining")
     if completed < 0 or total <= 0 or completed > total:
         raise RelayError("progress.json counters are inconsistent")
     return completed, total
+
+
+def _coerce_progress_int(value: object, label: str) -> int:
+    if isinstance(value, bool):
+        raise RelayError(f"progress.json {label} is invalid")
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.isdigit():
+        return int(value)
+    raise RelayError(f"progress.json {label} is invalid")
+
+
+def _string_object_mapping(value: object, label: str) -> dict[str, object]:
+    if not isinstance(value, Mapping):
+        raise RelayError(f"{label} is not a mapping")
+    result: dict[str, object] = {}
+    for key, child in value.items():
+        if not isinstance(key, str):
+            raise RelayError(f"{label} contains a non-string key")
+        result[key] = child
+    return result
+
+
+def _batch_index(path: Path) -> int:
+    match = _BATCH_ENTRY.fullmatch(path.name)
+    if match is None:
+        raise RelayError(f"unexpected checkpoint name: {path.name}")
+    return int(match.group(1))
+
+
+def _required_string(mapping: Mapping[str, object], key: str) -> str:
+    value = mapping.get(key)
+    if not isinstance(value, str):
+        raise RelayError(f"checkpoint identity field {key} is invalid")
+    return value
+
+
+def _required_int(mapping: Mapping[str, object], key: str) -> int:
+    value = mapping.get(key)
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise RelayError(f"checkpoint identity field {key} is invalid")
+    return value
+
+
+def _run_identity_from_mapping(mapping: Mapping[str, object]) -> RunIdentity:
+    return RunIdentity(
+        input_sha256=_required_string(mapping, "input_sha256"),
+        input_dataset_revision=_required_string(mapping, "input_dataset_revision"),
+        model_repo_id=_required_string(mapping, "model_repo_id"),
+        model_revision=_required_string(mapping, "model_revision"),
+        model_file=_required_string(mapping, "model_file"),
+        model_file_sha256=_required_string(mapping, "model_file_sha256"),
+        prompt_version=_required_string(mapping, "prompt_version"),
+        source_commit=_required_string(mapping, "source_commit"),
+        engine=_required_string(mapping, "engine"),
+        engine_version=_required_string(mapping, "engine_version"),
+        batch_size=_required_int(mapping, "batch_size"),
+        row_limit=_required_int(mapping, "row_limit"),
+        llama_parallel=_required_int(mapping, "llama_parallel"),
+        llama_per_slot_context=_required_int(mapping, "llama_per_slot_context"),
+        llama_total_context=_required_int(mapping, "llama_total_context"),
+        request_concurrency=_required_int(mapping, "request_concurrency"),
+    )
 
 
 def _next_generation(run_root: Path) -> Path:
@@ -291,7 +345,7 @@ def _stage_relay_local(
         if not parquet_paths:
             raise RelayError("relay is missing any checkpoint batches")
 
-        canonical_identity: Mapping[str, object] | None = None
+        canonical_identity: dict[str, object] | None = None
         for path in parquet_paths:
             stem = path.name.rsplit(".", 1)[0]
             meta = metadata_paths.get(stem)
@@ -303,9 +357,9 @@ def _stage_relay_local(
                 raise RelayError("checkpoint metadata is malformed") from exc
             if not isinstance(payload, Mapping):
                 raise RelayError("checkpoint metadata is not a mapping")
-            identity = payload.get("identity")
-            if not isinstance(identity, Mapping):
-                raise RelayError(f"checkpoint identity missing: {path.name}")
+            identity = _string_object_mapping(
+                payload.get("identity"), f"checkpoint identity: {path.name}"
+            )
             expected_sha = payload.get("parquet_sha256")
             if not isinstance(expected_sha, str):
                 raise RelayError(f"checkpoint parquet_sha256 missing: {path.name}")
@@ -319,10 +373,14 @@ def _stage_relay_local(
                     f"checkpoint identity differs across batches: {path.name}"
                 )
 
-        progress_payload = json.loads(progress_path.read_text())
-        progress_identity = progress_payload.get("identity")
-        if not isinstance(progress_identity, Mapping):
-            raise RelayError("progress.json identity is missing")
+        if canonical_identity is None:
+            raise RelayError("relay is missing checkpoint identity")
+        progress_payload = _string_object_mapping(
+            json.loads(progress_path.read_text()), "progress.json payload"
+        )
+        progress_identity = _string_object_mapping(
+            progress_payload.get("identity"), "progress.json identity"
+        )
         if progress_identity != canonical_identity:
             raise RelayError("progress.json identity does not match checkpoints")
         completed, total = _validate_progress_payload(
@@ -333,12 +391,9 @@ def _stage_relay_local(
             _enforce_overlapping_identity(canonical_identity, expected_run_identity)
 
         try:
-            # RunIdentity.__init__ mixes ``str`` and ``int`` annotations;
-            # narrow with a runtime dict copy rather than a typed cast.
-            identity_kwargs = dict(canonical_identity)
             CheckpointStore(
                 generation,
-                identity=RunIdentity(**identity_kwargs),  # type: ignore[arg-type]
+                identity=_run_identity_from_mapping(canonical_identity),
             ).load_all()
         except (CheckpointError, TypeError) as exc:
             raise RelayError(f"CheckpointStore validation failed: {exc}") from exc
@@ -376,9 +431,7 @@ def _stage_relay_local(
             parquet_paths=tuple(
                 sorted(
                     finalized.glob("checkpoints/batch-*.parquet"),
-                    key=lambda path: int(
-                        _BATCH_ENTRY.fullmatch(path.name).group(1)  # type: ignore[union-attr]
-                    ),
+                    key=_batch_index,
                 )
             ),
             metadata_paths={
@@ -580,11 +633,16 @@ def stage_to_destination(
                 raise RelayError(f"destination readback hash mismatch: {relative}")
 
         # 5. Re-validate via CheckpointStore against the readback copy.
-        identity_dict = json.loads(inventory.progress.read_text())["identity"]
+        progress_payload = _string_object_mapping(
+            json.loads(inventory.progress.read_text()), "progress.json payload"
+        )
+        identity_dict = _string_object_mapping(
+            progress_payload.get("identity"), "progress.json identity"
+        )
         try:
             CheckpointStore(
                 verification,
-                identity=RunIdentity(**identity_dict),
+                identity=_run_identity_from_mapping(identity_dict),
             ).load_all()
         except (CheckpointError, TypeError) as exc:
             raise RelayError(

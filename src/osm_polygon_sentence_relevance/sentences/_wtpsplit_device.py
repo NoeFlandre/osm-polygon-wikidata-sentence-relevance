@@ -43,6 +43,8 @@ shape it has not verified.
 from __future__ import annotations
 
 import importlib
+from collections.abc import Iterable
+from typing import Protocol, cast
 
 from osm_polygon_sentence_relevance.contracts.errors import SegmentationError
 
@@ -52,6 +54,23 @@ from osm_polygon_sentence_relevance.contracts.errors import SegmentationError
 #: ``tests/unit/sentences/test_sat_placement.py::TestDeclaredVersionAgreement``
 #: enforces that contract.
 _SUPPORTED_VERSION: str = "2.2.1"
+
+
+class _TensorLike(Protocol):
+    @property
+    def device(self) -> object:
+        """Return the tensor device."""
+
+
+class _ClassifierLike(Protocol):
+    def parameters(self) -> Iterable[_TensorLike]:
+        """Iterate classifier parameters."""
+
+    def buffers(self) -> Iterable[_TensorLike]:
+        """Iterate classifier buffers."""
+
+    def to(self, device: str) -> object:
+        """Move the classifier to a device."""
 
 
 def supported_version() -> str:
@@ -126,7 +145,7 @@ def _load_wtpsplit_pytorch_wrapper_class() -> type:
     return PyTorchWrapper
 
 
-def _extract_classifier(model: object) -> object:
+def _extract_classifier(model: object) -> _ClassifierLike:
     """Locate the *complete* classifier owned by the wtpsplit wrapper.
 
     The structural contract, narrowly versioned to wtpsplit 2.2.1::
@@ -183,10 +202,10 @@ def _extract_classifier(model: object) -> object:
             "wrapper shape is unsupported "
             f"(got {type(classifier).__name__!r})"
         )
-    return classifier
+    return cast(_ClassifierLike, classifier)
 
 
-def _classifier_observed_device(classifier: object) -> str:
+def _classifier_observed_device(classifier: _ClassifierLike) -> str:
     """Read every parameter/buffer device on the classifier.
 
     Returns the device type (``"cpu"`` / ``"cuda"`` / ``"mps"``) on
@@ -196,7 +215,7 @@ def _classifier_observed_device(classifier: object) -> str:
     than the others — both signals of a partial or broken placement.
     """
     devices: set[str] = set()
-    for tensor in classifier.parameters():  # type: ignore[attr-defined]
+    for tensor in classifier.parameters():
         dev = getattr(tensor, "device", None)
         dev_type = getattr(dev, "type", None)
         if not isinstance(dev_type, str):
@@ -205,7 +224,7 @@ def _classifier_observed_device(classifier: object) -> str:
                 "device; placement cannot be verified"
             )
         devices.add(dev_type)
-    for tensor in classifier.buffers():  # type: ignore[attr-defined]
+    for tensor in classifier.buffers():
         dev = getattr(tensor, "device", None)
         dev_type = getattr(dev, "type", None)
         if not isinstance(dev_type, str):
@@ -265,7 +284,7 @@ def place_classifier(model: object, device: str) -> object:
             f"classifier; cannot honour device {device!r}"
         )
     classifier = _extract_classifier(model)
-    classifier.to(device)  # type: ignore[attr-defined]
+    classifier.to(device)
     observed = _classifier_observed_device(classifier)
     if observed != device:
         raise SegmentationError(

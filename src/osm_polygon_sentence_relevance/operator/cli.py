@@ -9,6 +9,7 @@ import shlex
 import subprocess
 import sys
 import time
+from collections.abc import Mapping
 from datetime import datetime
 from pathlib import Path, PurePosixPath
 from typing import Any, Final
@@ -171,7 +172,7 @@ def _transition_terminal(
     *,
     expected: tuple[RunPhase, ...],
     target: RunPhase,
-    facts: dict[str, object],
+    facts: Mapping[str, object],
 ) -> None:
     current = state.load()
     if current.phase not in expected:

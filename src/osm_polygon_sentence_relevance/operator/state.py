@@ -169,7 +169,10 @@ def _coerce_facts(facts: Mapping[str, object] | None) -> dict[str, JSONValue]:
         return {}
     if not isinstance(facts, Mapping):
         raise StateError("facts must be a mapping")
-    return _validate_json_value(dict(facts))  # type: ignore[return-value]
+    validated = _validate_json_value(dict(facts))
+    if not isinstance(validated, dict):
+        raise StateError("facts must be a mapping")
+    return validated
 
 
 def _parse_utc_timestamp(value: object, label: str = "timestamp") -> str:
@@ -339,7 +342,9 @@ def _read_event_lines(path: Path) -> list[dict[str, object]]:
 
         if set(parsed) != EVENT_REQUIRED_KEYS:
             missing = EVENT_REQUIRED_KEYS.difference(parsed)
-            unexpected = set(parsed).difference(EVENT_REQUIRED_KEYS)
+            unexpected = {key for key in parsed if isinstance(key, str)}.difference(
+                EVENT_REQUIRED_KEYS
+            )
             if missing:
                 raise StateError(
                     f"event log entry missing required fields: {', '.join(sorted(missing))}"
@@ -383,7 +388,7 @@ def _read_event_lines(path: Path) -> list[dict[str, object]]:
             raise StateError("event facts must be a mapping")
         facts = _validate_json_value(dict(facts))
 
-        validated = {
+        validated: dict[str, object] = {
             "schema_version": schema_version,
             "event_sequence": event_sequence,
             "timestamp": timestamp,
@@ -750,7 +755,7 @@ class StateStore:
                 os.close(fd)
             _remove_temporary_if_regular(tmp_path)
 
-    def _append_event(self, run_dir: Path, payload: dict[str, object]) -> None:
+    def _append_event(self, run_dir: Path, payload: Mapping[str, object]) -> None:
         path = self._event_path(run_dir)
         tmp_path = self._event_tmp_path(run_dir)
 

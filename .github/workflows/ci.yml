@@ -43,8 +43,8 @@ jobs:
       - name: Ruff lint
         run: uv run ruff check .
 
-      - name: mypy (src only)
-        run: uv run mypy src
+      - name: ty
+        run: uv run ty check
 
       - name: pytest (branch coverage + threshold)
         run: |

@@ -13,7 +13,7 @@ based on queue depth alone would invent a forecast OAR does not provide.
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Final
 
@@ -82,17 +82,23 @@ def _coerce_int(value: object, *, minimum: int) -> int | None:
 
 
 def parse_oarnodes_records(
-    payload: Sequence[Mapping[str, object]] | Mapping[str, object],
+    payload: object,
 ) -> tuple[GpuNode, ...]:
     """Parse the ``oarnodes -J | jq`` array into immutable GpuNode records."""
 
+    raw_records: Sequence[object]
     if isinstance(payload, Mapping):
         # Some jq shapes emit one object per line rather than an array.
-        records: Iterable[Mapping[str, object]] = [payload]
+        raw_records = (payload,)
+    elif isinstance(payload, Sequence) and not isinstance(payload, (str, bytes)):
+        raw_records = payload
     else:
-        records = payload
+        raise ValueError("oarnodes payload must be a mapping or sequence")
     nodes: list[GpuNode] = []
-    for record in records:
+    for raw_record in raw_records:
+        if not isinstance(raw_record, Mapping):
+            raise ValueError("oarnodes record must be a mapping")
+        record = raw_record
         if str(record.get("state", "")) != "Alive":
             continue
         gpu_mem = _coerce_int(record.get("gpu_mem"), minimum=0)

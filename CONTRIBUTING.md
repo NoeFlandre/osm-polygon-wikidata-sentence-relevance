@@ -55,7 +55,7 @@ All of these must pass before opening a pull request:
 ```bash
 uv run ruff format --check .
 uv run ruff check .
-uv run mypy
+uv run ty check
 uv run pytest -q
 uv run pytest --cov=osm_polygon_sentence_relevance --cov-branch --cov-report=term-missing
 uv build
@@ -81,7 +81,7 @@ uv run osm-polygon-sentence-relevance --help
 ## Pull-request checklist
 
 - [ ] Red test added before implementation.
-- [ ] `ruff format`, `ruff check`, `mypy`, and `pytest` pass.
+- [ ] `ruff format`, `ruff check`, `ty check`, and `pytest` pass.
 - [ ] Branch coverage threshold maintained (see CI).
 - [ ] Public API, schemas, hashes, IDs, ordering, and output bytes unchanged
       for the same `(input_dataset_revision, pipeline_version)`.

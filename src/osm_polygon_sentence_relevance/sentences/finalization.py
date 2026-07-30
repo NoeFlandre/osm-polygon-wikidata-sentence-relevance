@@ -76,14 +76,19 @@ def convert_osm_tags_to_list_of_struct(
             "(key, value) tuples"
         )
 
-    for k, v in pairs:
-        if not isinstance(k, str):
+    validated_pairs: list[tuple[str, str]] = []
+    for key, item_value in pairs:
+        if not isinstance(key, str):
             raise FinalizationError("osm_tags keys must be strings")
-        if not isinstance(v, str):
+        if not isinstance(item_value, str):
             raise FinalizationError("osm_tags values must be strings")
+        validated_pairs.append((key, item_value))
 
-    pairs.sort(key=lambda kv: kv[0])
-    return [{"key": k, "value": v} for k, v in pairs]
+    validated_pairs.sort(key=lambda pair: pair[0])
+    result: list[dict[str, str]] = []
+    for key, item_value in validated_pairs:
+        result.append({"key": key, "value": item_value})
+    return result
 
 
 @dataclass(frozen=True, slots=True)

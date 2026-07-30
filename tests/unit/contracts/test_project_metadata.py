@@ -42,6 +42,17 @@ class TestDevelopmentDependencies:
             "use [dependency-groups] dev instead so plain 'uv sync' includes it"
         )
 
+    def test_ty_is_the_only_type_checker(self):
+        data = _load_pyproject()
+        dev = data["dependency-groups"]["dev"]
+
+        assert any(isinstance(item, str) and item.startswith("ty") for item in dev)
+        assert not any(
+            isinstance(item, str) and item.startswith("mypy") for item in dev
+        )
+        assert "ty" in data.get("tool", {})
+        assert "mypy" not in data.get("tool", {})
+
 
 class TestSegmentationExtra:
     """The ``segmentation`` extra installs the SaT runtime directly.

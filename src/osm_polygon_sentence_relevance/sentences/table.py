@@ -12,6 +12,7 @@ model adapter or finalization logic is present here.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 import pyarrow as pa
 import pyarrow.compute as pc
@@ -161,7 +162,8 @@ def segment_joined_sections(
             ),
         )
 
-    indices = pc.sort_indices(table, sort_keys=_SORT_KEYS)
+    compute: Any = pc
+    indices = compute.sort_indices(table, sort_keys=_SORT_KEYS)
     sorted_table = table.take(indices)
 
     # --- Preflight: convert to Python once, parse structured columns once,

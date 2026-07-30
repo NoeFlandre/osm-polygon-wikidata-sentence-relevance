@@ -76,7 +76,6 @@ SDIST_FORBIDDEN = [
     ".local-docs/",
     "build/",
     "dist/",
-    ".mypy_cache/",
     ".pytest_cache/",
     ".ruff_cache/",
     ".coverage",

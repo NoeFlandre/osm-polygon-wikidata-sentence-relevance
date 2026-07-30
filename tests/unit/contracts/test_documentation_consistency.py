@@ -137,6 +137,22 @@ def test_py_typed_is_in_package_data() -> None:
     assert "py.typed" in pd
 
 
+@pytest.mark.parametrize(
+    "doc_rel",
+    [
+        ".github/workflows/ci.yml",
+        "CONTRIBUTING.md",
+        "docs/guides/development.md",
+        "docs/guides/reproducibility.md",
+    ],
+)
+def test_active_quality_documentation_uses_ty(doc_rel: str) -> None:
+    text = _read(_resolve(doc_rel))
+
+    assert "uv run ty check" in text
+    assert "uv run mypy" not in text
+
+
 # ---------------------------------------------------------------------------
 # CLI documentation consistency
 # ---------------------------------------------------------------------------

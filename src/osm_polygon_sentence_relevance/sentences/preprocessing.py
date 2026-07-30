@@ -57,7 +57,7 @@ def parse_section_path(value: str) -> list[str]:
                 f"got non-string element of type {type(element).__name__}"
             )
 
-    return list(parsed)
+    return [element for element in parsed if isinstance(element, str)]
 
 
 def parse_osm_tags(value: str) -> dict[str, str]:

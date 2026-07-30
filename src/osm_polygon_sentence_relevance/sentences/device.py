@@ -40,8 +40,13 @@ class TorchCapabilities(Protocol):
     ``torch.backends.mps.is_available()``.
     """
 
-    cuda_available: bool
-    mps_available: bool
+    @property
+    def cuda_available(self) -> bool:
+        """Whether CUDA is available."""
+
+    @property
+    def mps_available(self) -> bool:
+        """Whether MPS is available."""
 
 
 def resolve_device(
@@ -147,7 +152,4 @@ def default_caps() -> TorchCapabilities:
 
     Imports Torch lazily on first access; never raises.
     """
-    # ``_DefaultCaps`` exposes read-only ``@property`` attributes, which
-    # is intentional (capabilities are queried lazily and never mutated).
-    # The Protocol type is structurally satisfied.
-    return _DefaultCaps()  # type: ignore[return-value]
+    return _DefaultCaps()

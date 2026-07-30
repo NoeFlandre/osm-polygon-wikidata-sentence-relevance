@@ -535,12 +535,13 @@ def _run_pipeline_locked(
     # 5b. Quarantine orphaned active checkpoints directly. Failure
     #     propagates: the caller will see an OSError (e.g. EXDEV) and
     #     the orphaned active directory is left untouched.
-    for prior_key in sorted(decisions["removed"]):
-        quarantine_shard_checkpoint(
-            work_dir=work_path,  # type: ignore[arg-type]
-            shard_key=prior_key,
-            reason="removed from current input",
-        )
+    if work_path is not None:
+        for prior_key in sorted(decisions["removed"]):
+            quarantine_shard_checkpoint(
+                work_dir=work_path,
+                shard_key=prior_key,
+                reason="removed from current input",
+            )
 
     # 6. Process regions.
     processed_regions_count = len(shards)

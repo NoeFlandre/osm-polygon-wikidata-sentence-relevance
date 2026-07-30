@@ -98,10 +98,16 @@ class OpenAICompatibleEngine:
             raise
         except Exception as exc:
             raise EngineError("inference request failed") from exc
-        try:
-            content = response["choices"][0]["message"]["content"]  # type: ignore[index]
-        except (KeyError, IndexError, TypeError) as exc:
-            raise EngineError("inference server returned an invalid response") from exc
+        choices = response.get("choices")
+        if not isinstance(choices, list) or not choices:
+            raise EngineError("inference server returned an invalid response")
+        choice = choices[0]
+        if not isinstance(choice, Mapping):
+            raise EngineError("inference server returned an invalid response")
+        message = choice.get("message")
+        if not isinstance(message, Mapping):
+            raise EngineError("inference server returned an invalid response")
+        content = message.get("content")
         if not isinstance(content, str):
             raise EngineError("inference server returned an invalid response")
         return content
