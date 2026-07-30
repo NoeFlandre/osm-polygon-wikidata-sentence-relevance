@@ -66,3 +66,13 @@ def test_precommit_uses_locked_project_commands() -> None:
         assert entry in text
     assert text.count("language: system") == 4
     assert text.count("pass_filenames: false") == 4
+
+
+def test_ci_uses_just_recipes_and_keeps_locked_sync() -> None:
+    text = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    assert "uv sync --locked --all-extras --dev" in text
+    assert "cargo install just --locked --version 1.40.0" in text
+    assert "run: just check" in text
+    assert "run: just verify-dist" in text
+    assert "osm-polygon-grid5000 --help" in text
+    assert "mypy" not in text
