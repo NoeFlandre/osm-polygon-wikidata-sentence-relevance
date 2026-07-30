@@ -15,6 +15,16 @@ from osm_polygon_sentence_relevance.operator.oar import ExitClass
 from osm_polygon_sentence_relevance.operator.state import RunPhase, StateStore
 
 
+def _resume_args(run_id: str) -> SimpleNamespace:
+    return SimpleNamespace(
+        command="resume",
+        run_id=run_id,
+        site=list(cli.DEFAULT_SITES),
+        gpu_memory_mb=40_000,
+        poll_seconds=30.0,
+    )
+
+
 def _config() -> OperatorConfig:
     return OperatorConfig.build(
         scope="region",
@@ -58,7 +68,7 @@ def test_resume_rejects_malformed_and_missing_run_ids(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(cli, "DATA_ROOT", tmp_path)
-    args = cli.build_parser().parse_args(["resume", "a" * 20])
+    args = _resume_args("a" * 20)
     with pytest.raises(RuntimeError, match="does not exist"):
         cli._resume_run("a" * 20, args)
     with pytest.raises(RuntimeError, match="twenty lowercase"):
@@ -102,7 +112,7 @@ def test_resume_live_job_reattaches_without_submission(
 
     monkeypatch.setattr(cli, "_classify_or_continue", classify)
     monkeypatch.setattr(cli, "_optimize_queued_start", optimize)
-    args = cli.build_parser().parse_args(["resume", config.run_id])
+    args = _resume_args(config.run_id)
     assert cli._resume_run(config.run_id, args) == 0
     assert optimized == [("sophia", 123)]
     assert seen == [("nancy", 456, "nancy")]
@@ -182,7 +192,7 @@ def test_resume_prepared_continuation_validates_assets_and_submits(
         "_optimize_queued_start",
         lambda _args, _store, _config, site, job_id: (site, job_id),
     )
-    args = cli.build_parser().parse_args(["resume", config.run_id])
+    args = _resume_args(config.run_id)
     assert cli._resume_run(config.run_id, args) == 0
     assert calls == ["policy", "quota", "checkout", "assets", "relay", "submit"]
     assert seen == [456]
@@ -193,7 +203,7 @@ def test_resume_refuses_prepared_state_without_site(
 ) -> None:
     config, _store = _store_at(tmp_path, RunPhase.REMOTE_PREPARED, facts={})
     monkeypatch.setattr(cli, "DATA_ROOT", tmp_path)
-    args = cli.build_parser().parse_args(["resume", config.run_id])
+    args = _resume_args(config.run_id)
     with pytest.raises(RuntimeError, match="no recorded site"):
         cli._resume_run(config.run_id, args)
 
@@ -207,7 +217,7 @@ def test_resume_refuses_tampered_persisted_identity(
     payload["run_identity"]["source_commit"] = "c" * 40
     state_path.write_text(json.dumps(payload))
     monkeypatch.setattr(cli, "DATA_ROOT", tmp_path)
-    args = cli.build_parser().parse_args(["resume", config.run_id])
+    args = _resume_args(config.run_id)
     with pytest.raises(RuntimeError, match="does not reproduce"):
         cli._resume_run(config.run_id, args)
 
@@ -317,6 +327,6 @@ def test_resume_idle_run_reports_nothing_to_reattach(
 ) -> None:
     config, _store = _store_at(tmp_path, RunPhase.CREATED, facts={})
     monkeypatch.setattr(cli, "DATA_ROOT", tmp_path)
-    args = cli.build_parser().parse_args(["resume", config.run_id])
+    args = _resume_args(config.run_id)
     assert cli._resume_run(config.run_id, args) == 0
     assert "nothing to reattach" in capsys.readouterr().out

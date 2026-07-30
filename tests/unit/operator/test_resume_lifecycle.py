@@ -38,6 +38,17 @@ from osm_polygon_sentence_relevance.operator.config import OperatorConfig
 from osm_polygon_sentence_relevance.operator.oar import ExitClass, JobState, JobStatus
 from osm_polygon_sentence_relevance.operator.state import RunPhase
 
+
+def _resume_args(run_id: str) -> SimpleNamespace:
+    return SimpleNamespace(
+        command="resume",
+        run_id=run_id,
+        site=list(cli.DEFAULT_SITES),
+        gpu_memory_mb=40_000,
+        poll_seconds=30.0,
+    )
+
+
 # ------------------------------------------------------------------
 # Stateful fake infrastructure for the full lifecycle
 # ------------------------------------------------------------------
@@ -579,7 +590,7 @@ def test_resume_reroutes_cross_site_and_submits_exactly_one_new_allocation(
 
     # Drive the resumable classification.
     initial = cli._classify_or_continue(
-        cli.build_parser().parse_args(["resume", "7e8f1a748497e3dbcc56"]),
+        _resume_args("7e8f1a748497e3dbcc56"),
         store=store,
         config=config,
         site="sophia",
@@ -704,7 +715,7 @@ def test_resume_same_site_avoids_relay(
     )
 
     classification = cli._classify_or_continue(
-        cli.build_parser().parse_args(["resume", "7e8f1a748497e3dbcc56"]),
+        _resume_args("7e8f1a748497e3dbcc56"),
         store=store,
         config=config,
         site="sophia",
@@ -799,7 +810,7 @@ def test_missing_job_with_complete_durable_evidence_classifies_complete(
     )
 
     classification = cli._classify_or_continue(
-        cli.build_parser().parse_args(["resume", "7e8f1a748497e3dbcc56"]),
+        _resume_args("7e8f1a748497e3dbcc56"),
         store=store,
         config=config,
         site="sophia",

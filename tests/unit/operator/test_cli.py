@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import argparse
 import json
 import re
 import sys
@@ -10,6 +9,7 @@ from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 
 import pytest
+from typer.testing import CliRunner
 
 from osm_polygon_sentence_relevance.operator import cli
 from osm_polygon_sentence_relevance.operator.config import OperatorConfig
@@ -24,84 +24,48 @@ from osm_polygon_sentence_relevance.operator.workflows import (
     llama_build_submission,
 )
 
-
-@pytest.mark.parametrize(
-    ("argv", "expected"),
-    [
-        (
-            ["status", "a" * 20],
-            {"command": "status", "run_id": "a" * 20},
-        ),
-        (
-            ["resume", "b" * 20],
-            {
-                "command": "resume",
-                "run_id": "b" * 20,
-                "gpu_memory_mb": 40_000,
-                "poll_seconds": 30.0,
-            },
-        ),
-        (
-            [
-                "run",
-                "--scope",
-                "region",
-                "--region",
-                "afghanistan-latest",
-                "--stage",
-                "label",
-            ],
-            {
-                "command": "run",
-                "scope": "region",
-                "region": "afghanistan-latest",
-                "stage": "label",
-                "batch_size": 128,
-                "row_limit": 0,
-                "llama_parallel": 8,
-                "llama_per_slot_context": 8192,
-                "request_concurrency": None,
-                "gpu_memory_mb": 40_000,
-                "remote_free_bytes": 8 * 1024**3,
-                "poll_seconds": 30.0,
-            },
-        ),
-    ],
-)
-def test_public_parser_defaults(
-    argv: list[str],
-    expected: dict[str, object],
-) -> None:
-    args = cli.build_parser().parse_args(argv)
-    for key, value in expected.items():
-        assert getattr(args, key) == value
+runner = CliRunner()
 
 
-def test_explicit_sites_extend_defaults_and_preserve_order() -> None:
-    args = cli.build_parser().parse_args(
-        [
-            "resume",
-            "a" * 20,
-            "--site",
-            "nancy",
-            "--site",
-            "nantes",
-        ]
+def _run_args(
+    *,
+    stage: str = "label",
+    sites: list[str] | None = None,
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        batch_size=128,
+        command="run",
+        gpu_memory_mb=40_000,
+        input_revision="b" * 40,
+        llama_parallel=8,
+        llama_per_slot_context=8192,
+        poll_seconds=0.0,
+        region="afghanistan-latest",
+        remote_free_bytes=8 * 1024**3,
+        request_concurrency=None,
+        row_limit=0,
+        scope="region",
+        site=list(cli.DEFAULT_SITES) if sites is None else sites,
+        stage=stage,
     )
-    assert args.site == [*cli.DEFAULT_SITES, "nancy", "nantes"]
 
 
-def test_help_exposes_run_status_and_public_stage_choices(
-    capsys: pytest.CaptureFixture[str],
+def test_typer_help_exposes_exact_command_set() -> None:
+    result = runner.invoke(cli.app, ["--help"], color=False)
+
+    assert result.exit_code == 0
+    for command in ("run", "resume", "status", "cleanup"):
+        assert command in result.stdout
+
+
+def test_typer_run_delegates_current_defaults(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    with pytest.raises(SystemExit) as caught:
-        cli.main(["--help"])
-    assert caught.value.code == 0
-    text = capsys.readouterr().out
-    assert "run" in text
-    assert "status" in text
-    parser = cli.build_parser()
-    args = parser.parse_args(
+    seen: list[SimpleNamespace] = []
+    monkeypatch.setattr(cli, "_run", lambda args: seen.append(args) or 0)
+
+    result = runner.invoke(
+        cli.app,
         [
             "run",
             "--scope",
@@ -109,24 +73,62 @@ def test_help_exposes_run_status_and_public_stage_choices(
             "--region",
             "afghanistan-latest",
             "--stage",
-            "all",
-        ]
+            "label",
+        ],
+        color=False,
     )
-    assert args.stage == "all"
-    assert set(args.site) == {
-        "bordeaux",
-        "grenoble",
-        "lille",
-        "louvain",
-        "luxembourg",
-        "lyon",
-        "nancy",
-        "nantes",
-        "rennes",
-        "sophia",
-        "strasbourg",
-        "toulouse",
+
+    assert result.exit_code == 0
+    assert len(seen) == 1
+    args = seen[0]
+    assert vars(args) == {
+        "batch_size": 128,
+        "command": "run",
+        "gpu_memory_mb": 40_000,
+        "input_revision": None,
+        "llama_parallel": 8,
+        "llama_per_slot_context": 8192,
+        "poll_seconds": 30.0,
+        "region": "afghanistan-latest",
+        "remote_free_bytes": 8 * 1024**3,
+        "request_concurrency": None,
+        "row_limit": 0,
+        "scope": "region",
+        "site": list(cli.DEFAULT_SITES),
+        "stage": "label",
     }
+
+
+def test_typer_explicit_sites_extend_defaults(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: list[SimpleNamespace] = []
+    monkeypatch.setattr(cli, "_resume_handler", lambda args: seen.append(args) or 0)
+
+    result = runner.invoke(
+        cli.app,
+        [
+            "resume",
+            "a" * 20,
+            "--site",
+            "nancy",
+            "--site",
+            "nantes",
+        ],
+        color=False,
+    )
+
+    assert result.exit_code == 0
+    assert seen[0].site == [*cli.DEFAULT_SITES, "nancy", "nantes"]
+
+
+def test_help_exposes_run_status_and_public_stage_choices(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert cli.main(["--help"]) == 0
+    text = capsys.readouterr().out
+    assert "run" in text
+    assert "status" in text
 
 
 def test_sigint_only_stops_local_monitoring(
@@ -135,17 +137,19 @@ def test_sigint_only_stops_local_monitoring(
     def interrupted(_args: object) -> int:
         raise KeyboardInterrupt
 
-    parser = cli.build_parser()
-    monkeypatch.setattr(cli, "build_parser", lambda: parser)
     monkeypatch.setattr(cli, "_run", interrupted)
-    # Existing parser stores its original handler, so patch parsed arguments.
-    args = parser.parse_args(
-        ["run", "--scope", "all", "--stage", "split", "--input-revision", "a" * 40]
-    )
-    args.handler = interrupted
-    monkeypatch.setattr(parser, "parse_args", lambda _argv: args)
     with pytest.raises(SystemExit) as exc:
-        cli.main([])
+        cli.main(
+            [
+                "run",
+                "--scope",
+                "all",
+                "--stage",
+                "split",
+                "--input-revision",
+                "a" * 40,
+            ]
+        )
     assert exc.value.code == 130
     assert "remote job and checkpoints were preserved" in capsys.readouterr().err
 
@@ -362,21 +366,7 @@ def test_run_split_finalizes_publishes_and_marks_complete(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     _install_run_fakes(monkeypatch, tmp_path)
-    args = cli.build_parser().parse_args(
-        [
-            "run",
-            "--scope",
-            "region",
-            "--region",
-            "afghanistan-latest",
-            "--stage",
-            "split",
-            "--site",
-            "nancy",
-            "--poll-seconds",
-            "0",
-        ]
-    )
+    args = _run_args(stage="split", sites=["nancy"])
     assert cli._run(args) == 0
     state = _FakeStore.instances[-1].value
     assert state.phase is RunPhase.COMPLETE
@@ -404,22 +394,7 @@ def test_run_reclaims_managed_storage_then_reprobes(
         "cleanup_managed_runs",
         lambda _ssh, *, execute: cleaned.append(execute) or ("/managed/old",),
     )
-    args = cli.build_parser().parse_args(
-        [
-            "run",
-            "--scope",
-            "region",
-            "--region",
-            "afghanistan-latest",
-            "--stage",
-            "split",
-            "--site",
-            "nancy",
-            "--poll-seconds",
-            "0",
-        ]
-    )
-    args.site = ["nancy"]
+    args = _run_args(stage="split", sites=["nancy"])
     assert cli._run(args) == 0
     assert cleaned == [True]
 
@@ -450,21 +425,7 @@ def test_run_label_reuses_checkpoints_and_completes(
             minimum_headroom_bytes
         ),
     )
-    args = cli.build_parser().parse_args(
-        [
-            "run",
-            "--scope",
-            "region",
-            "--region",
-            "afghanistan-latest",
-            "--stage",
-            "label",
-            "--site",
-            "nancy",
-            "--poll-seconds",
-            "0",
-        ]
-    )
+    args = _run_args(sites=["nancy"])
     assert cli._run(args) == 0
     state = _FakeStore.instances[-1].value
     assert state.phase is RunPhase.COMPLETE
@@ -553,12 +514,12 @@ def test_status_missing_and_cleanup_preview(
 def test_main_reports_errors(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    parser = cli.build_parser()
-    args = parser.parse_args(["status", "a" * 20])
-    args.handler = lambda _args: (_ for _ in ()).throw(RuntimeError("boom"))
-    monkeypatch.setattr(parser, "parse_args", lambda _argv: args)
-    monkeypatch.setattr(cli, "build_parser", lambda: parser)
-    assert cli.main([]) == 1
+    monkeypatch.setattr(
+        cli,
+        "_status",
+        lambda _args: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+    assert cli.main(["status", "a" * 20]) == 1
     assert "Error: boom" in capsys.readouterr().err
 
 
@@ -864,21 +825,8 @@ def _patch_reattach_env(
     return config, store, counters
 
 
-def _make_args() -> argparse.Namespace:
-    parser = cli.build_parser()
-    return parser.parse_args(
-        [
-            "run",
-            "--scope",
-            "region",
-            "--region",
-            "afghanistan-latest",
-            "--stage",
-            "label",
-            "--input-revision",
-            "b" * 40,
-        ]
-    )
+def _make_args() -> SimpleNamespace:
+    return _run_args()
 
 
 def test_reattach_graceful_deadline_exit_zero_with_valid_checkpoints_is_resumable(

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import argparse
 import json
 import re
 import shlex
@@ -12,7 +11,11 @@ import time
 from collections.abc import Mapping
 from datetime import datetime
 from pathlib import Path, PurePosixPath
-from typing import Any, Final
+from types import SimpleNamespace
+from typing import Annotated, Any, Final
+
+import click
+import typer
 
 from osm_polygon_sentence_relevance.operator import recorded_job, relay
 from osm_polygon_sentence_relevance.operator.config import (
@@ -23,6 +26,7 @@ from osm_polygon_sentence_relevance.operator.config import (
     Scope,
     Stage,
 )
+from osm_polygon_sentence_relevance.operator.console import OperatorConsole
 from osm_polygon_sentence_relevance.operator.controller import (
     Controller,
     LiveProgress,
@@ -79,12 +83,32 @@ from osm_polygon_sentence_relevance.operator.workflows import (
 )
 
 _SUBMISSION_HEADROOM_BYTES: Final[int] = 512 * 1024**2
+_CONSOLE = OperatorConsole()
+
+app = typer.Typer(
+    name="osm-polygon-grid5000",
+    help="Run and resume sentence processing on Grid'5000.",
+    add_completion=False,
+    no_args_is_help=False,
+    pretty_exceptions_enable=False,
+)
+
+
+class _LocalMonitoringInterrupted(RuntimeError):
+    """Typer adapter sentinel preserving the public exit-130 contract."""
+
+
+def _dispatch(handler: Any, args: SimpleNamespace) -> int:
+    try:
+        return int(handler(args))
+    except KeyboardInterrupt as exc:
+        raise _LocalMonitoringInterrupted from exc
 
 
 def _milestone(message: str) -> None:
     """Print one concise operator milestone immediately."""
 
-    print(f"[operator] {message}", flush=True)
+    _CONSOLE.milestone(message)
 
 
 #: Per-invocation active run ID. Set right after a validated
@@ -163,8 +187,7 @@ def _usage_policy_preflight(ssh: SshClient, site: str) -> None:
 
 
 def _emit(progress: LiveProgress) -> None:
-    for line in progress.text.splitlines():
-        print(f"[job {progress.job_id}] {line}", flush=True)
+    _CONSOLE.job_lines(progress.job_id, progress.text)
 
 
 def _transition_terminal(
@@ -424,7 +447,7 @@ def _apply_classification(
 
 
 def _classify_or_continue(
-    args: argparse.Namespace,
+    args: SimpleNamespace,
     store: StateStore,
     config: OperatorConfig,
     site: str,
@@ -673,7 +696,7 @@ def _relay_for_continuation(
 
 
 def _optimize_queued_start(
-    args: argparse.Namespace,
+    args: SimpleNamespace,
     store: StateStore,
     config: OperatorConfig,
     fallback_site: str,
@@ -900,7 +923,7 @@ def _optimize_queued_start(
     return outcome.site, outcome.job_id
 
 
-def _resume_run(run_id: str, args: argparse.Namespace) -> int:
+def _resume_run(run_id: str, args: SimpleNamespace) -> int:
     """Resume or classify a historical run by its durable run ID.
 
     Loads the persisted ``state.json`` for ``run_id`` and reconstructs the
@@ -1000,7 +1023,7 @@ def _resume_run(run_id: str, args: argparse.Namespace) -> int:
     return 0
 
 
-def _run(args: argparse.Namespace) -> int:
+def _run(args: SimpleNamespace) -> int:
     if not DATA_ROOT.exists():
         raise RuntimeError(f"external data root is unavailable: {DATA_ROOT}")
     _milestone("Validating the local source checkout")
@@ -1051,18 +1074,24 @@ def _run(args: argparse.Namespace) -> int:
             args.remote_free_bytes,
         ),
     )
+    targets = tuple(dict.fromkeys(args.site))
     probes: list[SiteProbe] = []
-    for target in dict.fromkeys(args.site):
-        _milestone(f"Probing Grid'5000 site: {target}")
-        probe = probe_site(target, config.run_id, requirements)
-        probes.append(probe)
-        if probe.reachable:
-            _milestone(
-                f"Site {probe.name}: reachable, GPU {probe.gpu_memory_mb} MiB, "
-                f"persistent free {probe.persistent_free_bytes // 1024**3} GiB"
-            )
-        else:
-            _milestone(f"Site {target}: unavailable")
+    with _CONSOLE.progress(
+        description="Probing Grid'5000 sites",
+        total=len(targets),
+    ) as progress:
+        for target in targets:
+            _milestone(f"Probing Grid'5000 site: {target}")
+            probe = probe_site(target, config.run_id, requirements)
+            probes.append(probe)
+            if probe.reachable:
+                _milestone(
+                    f"Site {probe.name}: reachable, GPU {probe.gpu_memory_mb} MiB, "
+                    f"persistent free {probe.persistent_free_bytes // 1024**3} GiB"
+                )
+            else:
+                _milestone(f"Site {target}: unavailable")
+            progress.advance()
     try:
         selection = select_site(probes, requirements)
     except NoCompatibleSiteError:
@@ -1075,9 +1104,14 @@ def _run(args: argparse.Namespace) -> int:
             if probe.reachable:
                 cleanup_managed_runs(SshClient(target=probe.target), execute=True)
         probes = []
-        for target in dict.fromkeys(args.site):
-            _milestone(f"Re-probing Grid'5000 site: {target}")
-            probes.append(probe_site(target, config.run_id, requirements))
+        with _CONSOLE.progress(
+            description="Re-probing Grid'5000 sites",
+            total=len(targets),
+        ) as progress:
+            for target in targets:
+                _milestone(f"Re-probing Grid'5000 site: {target}")
+                probes.append(probe_site(target, config.run_id, requirements))
+                progress.advance()
         selection = select_site(probes, requirements)
     target = selection.selected.target
     _milestone(f"Selected Grid'5000 site: {selection.selected.name}")
@@ -1304,113 +1338,166 @@ def _run(args: argparse.Namespace) -> int:
     return 0
 
 
-def _status(args: argparse.Namespace) -> int:
+def _status(args: SimpleNamespace) -> int:
     path = DATA_ROOT / "runs" / args.run_id / "state.json"
     if not path.is_file():
         raise RuntimeError("run state does not exist")
     payload = json.loads(path.read_text(encoding="utf-8"))
-    print(json.dumps(payload, indent=2, sort_keys=True))
+    if not isinstance(payload, Mapping):
+        raise RuntimeError("run state is not a JSON object")
+    _CONSOLE.json(payload)
     return 0
 
 
-def _resume_handler(args: argparse.Namespace) -> int:
+def _resume_handler(args: SimpleNamespace) -> int:
     return _resume_run(args.run_id, args)
 
 
-def _cleanup(args: argparse.Namespace) -> int:
+def _cleanup(args: SimpleNamespace) -> int:
     removed = cleanup_managed_runs(
         SshClient(target=args.site),
         execute=args.execute,
     )
     label = "removed" if args.execute else "eligible"
     for path in removed:
-        print(f"{label}: {path}")
+        _CONSOLE.plain(f"{label}: {path}")
     if not removed:
-        print("No pipeline-managed completed or failed runs are eligible.")
+        _CONSOLE.plain("No pipeline-managed completed or failed runs are eligible.")
     return 0
 
 
-def build_parser() -> argparse.ArgumentParser:
-    """Create the stable public CLI parser."""
+@app.command("run")
+def run_command(
+    scope: Annotated[Scope, typer.Option("--scope")],
+    stage: Annotated[Stage, typer.Option("--stage")],
+    region: Annotated[str | None, typer.Option("--region")] = None,
+    input_revision: Annotated[str | None, typer.Option("--input-revision")] = None,
+    site: Annotated[list[str] | None, typer.Option("--site")] = None,
+    batch_size: Annotated[int, typer.Option("--batch-size")] = 128,
+    row_limit: Annotated[int, typer.Option("--row-limit")] = 0,
+    llama_parallel: Annotated[int, typer.Option("--llama-parallel")] = 8,
+    llama_per_slot_context: Annotated[
+        int, typer.Option("--llama-per-slot-context")
+    ] = 8192,
+    request_concurrency: Annotated[
+        int | None, typer.Option("--request-concurrency")
+    ] = None,
+    gpu_memory_mb: Annotated[int, typer.Option("--gpu-memory-mb")] = 40_000,
+    remote_free_bytes: Annotated[int, typer.Option("--remote-free-bytes")] = 8
+    * 1024**3,
+    poll_seconds: Annotated[float, typer.Option("--poll-seconds")] = 30.0,
+) -> int:
+    """Run or resume a production workflow."""
 
-    parser = argparse.ArgumentParser(
-        prog="osm-polygon-grid5000",
-        description="Run and resume sentence processing on Grid'5000.",
+    args = SimpleNamespace(
+        command="run",
+        scope=scope.value,
+        stage=stage.value,
+        region=region,
+        input_revision=input_revision,
+        site=[*DEFAULT_SITES, *(site or [])],
+        batch_size=batch_size,
+        row_limit=row_limit,
+        llama_parallel=llama_parallel,
+        llama_per_slot_context=llama_per_slot_context,
+        request_concurrency=request_concurrency,
+        gpu_memory_mb=gpu_memory_mb,
+        remote_free_bytes=remote_free_bytes,
+        poll_seconds=poll_seconds,
     )
-    sub = parser.add_subparsers(dest="command", required=True)
-    run = sub.add_parser("run", help="run or resume a production workflow")
-    run.add_argument("--scope", choices=[scope.value for scope in Scope], required=True)
-    run.add_argument("--region")
-    run.add_argument("--stage", choices=[stage.value for stage in Stage], required=True)
-    run.add_argument("--input-revision")
-    run.add_argument("--site", action="append", default=list(DEFAULT_SITES))
-    run.add_argument("--batch-size", type=int, default=128)
-    run.add_argument("--row-limit", type=int, default=0)
-    run.add_argument("--llama-parallel", type=int, default=8)
-    run.add_argument("--llama-per-slot-context", type=int, default=8192)
-    run.add_argument("--request-concurrency", type=int)
-    run.add_argument("--gpu-memory-mb", type=int, default=40_000)
-    run.add_argument("--remote-free-bytes", type=int, default=8 * 1024**3)
-    run.add_argument("--poll-seconds", type=float, default=30.0)
-    run.set_defaults(handler=_run)
+    return _dispatch(_run, args)
 
-    status = sub.add_parser("status", help="show durable local run state")
-    status.add_argument("run_id")
-    status.set_defaults(handler=_status)
 
-    resume = sub.add_parser(
-        "resume",
-        help="resume or classify a historical run by its durable run ID",
+@app.command("status")
+def status_command(run_id: str) -> int:
+    """Show durable local run state."""
+
+    return _dispatch(
+        _status,
+        SimpleNamespace(command="status", run_id=run_id),
     )
-    resume.add_argument("run_id")
-    resume.add_argument("--site", action="append", default=list(DEFAULT_SITES))
-    resume.add_argument("--gpu-memory-mb", type=int, default=40_000)
-    resume.add_argument("--poll-seconds", type=float, default=30.0)
-    resume.set_defaults(handler=_resume_handler)
 
-    cleanup = sub.add_parser(
-        "cleanup",
-        help="preview or remove completed pipeline-managed remote runs",
+
+@app.command("resume")
+def resume_command(
+    run_id: str,
+    site: Annotated[list[str] | None, typer.Option("--site")] = None,
+    gpu_memory_mb: Annotated[int, typer.Option("--gpu-memory-mb")] = 40_000,
+    poll_seconds: Annotated[float, typer.Option("--poll-seconds")] = 30.0,
+) -> int:
+    """Resume or classify a historical run by its durable run ID."""
+
+    return _dispatch(
+        _resume_handler,
+        SimpleNamespace(
+            command="resume",
+            run_id=run_id,
+            site=[*DEFAULT_SITES, *(site or [])],
+            gpu_memory_mb=gpu_memory_mb,
+            poll_seconds=poll_seconds,
+        ),
     )
-    cleanup.add_argument("--site", required=True)
-    cleanup.add_argument("--execute", action="store_true")
-    cleanup.set_defaults(handler=_cleanup)
-    return parser
+
+
+@app.command("cleanup")
+def cleanup_command(
+    site: Annotated[str, typer.Option("--site")],
+    execute: Annotated[bool, typer.Option("--execute")] = False,
+) -> int:
+    """Preview or remove completed pipeline-managed remote runs."""
+
+    return _dispatch(
+        _cleanup,
+        SimpleNamespace(
+            command="cleanup",
+            site=site,
+            execute=execute,
+        ),
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
     """Installed entry point."""
 
-    parser = build_parser()
-    args = parser.parse_args(argv)
     global _ACTIVE_RUN_ID
     prior_active = _ACTIVE_RUN_ID
     _ACTIVE_RUN_ID = None
+    command = typer.main.get_command(app)
     try:
-        return int(args.handler(args))
-    except KeyboardInterrupt:
+        result = command.main(
+            args=argv,
+            prog_name="osm-polygon-grid5000",
+            standalone_mode=False,
+        )
+        return int(result) if result is not None else 0
+    except click.UsageError as exc:
+        exc.show(file=sys.stderr)
+        raise SystemExit(exc.exit_code) from exc
+    except click.exceptions.Exit as exc:
+        raise SystemExit(exc.exit_code) from exc
+    except (KeyboardInterrupt, click.Abort, _LocalMonitoringInterrupted):
         run_id = _ACTIVE_RUN_ID if _ACTIVE_RUN_ID else None
         if run_id is None:
             run_id = prior_active if prior_active else None
         if run_id is None:
-            print(
+            _CONSOLE.plain(
                 "Local monitoring stopped; the remote job and checkpoints were "
                 "preserved.",
-                file=sys.stderr,
+                error=True,
             )
         else:
-            print(
+            _CONSOLE.plain(
                 "Local monitoring stopped; the remote job and checkpoints were "
                 "preserved.",
-                file=sys.stderr,
+                error=True,
             )
-            print(
+            _CONSOLE.plain(
                 f"Resume with: {_resume_command(run_id)}",
-                file=sys.stderr,
+                error=True,
             )
         sys.exit(130)
     except Exception as exc:
-        print(f"Error: {exc}", file=sys.stderr)
+        _CONSOLE.error(str(exc))
         return 1
     finally:
         _ACTIVE_RUN_ID = prior_active
@@ -1420,4 +1507,4 @@ if __name__ == "__main__":
     raise SystemExit(main())
 
 
-__all__ = ["build_parser", "main"]
+__all__ = ["app", "main"]
