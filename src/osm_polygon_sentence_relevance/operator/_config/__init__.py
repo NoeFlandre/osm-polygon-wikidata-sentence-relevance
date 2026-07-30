@@ -1,6 +1,6 @@
-"""Stable public facade for autonomous operator configuration."""
+"""Focused implementation package for operator configuration."""
 
-from osm_polygon_sentence_relevance.operator._config import (
+from osm_polygon_sentence_relevance.operator._config.defaults import (
     DATA_ROOT,
     DEFAULT_BATCH_SIZE,
     DEFAULT_LABEL_MODEL_FILE,
@@ -16,14 +16,15 @@ from osm_polygon_sentence_relevance.operator._config import (
     INPUT_DATASET_ID,
     OUTPUT_DATASET_ID,
     SUPPORTED_LLAMA_PARALLEL,
+)
+from osm_polygon_sentence_relevance.operator._config.defaults import (
+    PROMPT_VERSION as PROMPT_VERSION,
+)
+from osm_polygon_sentence_relevance.operator._config.enums import Scope, Stage
+from osm_polygon_sentence_relevance.operator._config.models import (
     Grid5000Requirements,
     OperatorConfig,
     RunIdentity,
-    Scope,
-    Stage,
-)
-from osm_polygon_sentence_relevance.operator._config import (
-    PROMPT_VERSION as PROMPT_VERSION,
 )
 
 __all__ = [
