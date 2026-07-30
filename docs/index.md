@@ -13,6 +13,14 @@ pre-1.0 (alpha).
   [Reproducibility](guides/reproducibility.md)
 - **I want the architecture and module ownership** →
   [Architecture overview](architecture/overview.md)
+- **I want concise package-level ownership and invariants** →
+  [Operator](architecture/packages/operator.md),
+  [application](architecture/packages/application.md),
+  [sentences](architecture/packages/sentences.md),
+  [labeling](architecture/packages/labeling.md),
+  [output](architecture/packages/output.md),
+  [publishing](architecture/packages/publishing.md), and
+  [streaming operations](architecture/packages/streaming-operations.md)
 - **I want the public API reference** → [API](reference/api.md)
 - **I want the CLI reference** → [CLI](reference/cli.md)
 - **I want the data contract (schemas, IDs, normalization)** →
@@ -40,6 +48,7 @@ One-commit publishing of a validated local export to an existing Hugging
 Face dataset exists, both programmatically in
 `osm_polygon_sentence_relevance.publishing` and via the build CLI's
 optional `--publish-dataset-id` flag — no token parameter is accepted.
-Hugging Face repository creation, sentence classification or labelling, and
-parallel shard processing are not implemented. See the
+Hugging Face repository creation and multi-GPU inference are not implemented.
+Sentence splitting and resumable LLM labeling are implemented, including the
+Grid'5000 operator workflow. See the
 [architecture overview](architecture/overview.md) for invariants.

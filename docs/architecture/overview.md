@@ -49,6 +49,12 @@ effects. Production code imports via canonical domain paths; never via a
 facade. Tests and external consumers may continue to import from the legacy
 paths.
 
+Focused package guides document current ownership and invariants:
+[operator](packages/operator.md), [application](packages/application.md),
+[sentences](packages/sentences.md), [labeling](packages/labeling.md),
+[output](packages/output.md), [publishing](packages/publishing.md), and
+[streaming operations](packages/streaming-operations.md).
+
 ## Local versus Hub input flow
 
 The CLI accepts exactly one input mode (mutually exclusive, both required as

@@ -33,7 +33,6 @@ recursive-include tests *.py
 # Exclude caches, build output, data, credentials, model weights, and
 # the local-only coding-agent handoff guide.
 prune .local-docs
-prune .mypy_cache
 prune .pytest_cache
 prune .ruff_cache
 prune build
