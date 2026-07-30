@@ -6,7 +6,6 @@ import tomllib
 from pathlib import Path
 from typing import Any
 
-
 ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -34,3 +33,36 @@ def test_required_runtime_and_development_tools_are_direct() -> None:
     assert {"typer", "rich", "tqdm"} <= runtime
     assert {"pytest", "pytest-cov", "ruff", "ty", "pre-commit"} <= development
     assert "mypy" not in runtime | development
+
+
+def test_justfile_exposes_required_recipes() -> None:
+    text = (ROOT / "justfile").read_text(encoding="utf-8")
+    for recipe in (
+        "sync:",
+        "format:",
+        "format-check:",
+        "lint:",
+        "typecheck:",
+        "test:",
+        "check:",
+        "build:",
+        "verify-dist:",
+        "ci:",
+    ):
+        assert recipe in text
+    assert "mypy" not in text
+
+
+def test_precommit_uses_locked_project_commands() -> None:
+    text = (ROOT / ".pre-commit-config.yaml").read_text(encoding="utf-8")
+    for entry in (
+        "entry: uv run ruff format --check .",
+        "entry: uv run ruff check .",
+        "entry: uv run ty check",
+        "tests/unit/operator/test_console.py",
+        "tests/unit/operator/test_cli.py",
+        "tests/unit/test_developer_tooling.py",
+    ):
+        assert entry in text
+    assert text.count("language: system") == 4
+    assert text.count("pass_filenames: false") == 4

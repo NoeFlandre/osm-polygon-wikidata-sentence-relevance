@@ -1,0 +1,27 @@
+repos:
+  - repo: local
+    hooks:
+      - id: ruff-format-check
+        name: Ruff format check
+        entry: uv run ruff format --check .
+        language: system
+        pass_filenames: false
+      - id: ruff-check
+        name: Ruff lint
+        entry: uv run ruff check .
+        language: system
+        pass_filenames: false
+      - id: ty-check
+        name: ty type check
+        entry: uv run ty check
+        language: system
+        pass_filenames: false
+      - id: focused-tests
+        name: Focused fast tests
+        entry: >-
+          uv run pytest -q --no-cov
+          tests/unit/operator/test_console.py
+          tests/unit/operator/test_cli.py
+          tests/unit/test_developer_tooling.py
+        language: system
+        pass_filenames: false
