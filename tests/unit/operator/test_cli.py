@@ -25,6 +25,72 @@ from osm_polygon_sentence_relevance.operator.workflows import (
 )
 
 
+@pytest.mark.parametrize(
+    ("argv", "expected"),
+    [
+        (
+            ["status", "a" * 20],
+            {"command": "status", "run_id": "a" * 20},
+        ),
+        (
+            ["resume", "b" * 20],
+            {
+                "command": "resume",
+                "run_id": "b" * 20,
+                "gpu_memory_mb": 40_000,
+                "poll_seconds": 30.0,
+            },
+        ),
+        (
+            [
+                "run",
+                "--scope",
+                "region",
+                "--region",
+                "afghanistan-latest",
+                "--stage",
+                "label",
+            ],
+            {
+                "command": "run",
+                "scope": "region",
+                "region": "afghanistan-latest",
+                "stage": "label",
+                "batch_size": 128,
+                "row_limit": 0,
+                "llama_parallel": 8,
+                "llama_per_slot_context": 8192,
+                "request_concurrency": None,
+                "gpu_memory_mb": 40_000,
+                "remote_free_bytes": 8 * 1024**3,
+                "poll_seconds": 30.0,
+            },
+        ),
+    ],
+)
+def test_public_parser_defaults(
+    argv: list[str],
+    expected: dict[str, object],
+) -> None:
+    args = cli.build_parser().parse_args(argv)
+    for key, value in expected.items():
+        assert getattr(args, key) == value
+
+
+def test_explicit_sites_extend_defaults_and_preserve_order() -> None:
+    args = cli.build_parser().parse_args(
+        [
+            "resume",
+            "a" * 20,
+            "--site",
+            "nancy",
+            "--site",
+            "nantes",
+        ]
+    )
+    assert args.site == [*cli.DEFAULT_SITES, "nancy", "nantes"]
+
+
 def test_help_exposes_run_status_and_public_stage_choices(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
