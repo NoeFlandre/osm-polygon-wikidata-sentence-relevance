@@ -397,6 +397,7 @@ def _apply_classification(
     active_stage: str,
     classification: ExitClass,
     resume_artifact_path: str | None = None,
+    failure_reason_token: str | None = None,
 ) -> None:
     """Drive durable state transitions for a classified terminal allocation.
 
@@ -416,16 +417,19 @@ def _apply_classification(
     current = store.load()
     is_recovery_from_failed = current.phase is RunPhase.FAILED
     if classification is ExitClass.FAILED:
+        reason_token = (
+            failure_reason_token if failure_reason_token else "deterministic-failure"
+        )
         _transition_terminal(
             store,
             expected=(RunPhase.RUNNING, RunPhase.QUEUED, RunPhase.FAILED),
             target=RunPhase.FAILED,
-            facts={"failed_job_id": job_id},
+            facts={"failed_job_id": job_id, "failure_reason": reason_token},
         )
         mark_remote_status(ssh, layout, "failed")
         raise RuntimeError(
-            f"recorded allocation {job_id} failed deterministically; not "
-            "resubmitting automatically"
+            f"recorded allocation {job_id} failed deterministically "
+            f"[reason={reason_token}]; not resubmitting automatically"
         )
     if classification is ExitClass.COMPLETE:
         if is_label:
@@ -607,6 +611,10 @@ def _classify_or_continue(
             destination_site=destination_site,
         )
 
+    failure_reason_token: str | None = None
+    if classification is ExitClass.FAILED:
+        failure_reason_token = recorded_job.failure_reason(status, inspection)
+
     _apply_classification(
         store=store,
         config=config,
@@ -616,6 +624,7 @@ def _classify_or_continue(
         active_stage=active,
         classification=classification,
         resume_artifact_path=relay_artifact_path,
+        failure_reason_token=failure_reason_token,
     )
 
     if classification is not ExitClass.CONTINUE:
@@ -711,6 +720,9 @@ def _classify_or_continue(
             exit_file=str(layout_d.logs / str(new_job_id) / "labeling.exit_code"),
         )
         classification_d = recorded_job.classify_terminal(status_d, inspection_d)
+        failure_reason_token_d: str | None = None
+        if classification_d is ExitClass.FAILED:
+            failure_reason_token_d = recorded_job.failure_reason(status_d, inspection_d)
         _apply_classification(
             store=store,
             config=config,
@@ -719,6 +731,7 @@ def _classify_or_continue(
             job_id=new_job_id,
             active_stage=active,
             classification=classification_d,
+            failure_reason_token=failure_reason_token_d,
         )
         if classification_d is ExitClass.COMPLETE:
             return ExitClass.COMPLETE
@@ -729,7 +742,8 @@ def _classify_or_continue(
             continue
         # FAILED: stop.
         raise RuntimeError(
-            f"continuation allocation {new_job_id} failed deterministically; "
+            f"continuation allocation {new_job_id} failed deterministically "
+            f"[reason={failure_reason_token_d or 'deterministic-failure'}]; "
             "not resubmitting automatically"
         )
     raise RuntimeError("continuation exceeded allocation safety bound")

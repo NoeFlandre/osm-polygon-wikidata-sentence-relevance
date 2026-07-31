@@ -1180,3 +1180,253 @@ def test_inspect_remote_resume_rejects_unsafe_label_work_path(tmp_path: Path) ->
             expected_identity={},
             exit_file=str(tmp_path / "x.exit"),
         )
+
+
+# ------------------------------------------------------------------
+# Identity-shape regression for Afghanistan walltime-killed allocation 2961476
+# ------------------------------------------------------------------
+
+
+def test_inspect_remote_resume_accepts_operator_identity_with_overlap_subset(
+    tmp_path: Path,
+) -> None:
+    """Regression: operator identity fields overlap checkpoint metadata fields.
+
+    Reproduces the live evidence shape of Afghanistan run
+    0d7cfcb29f60be0273da (allocation 2961476, walltime-killed):
+
+    - The production :class:`CheckpointStore` writes the
+      :class:`contracts.RunIdentity` subset (``input_sha256``, ``engine``,
+      ``engine_version`` plus shared fields like ``source_commit``,
+      ``model_file_sha256``, ``batch_size`` etc).
+    - The operator's :class:`OperatorConfig.run_identity` includes additional
+      orchestration-only fields (``scope``, ``stage``, ``input_dataset_id``,
+      ``output_dataset_id``, ``pipeline_version``, ``region``,
+      ``tokenizer_repo_id``, ``tokenizer_revision``, ``split_model``).
+    - Strict equality between these two dicts always fails because neither
+      side is a superset of the other.
+
+    The inspector must still accept the durable evidence as belonging to
+    this run when every field present in BOTH identities matches. This is
+    the same overlap rule the relay's
+    :func:`relay._enforce_overlapping_identity` uses. With walltime-killed
+    durable work this run must classify CONTINUE, not FAILED.
+    """
+
+    files = _build_fixture(tmp_path, completed=8, total=20, write_manifest=False)
+    ssh = _FakeSsh(
+        fixture_root=tmp_path,
+        read_files={
+            f"{_LABEL_WORK}/progress.json": files["progress.json"],
+            _exit_file(""): "",  # exit code file absent -> walltime kill
+        },
+        manifests={f"{_LABEL_OUTPUT}/manifest.json": False},
+    )
+
+    # Operator identity (subset produced by OperatorConfig.run_identity.to_dict)
+    # contains fields that the checkpoint metadata does not write.
+    operator_expected_identity = {
+        "scope": "region",
+        "stage": "label",
+        "source_commit": "d" * 40,
+        "input_dataset_id": "NoeFlandre/osm-polygon-wikidata-only",
+        "output_dataset_id": "NoeFlandre/osm-polygon-wikidata-sentence-relevance",
+        "pipeline_version": "0.1.0",
+        "batch_size": 128,
+        "region": "afghanistan-latest",
+        "input_dataset_revision": "b" * 40,
+        "model_repo_id": "unsloth/Qwen3.6-27B-MTP-GGUF",
+        "model_revision": "5cb35eb3dcbf52dbce5f87dbc64df6aaffadcace",
+        "model_file": "Qwen3.6-27B-Q4_K_M.gguf",
+        "model_file_sha256": "c" * 64,
+        "tokenizer_repo_id": "some/tokenizer",
+        "tokenizer_revision": "e" * 40,
+        "prompt_version": "v1",
+        "row_limit": 0,
+        "llama_parallel": 8,
+        "llama_per_slot_context": 8192,
+        "llama_total_context": 65536,
+        "request_concurrency": 8,
+    }
+
+    inspection = recorded_job.inspect_remote_resume(
+        ssh,
+        label_work_root=_LABEL_WORK,
+        label_output_root=_LABEL_OUTPUT,
+        expected_identity=operator_expected_identity,
+        exit_file=_exit_file(""),
+    )
+    # Every shared field matches, so the durable evidence must be accepted
+    # as belonging to this run. The checkpoint metadata writes
+    # ``input_sha256``, ``engine``, ``engine_version`` which are not in the
+    # operator identity, and the operator identity carries
+    # ``scope``, ``stage``, ``input_dataset_id``, ``output_dataset_id`` etc.
+    # which the checkpoint metadata does not write.
+    assert inspection.exit_code is None
+    assert inspection.manifest_present is False
+    assert inspection.progress.strictly_partial is True
+    assert inspection.checkpoint_pairs >= 1
+    assert inspection.checkpoint_parquet_shas_match is True
+    assert inspection.identity_matches is True, (
+        f"overlapping-identity comparison must accept shared fields; got {inspection!r}"
+    )
+
+    classification = recorded_job.classify_terminal(
+        JobStatus(2961476, JobState.ERROR), inspection
+    )
+    assert classification is ExitClass.CONTINUE
+
+
+def test_inspect_remote_resume_rejects_operator_identity_with_overlap_mismatch(
+    tmp_path: Path,
+) -> None:
+    """A real overlap mismatch in the shared fields must still fail closed.
+
+    Builds a checkpoint set with one identity, then passes a different
+    operator identity that disagrees on a shared field
+    (``model_file_sha256``). Even with the overlapping subset comparison,
+    any disagreement in shared fields must produce ``identity_matches=False``
+    so the classifier remains FAILED and never resubmits.
+    """
+
+    files = _build_fixture(tmp_path, completed=8, total=20, write_manifest=False)
+    ssh = _FakeSsh(
+        fixture_root=tmp_path,
+        read_files={
+            f"{_LABEL_WORK}/progress.json": files["progress.json"],
+            _exit_file(""): "",
+        },
+        manifests={f"{_LABEL_OUTPUT}/manifest.json": False},
+    )
+
+    # Same as the operator identity used in the happy-path test above but
+    # with ``model_file_sha256`` flipped to a different value. This field
+    # is written by both sides, so an overlap mismatch must fail closed.
+    operator_expected_identity = {
+        "scope": "region",
+        "stage": "label",
+        "source_commit": "d" * 40,
+        "input_dataset_id": "NoeFlandre/osm-polygon-wikidata-only",
+        "output_dataset_id": "NoeFlandre/osm-polygon-wikidata-sentence-relevance",
+        "pipeline_version": "0.1.0",
+        "batch_size": 128,
+        "region": "afghanistan-latest",
+        "input_dataset_revision": "b" * 40,
+        "model_repo_id": "unsloth/Qwen3.6-27B-MTP-GGUF",
+        "model_revision": "5cb35eb3dcbf52dbce5f87dbc64df6aaffadcace",
+        "model_file": "Qwen3.6-27B-Q4_K_M.gguf",
+        "model_file_sha256": "f" * 64,  # DIFFERENT from the checkpoint's value
+        "tokenizer_repo_id": "some/tokenizer",
+        "tokenizer_revision": "e" * 40,
+        "prompt_version": "v1",
+        "row_limit": 0,
+        "llama_parallel": 8,
+        "llama_per_slot_context": 8192,
+        "llama_total_context": 65536,
+        "request_concurrency": 8,
+    }
+
+    inspection = recorded_job.inspect_remote_resume(
+        ssh,
+        label_work_root=_LABEL_WORK,
+        label_output_root=_LABEL_OUTPUT,
+        expected_identity=operator_expected_identity,
+        exit_file=_exit_file(""),
+    )
+    assert inspection.identity_matches is False, (
+        f"shared-field mismatch must reject the durable evidence; got {inspection!r}"
+    )
+
+    classification = recorded_job.classify_terminal(
+        JobStatus(2961476, JobState.ERROR), inspection
+    )
+    assert classification is ExitClass.FAILED
+
+
+# ------------------------------------------------------------------
+# failure_reason stable token contract
+# ------------------------------------------------------------------
+
+
+def test_failure_reason_identity_mismatch_is_stable_token() -> None:
+    """An identity mismatch yields the stable ``identity-mismatch`` token."""
+
+    from osm_polygon_sentence_relevance.operator import recorded_job
+
+    inspection = recorded_job.ResumeInspection(
+        exit_code=None,
+        manifest_present=False,
+        progress=recorded_job.ProgressFacts(
+            completed=2, total=10, identity_matches=False
+        ),
+        checkpoint_pairs=1,
+        checkpoint_parquet_shas_match=True,
+        identity_matches=False,
+    )
+    status = JobStatus(2961476, JobState.ERROR)
+    token = recorded_job.failure_reason(status, inspection)
+    assert token == "identity-mismatch"
+    assert token in recorded_job.FAILURE_REASONS
+
+
+def test_failure_reason_nonzero_exit_is_stable_token() -> None:
+    """An explicit nonzero exit_code yields the ``nonzero-exit`` token."""
+
+    from osm_polygon_sentence_relevance.operator import recorded_job
+
+    inspection = recorded_job.ResumeInspection(
+        exit_code=137,
+        manifest_present=False,
+        progress=recorded_job.ProgressFacts(
+            completed=4, total=10, identity_matches=True
+        ),
+        checkpoint_pairs=4,
+        checkpoint_parquet_shas_match=True,
+        identity_matches=True,
+    )
+    status = JobStatus(2961476, JobState.TERMINATED)
+    token = recorded_job.failure_reason(status, inspection)
+    assert token == "nonzero-exit"
+    assert token in recorded_job.FAILURE_REASONS
+
+
+def test_failure_reason_checkpoint_sha_mismatch_is_stable_token() -> None:
+    """A Parquet SHA mismatch yields the ``checkpoint-sha-mismatch`` token."""
+
+    from osm_polygon_sentence_relevance.operator import recorded_job
+
+    inspection = recorded_job.ResumeInspection(
+        exit_code=None,
+        manifest_present=False,
+        progress=recorded_job.ProgressFacts(
+            completed=4, total=10, identity_matches=True
+        ),
+        checkpoint_pairs=4,
+        checkpoint_parquet_shas_match=False,
+        identity_matches=True,
+    )
+    status = JobStatus(2961476, JobState.ERROR)
+    token = recorded_job.failure_reason(status, inspection)
+    assert token == "checkpoint-sha-mismatch"
+    assert token in recorded_job.FAILURE_REASONS
+
+
+def test_failure_reason_no_durable_work_is_stable_token() -> None:
+    """A MISSING job with zero checkpoints yields the ``no-durable-work`` token."""
+
+    from osm_polygon_sentence_relevance.operator import recorded_job
+
+    inspection = recorded_job.ResumeInspection(
+        exit_code=None,
+        manifest_present=False,
+        progress=recorded_job.ProgressFacts(
+            completed=0, total=10, identity_matches=True
+        ),
+        checkpoint_pairs=0,
+        checkpoint_parquet_shas_match=True,
+        identity_matches=True,
+    )
+    status = JobStatus(2961476, JobState.MISSING)
+    token = recorded_job.failure_reason(status, inspection)
+    assert token == "no-durable-work"
+    assert token in recorded_job.FAILURE_REASONS

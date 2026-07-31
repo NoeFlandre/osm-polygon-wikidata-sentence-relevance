@@ -447,7 +447,7 @@ def test_apply_classification_failed_from_failed_keeps_state_idempotent() -> Non
         (
             RunPhase.FAILED,
             RunPhase.FAILED,
-            {"failed_job_id": 2961476},
+            {"failed_job_id": 2961476, "failure_reason": "deterministic-failure"},
         )
     ]
 

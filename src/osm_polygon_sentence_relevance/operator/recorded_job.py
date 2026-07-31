@@ -33,7 +33,7 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import cast
+from typing import Final, cast
 
 from osm_polygon_sentence_relevance.operator.oar import (
     ExitClass,
@@ -98,6 +98,59 @@ def is_terminal(state: JobState) -> bool:
         JobState.ERROR,
         JobState.MISSING,
     }
+
+
+#: Fields shared by the operator ``RunIdentity.to_dict()`` payload and the
+#: ``contracts.RunIdentity.to_dict()`` payload that the
+#: :class:`CheckpointStore` writes into ``progress.json`` and each
+#: ``checkpoints/batch-NNNNNN.json`` sidecar.
+#:
+#: Comparing the operator identity to the durable evidence via strict
+#: equality always fails because each side carries fields the other does
+#: not (operator adds ``scope``, ``stage``, ``input_dataset_id``,
+#: ``output_dataset_id``, ``pipeline_version``, ``region``,
+#: ``tokenizer_repo_id``, ``tokenizer_revision``, ``split_model``;
+#: ``contracts`` adds ``input_sha256``, ``engine``, ``engine_version``).
+#: The relay's :func:`osm_polygon_sentence_relevance.operator.relay.\
+#: _enforce_overlapping_identity` already uses this same subset; the
+#: inspector must do the same so a walltime-killed allocation whose shared
+#: fields all match can be classified CONTINUE rather than FAILED.
+_OVERLAPPING_IDENTITY_FIELDS: tuple[str, ...] = (
+    "input_dataset_revision",
+    "source_commit",
+    "model_file_sha256",
+    "model_repo_id",
+    "model_revision",
+    "prompt_version",
+    "batch_size",
+    "row_limit",
+    "llama_parallel",
+    "llama_per_slot_context",
+    "llama_total_context",
+    "request_concurrency",
+)
+
+
+def _identity_matches_overlap(
+    observed: Mapping[str, object],
+    expected: Mapping[str, object],
+) -> bool:
+    """Return True iff every field present in BOTH identities agrees.
+
+    Fields that exist only in ``observed`` (e.g. ``input_sha256``,
+    ``engine``, ``engine_version`` from the checkpoint metadata) or only in
+    ``expected`` (e.g. ``scope``, ``stage``, ``input_dataset_id`` from the
+    operator identity) are ignored: neither side should be allowed to
+    reject the durable evidence because of a field the other side does not
+    write. Any disagreement on a shared field still fails closed.
+    """
+
+    for field_name in _OVERLAPPING_IDENTITY_FIELDS:
+        observed_value = observed.get(field_name)
+        expected_value = expected.get(field_name)
+        if observed_value != expected_value:
+            return False
+    return True
 
 
 def _read_remote_text(ssh: SshClient, path: str) -> str:
@@ -252,9 +305,11 @@ def inspect_remote_resume(
         progress_identity_matches = False
     else:
         progress_identity = progress_payload.get("identity")
-        progress_identity_matches = isinstance(progress_identity, Mapping) and dict(
-            progress_identity
-        ) == dict(expected_identity)
+        progress_identity_matches = isinstance(
+            progress_identity, Mapping
+        ) and _identity_matches_overlap(
+            cast(Mapping[str, object], progress_identity), expected_identity
+        )
         try:
             completed = int(cast(int | str, progress_payload.get("completed", 0)))
         except (TypeError, ValueError) as exc:
@@ -316,7 +371,9 @@ def inspect_remote_resume(
             raise ResumeError(f"checkpoint metadata is not valid JSON: {stem}") from exc
         if not isinstance(meta_payload, Mapping):
             raise ResumeError(f"checkpoint metadata is not a mapping: {stem}")
-        if meta_payload.get("identity") != dict(expected_identity):
+        if not isinstance(meta_payload.get("identity"), Mapping) or (
+            not _identity_matches_overlap(meta_payload["identity"], expected_identity)
+        ):
             identity_match = False
         expected_sha = meta_payload.get("parquet_sha256")
         if not isinstance(expected_sha, str):
@@ -382,12 +439,62 @@ def classify_terminal(
     return ExitClass.FAILED
 
 
+#: Stable, factual reason tokens for ``classify_terminal`` FAILED outcomes.
+#: Each token is a single hyphen-separated identifier suitable for an
+#: operator-facing diagnostic message. None of the tokens contain prompt
+#: text, raw model output, secrets, or absolute paths.
+FAILURE_REASONS: Final = frozenset(
+    {
+        "identity-mismatch",
+        "nonzero-exit",
+        "checkpoint-sha-mismatch",
+        "checkpoint-progress-invalid",
+        "no-durable-work",
+        "manifest-incomplete",
+        "deterministic-failure",
+    }
+)
+
+
+def failure_reason(status: JobStatus, inspection: ResumeInspection) -> str:
+    """Return the stable token explaining why the inspection is not resumable.
+
+    This is the authoritative reason for ``classify_terminal`` returning
+    ``ExitClass.FAILED``. Callers surface the token in operator-facing
+    diagnostic messages; tokens never embed prompt text, raw model output,
+    secrets, or absolute paths. The ordering mirrors the classifier so the
+    token matches the rule that fired first.
+    """
+
+    if not inspection.identity_matches:
+        return "identity-mismatch"
+    if inspection.exit_code is not None and inspection.exit_code != 0:
+        return "nonzero-exit"
+    if not inspection.checkpoint_parquet_shas_match:
+        return "checkpoint-sha-mismatch"
+    if not inspection.progress.strictly_partial and inspection.checkpoint_pairs == 0:
+        if status.state is JobState.MISSING:
+            return "no-durable-work"
+        return "manifest-incomplete"
+    if (
+        inspection.progress.completed <= 0
+        or inspection.progress.total <= 0
+        or inspection.progress.completed >= inspection.progress.total
+    ):
+        return "checkpoint-progress-invalid"
+    if not inspection.manifest_present and inspection.checkpoint_pairs == 0:
+        return "no-durable-work"
+    return "deterministic-failure"
+
+
 __all__ = [
+    "FAILURE_REASONS",
     "LiveReattach",
     "ProgressFacts",
     "ResumeError",
     "ResumeInspection",
     "classify_terminal",
+    "failure_reason",
     "inspect_remote_resume",
     "is_terminal",
 ]
