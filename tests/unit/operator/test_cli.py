@@ -913,3 +913,18 @@ def test_keyboard_interrupt_prints_invocation_specific_run_id(
         assert "6578fb2269130a41d243" in err
     finally:
         cli._ACTIVE_RUN_ID = prior
+
+
+@pytest.mark.parametrize(
+    ("state", "expected"),
+    [
+        (JobState.TERMINATED, True),
+        (JobState.ERROR, True),
+        (JobState.MISSING, False),
+        (JobState.RUNNING, False),
+    ],
+)
+def test_error_is_a_terminal_allocation_state(state: JobState, expected: bool) -> None:
+    """Walltime transitions to OAR Error still enter checkpoint classification."""
+
+    assert cli._is_terminal_allocation(state) is expected

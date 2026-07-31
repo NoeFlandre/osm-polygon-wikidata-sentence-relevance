@@ -308,6 +308,12 @@ def _monitor_until_terminal(
     return controller.monitor(job_id, log_name=log_name)
 
 
+def _is_terminal_allocation(state: JobState) -> bool:
+    """Return whether OAR ended an allocation and checkpoint classification may run."""
+
+    return state in {JobState.TERMINATED, JobState.ERROR}
+
+
 def _prepare_destination_for_resume(
     *,
     store: StateStore,
@@ -569,7 +575,7 @@ def _classify_or_continue(
     if is_live_state(status.state):
         terminal = _monitor_until_terminal(controller, job_id, log_name=log_name)
         status = oar.status(job_id)
-        if terminal is not JobState.TERMINATED:
+        if not _is_terminal_allocation(terminal):
             raise RuntimeError(
                 f"recorded allocation {job_id} ended in {terminal.value}"
             )
@@ -709,7 +715,7 @@ def _classify_or_continue(
             flush=True,
         )
         terminal = controller_d.monitor(new_job_id, log_name="labeling.stdout.log")
-        if terminal is not JobState.TERMINATED:
+        if not _is_terminal_allocation(terminal):
             raise RuntimeError("continuation allocation failed")
         status_d = oar_d.status(new_job_id)
         inspection_d = recorded_job.inspect_remote_resume(
