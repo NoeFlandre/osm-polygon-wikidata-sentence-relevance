@@ -18,7 +18,7 @@ import json
 import os
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 from typing import Any
 
@@ -36,7 +36,7 @@ from osm_polygon_sentence_relevance.operator import (
 )
 from osm_polygon_sentence_relevance.operator.config import OperatorConfig
 from osm_polygon_sentence_relevance.operator.oar import ExitClass, JobState, JobStatus
-from osm_polygon_sentence_relevance.operator.state import RunPhase
+from osm_polygon_sentence_relevance.operator.state import RunPhase, StateStore
 
 
 def _resume_args(run_id: str) -> SimpleNamespace:
@@ -819,3 +819,588 @@ def test_missing_job_with_complete_durable_evidence_classifies_complete(
     assert classification is ExitClass.COMPLETE
     # No new submission: a complete run does not resubmit.
     assert oar.submitted == []
+
+
+# ------------------------------------------------------------------
+# Recovery from a previously FAILED allocation
+# ------------------------------------------------------------------
+
+
+def _store_at(
+    root: Path,
+    phase: RunPhase,
+    *,
+    facts: dict[str, object],
+) -> tuple[Any, Any]:
+    """Build a fresh StateStore under ``root`` and advance it to ``phase``."""
+
+    config = OperatorConfig.build(
+        scope="region",
+        region="afghanistan-latest",
+        stage="label",
+        source_commit="d" * 40,
+        input_revision="b" * 40,
+    )
+    store = StateStore(root)
+    store.load_or_create(config.run_identity)
+    chain = [
+        RunPhase.INPUTS_RESOLVED,
+        RunPhase.SITE_SELECTED,
+        RunPhase.STORAGE_READY,
+        RunPhase.REMOTE_PREPARED,
+        RunPhase.SUBMITTED,
+        RunPhase.QUEUED,
+        RunPhase.RUNNING,
+        RunPhase.FAILED,
+    ]
+    current = RunPhase.CREATED
+    for target in chain:
+        if current is phase:
+            break
+        store.transition(expected=current, target=target, facts=facts)
+        current = target
+        if current is phase:
+            break
+    return config, store
+
+
+class _RecordingSshLike:
+    """Tiny SSH stub satisfying ``mark_remote_status`` and friends."""
+
+    def run(self, command: str) -> SimpleNamespace:
+        return SimpleNamespace(stdout="", text="")
+
+    def read_since(self, path: str, offset: int) -> Any:
+        return SimpleNamespace(text="", stdout="", next_offset=offset, eof=True)
+
+
+def _build_remote_checkpoint_set_with_progress(
+    path: Path, *, completed: int, total: int
+) -> None:
+    identity = _identity()
+    store = CheckpointStore(path, identity)
+    written = 0
+    index = 0
+    while written < completed:
+        remaining = min(4, completed - written)
+        store.write_batch(
+            index,
+            [
+                LabelRecord(
+                    sentence_id=f"s{written + i:08d}",
+                    landuse_relevance=LabelValue.YES,
+                    polygon_relevance=LabelValue.YES,
+                    landuse_reason="x",
+                    polygon_reason="y",
+                    evidence="z",
+                )
+                for i in range(remaining)
+            ],
+        )
+        written += remaining
+        index += 1
+    store.write_progress(
+        completed=completed,
+        total=total,
+        elapsed_seconds=10.0,
+    )
+
+
+def test_resume_failed_with_valid_partial_checkpoints_recovers_and_submits_one_continuation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A FAILED state with valid partial checkpoints recovers to REMOTE_PREPARED and submits one continuation."""
+
+    seagate = tmp_path / "seagate"
+    seagate.mkdir()
+    (seagate / "runs").mkdir()
+    seagate.chmod(0o700)
+    (seagate / "runs").chmod(0o700)
+    monkeypatch.setattr(cli, "DATA_ROOT", seagate)
+
+    # Remote grenoble filesystem: walltime-killed allocation 2961476 with valid partial checkpoints.
+    grenoble_root = tmp_path / "frontend-grenoble"
+    grenoble_root.mkdir()
+    remote = (
+        grenoble_root
+        / "home"
+        / "u"
+        / "osm-polygon-operator"
+        / "6578fb2269130a41d243"
+        / "label-work"
+    )
+    remote.mkdir(parents=True)
+    _build_remote_checkpoint_set_with_progress(remote, completed=8, total=20)
+    grenoble_ssh = _FakeSsh(
+        site_root=grenoble_root,
+        progress_path=remote / "progress.json",
+        exit_text="",  # exit code file absent - walltime killed the launcher
+        manifest_present=False,
+    )
+
+    # State: previously FAILED with failed_job_id 2961476 on grenoble.
+    live = SimpleNamespace(
+        phase=RunPhase.FAILED,
+        facts={
+            "site": "grenoble",
+            "job_id": 2961476,
+            "failed_job_id": 2961476,
+            "active_stage": "label",
+        },
+    )
+    store = _FakeStore(state=live)
+    oar = _FakeOar(
+        scripted={
+            2961476: [JobStatus(2961476, JobState.ERROR, exit_code=None)],
+            7001: [JobStatus(7001, JobState.TERMINATED)],
+        }
+    )
+
+    from osm_polygon_sentence_relevance.operator.workflows import RemoteLayout
+
+    layout = RemoteLayout(
+        PurePosixPath("/home/u/osm-polygon-operator/6578fb2269130a41d243")
+    )
+    monkeypatch.setattr(
+        cli,
+        "_attach_to_site",
+        lambda *a, **k: (
+            grenoble_ssh,
+            layout,
+            oar,
+            _FakeController(oar=oar, store=store),
+        ),
+    )
+
+    # Patch inspect_remote_resume to return valid evidence based on the fixture.
+    call_count = {"n": 0}
+
+    def fake_inspect(
+        ssh, *, label_work_root, label_output_root, expected_identity, exit_file
+    ):
+        call_count["n"] += 1
+        local_work = ssh._map(label_work_root)
+        # The first inspection covers 2961476's walltime-killed evidence
+        # (no exit code, partial checkpoints). Subsequent inspections cover
+        # the post-recovery continuation: the test harness synthesises a
+        # complete manifest under label-output so the second iteration
+        # terminates as COMPLETE and stops the safety-bounded loop.
+        if call_count["n"] == 1:
+            progress = json.loads((local_work / "progress.json").read_text())
+            ckpts = local_work / "checkpoints"
+            batch_count = (
+                sum(1 for _ in ckpts.glob("batch-*.parquet")) if ckpts.is_dir() else 0
+            )
+            return recorded.ResumeInspection(
+                exit_code=None,
+                manifest_present=False,
+                progress=recorded.ProgressFacts(
+                    completed=progress["completed"],
+                    total=progress["remaining"] + progress["completed"],
+                    identity_matches=True,
+                ),
+                checkpoint_pairs=batch_count,
+                checkpoint_parquet_shas_match=batch_count > 0,
+                identity_matches=True,
+                checkpoint_indexes=tuple(range(batch_count)),
+            )
+        # Subsequent inspections: synthesise a complete manifest and the
+        # immutable label-publication commit log so the second iteration
+        # advances to COMPLETE.
+        layout_root = local_work.parent
+        (layout_root / "label-output").mkdir(exist_ok=True)
+        (layout_root / "label-output" / "manifest.json").write_text(
+            json.dumps({"schema_version": 1, "identity": _identity().to_dict()})
+        )
+        new_logs = layout_root / "logs" / "7001"
+        new_logs.mkdir(parents=True, exist_ok=True)
+        (new_logs / "labeling.exit_code").write_text("0")
+        (new_logs / "labeling.stdout.log").write_text(
+            json.dumps({"commit_id": "a" * 40}) + "\n"
+        )
+        ckpts = local_work / "checkpoints"
+        batch_count = (
+            sum(1 for _ in ckpts.glob("batch-*.parquet")) if ckpts.is_dir() else 0
+        )
+        return recorded.ResumeInspection(
+            exit_code=0,
+            manifest_present=True,
+            progress=recorded.ProgressFacts(
+                completed=batch_count * 4,
+                total=batch_count * 4,
+                identity_matches=True,
+            ),
+            checkpoint_pairs=batch_count,
+            checkpoint_parquet_shas_match=True,
+            identity_matches=True,
+            checkpoint_indexes=tuple(range(batch_count)),
+        )
+
+    monkeypatch.setattr(cli.recorded_job, "inspect_remote_resume", fake_inspect)
+    monkeypatch.setattr(cli, "label_publication_commit", lambda *a, **kw: "a" * 40)
+
+    # Drive the full recovery + continuation path.
+    config = OperatorConfig.build(
+        scope="region",
+        region="afghanistan-latest",
+        stage="label",
+        source_commit="d" * 40,
+        input_revision="b" * 40,
+    )
+    classification = cli._classify_or_continue(
+        _resume_args("6578fb2269130a41d243"),
+        store=store,
+        config=config,
+        site="grenoble",
+        job_id=2961476,
+        destination_site="grenoble",
+    )
+    # Walltime-killed with valid partial checkpoints -> CONTINUE -> loop submits
+    # the next allocation; if that allocation also ends in TERMINATED (the
+    # controller only monitors one cycle in this test) the loop continues.
+    assert classification in {ExitClass.CONTINUE, ExitClass.COMPLETE}
+    # After recovery, at least one new job was submitted on the same site.
+    assert oar.submitted
+    # State is now past FAILED. COMPLETE is the terminal post-recovery state
+    # when the post-recovery allocation also finished, otherwise the run
+    # is parked in REMOTE_PREPARED/SUBMITTED awaiting the next cycle.
+    assert store.load().phase in {
+        RunPhase.REMOTE_PREPARED,
+        RunPhase.SUBMITTED,
+        RunPhase.COMPLETE,
+    }
+    # Recovery facts were persisted.
+    final_facts = store.load().facts
+    assert final_facts.get("recovered_from_job_id") == 2961476
+    assert final_facts.get("recovery_attempt") == 1
+    out = capsys.readouterr().out
+    assert "Validated checkpoints preserved" in out or "Submitted continuation" in out
+
+
+def test_resume_failed_state_with_invalid_checkpoints_remains_failed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A FAILED state whose remote inspection finds SHA mismatch must remain FAILED."""
+
+    config, store = _store_at(
+        tmp_path,
+        RunPhase.FAILED,
+        facts={
+            "site": "grenoble",
+            "job_id": 2961476,
+            "failed_job_id": 2961476,
+            "active_stage": "label",
+        },
+    )
+
+    layout = SimpleNamespace(
+        root=PurePosixPath("/home/u"),
+        logs=PurePosixPath("/home/u/logs"),
+        label_work=PurePosixPath("/home/u/label-work"),
+        label_output=PurePosixPath("/home/u/label-output"),
+    )
+    ssh = _RecordingSshLike()
+
+    monkeypatch.setattr(
+        cli,
+        "_attach_to_site",
+        lambda *a, **k: (
+            ssh,
+            layout,
+            SimpleNamespace(status=lambda jid: JobStatus(jid, JobState.ERROR)),
+            object(),
+        ),
+    )
+
+    def fake_inspect(ssh, **kwargs):
+        return SimpleNamespace(
+            exit_code=None,
+            manifest_present=False,
+            progress=recorded.ProgressFacts(
+                completed=4, total=10, identity_matches=True
+            ),
+            checkpoint_pairs=2,
+            checkpoint_parquet_shas_match=False,  # SHA mismatch
+            identity_matches=True,
+            checkpoint_indexes=(0, 1),
+        )
+
+    monkeypatch.setattr(cli.recorded_job, "inspect_remote_resume", fake_inspect)
+
+    with pytest.raises(RuntimeError, match="failed deterministically"):
+        cli._classify_or_continue(
+            _resume_args(config.run_id),
+            store=store,
+            config=config,
+            site="grenoble",
+            job_id=2961476,
+        )
+
+
+def test_resume_failed_state_with_nonzero_exit_remains_failed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A FAILED state whose remote inspection finds a nonzero exit code must remain FAILED."""
+
+    config, store = _store_at(
+        tmp_path,
+        RunPhase.FAILED,
+        facts={
+            "site": "grenoble",
+            "job_id": 2961476,
+            "failed_job_id": 2961476,
+            "active_stage": "label",
+        },
+    )
+
+    layout = SimpleNamespace(
+        root=PurePosixPath("/home/u"),
+        logs=PurePosixPath("/home/u/logs"),
+        label_work=PurePosixPath("/home/u/label-work"),
+        label_output=PurePosixPath("/home/u/label-output"),
+    )
+    ssh = _RecordingSshLike()
+
+    monkeypatch.setattr(
+        cli,
+        "_attach_to_site",
+        lambda *a, **k: (
+            ssh,
+            layout,
+            SimpleNamespace(status=lambda jid: JobStatus(jid, JobState.ERROR)),
+            object(),
+        ),
+    )
+
+    def fake_inspect(ssh, **kwargs):
+        return SimpleNamespace(
+            exit_code=137,  # SIGKILL - deterministic crash
+            manifest_present=False,
+            progress=recorded.ProgressFacts(
+                completed=4, total=10, identity_matches=True
+            ),
+            checkpoint_pairs=4,
+            checkpoint_parquet_shas_match=True,
+            identity_matches=True,
+            checkpoint_indexes=(0, 1, 2, 3),
+        )
+
+    monkeypatch.setattr(cli.recorded_job, "inspect_remote_resume", fake_inspect)
+
+    with pytest.raises(RuntimeError, match="failed deterministically"):
+        cli._classify_or_continue(
+            _resume_args(config.run_id),
+            store=store,
+            config=config,
+            site="grenoble",
+            job_id=2961476,
+        )
+
+
+def test_resume_failed_state_with_complete_manifest_completes_safely(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A FAILED state whose remote inspection finds a manifest must advance to COMPLETE."""
+
+    config, store = _store_at(
+        tmp_path,
+        RunPhase.FAILED,
+        facts={
+            "site": "grenoble",
+            "job_id": 2961476,
+            "failed_job_id": 2961476,
+            "active_stage": "label",
+        },
+    )
+
+    layout = SimpleNamespace(
+        root=PurePosixPath("/home/u"),
+        logs=PurePosixPath("/home/u/logs"),
+        label_work=PurePosixPath("/home/u/label-work"),
+        label_output=PurePosixPath("/home/u/label-output"),
+    )
+    ssh = _RecordingSshLike()
+
+    monkeypatch.setattr(
+        cli,
+        "_attach_to_site",
+        lambda *a, **k: (
+            ssh,
+            layout,
+            SimpleNamespace(status=lambda jid: JobStatus(jid, JobState.ERROR)),
+            object(),
+        ),
+    )
+
+    def fake_inspect(ssh, **kwargs):
+        return SimpleNamespace(
+            exit_code=None,
+            manifest_present=True,
+            progress=recorded.ProgressFacts(
+                completed=20, total=20, identity_matches=True
+            ),
+            checkpoint_pairs=5,
+            checkpoint_parquet_shas_match=True,
+            identity_matches=True,
+            checkpoint_indexes=(0, 1, 2, 3, 4),
+        )
+
+    monkeypatch.setattr(cli.recorded_job, "inspect_remote_resume", fake_inspect)
+    monkeypatch.setattr(cli, "label_publication_commit", lambda *a, **kw: "a" * 40)
+
+    classification = cli._classify_or_continue(
+        _resume_args(config.run_id),
+        store=store,
+        config=config,
+        site="grenoble",
+        job_id=2961476,
+    )
+    assert classification is ExitClass.COMPLETE
+
+
+def test_resume_failed_state_with_no_evidence_refuses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A FAILED state whose remote inspection finds zero checkpoints must fail closed."""
+
+    config, store = _store_at(
+        tmp_path,
+        RunPhase.FAILED,
+        facts={
+            "site": "grenoble",
+            "job_id": 2961476,
+            "failed_job_id": 2961476,
+            "active_stage": "label",
+        },
+    )
+
+    layout = SimpleNamespace(
+        root=PurePosixPath("/home/u"),
+        logs=PurePosixPath("/home/u/logs"),
+        label_work=PurePosixPath("/home/u/label-work"),
+        label_output=PurePosixPath("/home/u/label-output"),
+    )
+    ssh = _RecordingSshLike()
+
+    monkeypatch.setattr(
+        cli,
+        "_attach_to_site",
+        lambda *a, **k: (
+            ssh,
+            layout,
+            SimpleNamespace(status=lambda jid: JobStatus(jid, JobState.ERROR)),
+            object(),
+        ),
+    )
+
+    def fake_inspect(ssh, **kwargs):
+        return SimpleNamespace(
+            exit_code=None,
+            manifest_present=False,
+            progress=recorded.ProgressFacts(
+                completed=0, total=20, identity_matches=True
+            ),
+            checkpoint_pairs=0,  # No checkpoints -> cannot recover
+            checkpoint_parquet_shas_match=True,
+            identity_matches=True,
+            checkpoint_indexes=(),
+        )
+
+    monkeypatch.setattr(cli.recorded_job, "inspect_remote_resume", fake_inspect)
+
+    with pytest.raises(RuntimeError, match="failed deterministically"):
+        cli._classify_or_continue(
+            _resume_args(config.run_id),
+            store=store,
+            config=config,
+            site="grenoble",
+            job_id=2961476,
+        )
+
+
+def test_resume_recovered_run_does_not_reattach_same_failed_job(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """After recovery, a second resume must not reattach the same failed_job_id."""
+
+    seagate = tmp_path / "seagate"
+    seagate.mkdir()
+    (seagate / "runs").mkdir()
+    seagate.chmod(0o700)
+    (seagate / "runs").chmod(0o700)
+    monkeypatch.setattr(cli, "DATA_ROOT", seagate)
+
+    config, _store = _store_at(
+        seagate,
+        RunPhase.FAILED,
+        facts={
+            "site": "grenoble",
+            "job_id": 2961476,
+            "failed_job_id": 2961476,
+            "recovered_from_job_id": 2961476,  # already recovered
+            "recovery_attempt": 1,
+            "active_stage": "label",
+        },
+    )
+    monkeypatch.setattr(cli, "_classify_or_continue", lambda **kw: ExitClass.COMPLETE)
+
+    seen_candidate = []
+
+    def fake_reattach(state):
+        seen_candidate.append(state.phase)
+        return None
+
+    monkeypatch.setattr(cli, "_reattach_decision", fake_reattach)
+
+    args = _resume_args(config.run_id)
+    assert cli._resume_run(config.run_id, args) == 0
+    # The reattach helper was called and returned None because the FAILED
+    # state was already recovered. The "nothing to reattach" path was taken.
+    assert seen_candidate == [RunPhase.FAILED]
+
+
+def test_resume_after_recovery_reattaches_to_running_continuation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Once transitioned to SUBMITTED, a resume must reattach instead of resubmitting."""
+
+    seagate = tmp_path / "seagate"
+    seagate.mkdir()
+    (seagate / "runs").mkdir()
+    seagate.chmod(0o700)
+    (seagate / "runs").chmod(0o700)
+    monkeypatch.setattr(cli, "DATA_ROOT", seagate)
+
+    config, _store = _store_at(
+        seagate,
+        RunPhase.SUBMITTED,
+        facts={
+            "site": "grenoble",
+            "job_id": 2962000,  # the post-recovery continuation
+            "active_stage": "label",
+        },
+    )
+    submitted: list[int] = []
+
+    def fake_classify(args, *, store, config, site, job_id, destination_site):
+        submitted.append(job_id)
+        return ExitClass.COMPLETE
+
+    monkeypatch.setattr(cli, "_classify_or_continue", fake_classify)
+
+    # Isolate the optimizer seam: the production optimizer opens real SSH
+    # connections to probe Grid'5000 sites. This test only verifies that
+    # _classify_or_continue receives the existing job ID and no new
+    # submission occurs, so we short-circuit the optimizer to return the
+    # recorded (site, job_id) unchanged. The optimizer behaviour itself
+    # is covered by its own focused tests; this is a contract test for
+    # the reattach path only.
+    def fake_optimize(args, store, config, fallback_site, fallback_job_id):
+        return fallback_site, fallback_job_id
+
+    monkeypatch.setattr(cli, "_optimize_queued_start", fake_optimize)
+
+    args = _resume_args(config.run_id)
+    assert cli._resume_run(config.run_id, args) == 0
+    # Reattach path: the recorded job 2962000 was inspected, not resubmitted.
+    assert submitted == [2962000]

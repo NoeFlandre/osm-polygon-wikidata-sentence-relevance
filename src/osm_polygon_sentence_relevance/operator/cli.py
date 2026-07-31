@@ -211,21 +211,45 @@ def _reattach_decision(
     Conservative: it only returns a candidate. The reattach path then queries
     OAR read-only and dispatches to live monitoring or terminal classification
     without probing other sites or submitting a competing job.
+
+    A ``FAILED`` state with a recorded ``failed_job_id`` and ``site`` is also
+    returned as a candidate so the orchestrator can re-inspect the remote
+    evidence and decide between ``FAILED`` (deterministic) and ``CONTINUE``
+    (walltime-killed with validated partial checkpoints). The narrow
+    recovery contract is enforced inside
+    :func:`_apply_classification`; this function only checks the local facts.
     """
 
-    if state.phase not in {
+    if state.phase in {
         RunPhase.SUBMITTED,
         RunPhase.QUEUED,
         RunPhase.RUNNING,
     }:
-        return None
-    job_id = state.facts.get("job_id")
-    site = state.facts.get("site")
-    if type(job_id) is not int or job_id <= 0:
-        return None
-    if not isinstance(site, str) or not site:
-        return None
-    return site, job_id
+        job_id = state.facts.get("job_id")
+        site = state.facts.get("site")
+        if type(job_id) is not int or job_id <= 0:
+            return None
+        if not isinstance(site, str) or not site:
+            return None
+        return site, job_id
+    if state.phase is RunPhase.FAILED:
+        failed_job_id = state.facts.get("failed_job_id")
+        site = state.facts.get("site")
+        if type(failed_job_id) is not int or failed_job_id <= 0:
+            return None
+        if not isinstance(site, str) or not site:
+            return None
+        # Refuse if the same failed_job_id was already recovered. This guards
+        # against repeated Ctrl-C / resume cycles trying to re-recover.
+        recovered_from = state.facts.get("recovered_from_job_id")
+        if (
+            isinstance(recovered_from, int)
+            and not isinstance(recovered_from, bool)
+            and recovered_from == failed_job_id
+        ):
+            return None
+        return site, failed_job_id
+    return None
 
 
 def _resume_command(run_id: str) -> str:
@@ -374,13 +398,27 @@ def _apply_classification(
     classification: ExitClass,
     resume_artifact_path: str | None = None,
 ) -> None:
-    """Drive durable state transitions for a classified terminal allocation."""
+    """Drive durable state transitions for a classified terminal allocation.
+
+    Re-entering ``FAILED`` is allowed for idempotent reclassification: if the
+    same allocation is re-inspected and the new evidence still proves a
+    deterministic failure, the state stays ``FAILED`` but ``failed_job_id``
+    and the durable sequence advance.
+
+    Re-entering ``FAILED`` and then transitioning to ``REMOTE_PREPARED`` is
+    only permitted when the freshly inspected evidence classifies as
+    ``CONTINUE`` and the previous ``FAILED`` was a misclassification of a
+    walltime-killed allocation. Recovery facts are appended so the run
+    identity is preserved and the recovery is auditable.
+    """
 
     is_label = active_stage == Stage.LABEL.value
+    current = store.load()
+    is_recovery_from_failed = current.phase is RunPhase.FAILED
     if classification is ExitClass.FAILED:
         _transition_terminal(
             store,
-            expected=(RunPhase.RUNNING, RunPhase.QUEUED),
+            expected=(RunPhase.RUNNING, RunPhase.QUEUED, RunPhase.FAILED),
             target=RunPhase.FAILED,
             facts={"failed_job_id": job_id},
         )
@@ -397,9 +435,15 @@ def _apply_classification(
             facts: dict[str, object] = {"label_job_id": job_id}
             if hub_commit is not None:
                 facts["hub_commit"] = hub_commit
+            if is_recovery_from_failed:
+                facts["recovered_from_job_id"] = job_id
+                facts["recovery_reason"] = (
+                    "previously-failed allocation re-inspected as complete"
+                )
+                facts["recovery_attempt"] = _next_recovery_attempt(current.facts)
             _transition_terminal(
                 store,
-                expected=(RunPhase.RUNNING, RunPhase.QUEUED),
+                expected=(RunPhase.RUNNING, RunPhase.QUEUED, RunPhase.FAILED),
                 target=RunPhase.VALIDATED,
                 facts=facts,
             )
@@ -416,24 +460,45 @@ def _apply_classification(
             print(f"Labeling complete: run {config.run_id}", flush=True)
             mark_remote_status(ssh, layout, "complete")
             return
-        _transition_terminal(
-            store,
-            expected=(RunPhase.RUNNING, RunPhase.QUEUED),
-            target=RunPhase.CHECKPOINTED,
-            facts={"split_job_id": job_id},
-        )
+        if is_recovery_from_failed:
+            _transition_terminal(
+                store,
+                expected=(RunPhase.FAILED,),
+                target=RunPhase.CHECKPOINTED,
+                facts={
+                    "split_job_id": job_id,
+                    "recovered_from_job_id": job_id,
+                    "recovery_reason": (
+                        "previously-failed split allocation re-inspected as complete"
+                    ),
+                    "recovery_attempt": _next_recovery_attempt(current.facts),
+                },
+            )
+        else:
+            _transition_terminal(
+                store,
+                expected=(RunPhase.RUNNING, RunPhase.QUEUED),
+                target=RunPhase.CHECKPOINTED,
+                facts={"split_job_id": job_id},
+            )
         print(
             f"Sentence splitting checkpointed: run {config.run_id}; rerun to finalize.",
             flush=True,
         )
         return
     if classification is ExitClass.CONTINUE:
-        facts = {"continued_after_job": job_id}
+        facts: dict[str, object] = {"continued_after_job": job_id}
         if resume_artifact_path is not None:
             facts["resume_relay_path"] = resume_artifact_path
+        if is_recovery_from_failed:
+            facts["recovered_from_job_id"] = job_id
+            facts["recovery_reason"] = (
+                "walltime-killed allocation re-inspected with validated partial checkpoints"
+            )
+            facts["recovery_attempt"] = _next_recovery_attempt(current.facts)
         _transition_terminal(
             store,
-            expected=(RunPhase.RUNNING, RunPhase.QUEUED),
+            expected=(RunPhase.RUNNING, RunPhase.QUEUED, RunPhase.FAILED),
             target=RunPhase.REMOTE_PREPARED,
             facts=facts,
         )
@@ -444,6 +509,20 @@ def _apply_classification(
         )
         return
     raise RuntimeError(f"unhandled exit class: {classification}")
+
+
+def _next_recovery_attempt(facts: Mapping[str, object]) -> int:
+    """Return the monotonic recovery-attempt counter for the next transition.
+
+    Reads the existing ``recovery_attempt`` fact (if any) and increments it.
+    Non-integer or missing values are treated as zero, which yields a first
+    recovery-attempt value of 1.
+    """
+
+    existing = facts.get("recovery_attempt")
+    if isinstance(existing, bool) or not isinstance(existing, int):
+        return 1
+    return existing + 1
 
 
 def _classify_or_continue(

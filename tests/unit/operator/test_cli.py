@@ -459,10 +459,15 @@ def test_failed_allocation_marks_managed_remote_root_eligible_for_cleanup(
     )
     ssh = object()
     layout = cli.RemoteLayout(PurePosixPath("/r"))
+    state = SimpleNamespace(
+        phase=RunPhase.QUEUED,
+        facts={"site": "sophia", "job_id": 2895249, "active_stage": "label"},
+    )
+    store = SimpleNamespace(load=lambda: state)
 
     with pytest.raises(RuntimeError, match="failed deterministically"):
         cli._apply_classification(
-            store=object(),  # type: ignore[arg-type]
+            store=store,  # type: ignore[arg-type]
             config=OperatorConfig.build(
                 scope="region",
                 region="afghanistan-latest",

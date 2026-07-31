@@ -611,6 +611,8 @@ def test_classify_terminal_insufficient_evidence_yields_failed(
 
 
 def test_classify_terminal_failed_for_malformed_digest() -> None:
+    """A checkpoint with a mismatched SHA-256 digest produces FAILED."""
+
     from osm_polygon_sentence_relevance.operator import recorded_job
     from osm_polygon_sentence_relevance.operator.oar import (
         ExitClass,
@@ -625,6 +627,143 @@ def test_classify_terminal_failed_for_malformed_digest() -> None:
             completed=2, total=10, identity_matches=True
         ),
         checkpoint_pairs=2,
+        checkpoint_parquet_shas_match=False,
+        identity_matches=True,
+    )
+    status = JobStatus(42, JobState.TERMINATED)
+    assert recorded_job.classify_terminal(status, inspection) is ExitClass.FAILED
+
+
+def test_classify_terminal_walltime_killed_with_valid_partial_checkpoints_is_resumable() -> (
+    None
+):
+    """A scheduler walltime kill (no exit code, ERROR state) with valid durable work
+    must be classified CONTINUE so the orchestrator can resume from the next
+    allocation. The launcher never wrote ``labeling.exit_code`` because OAR's
+    SIGTERM reached the wrapper before its post-payload write, so the absence
+    of an exit code by itself is not evidence of a deterministic payload fault
+    when the checkpoint set validates against the run identity.
+    """
+
+    from osm_polygon_sentence_relevance.operator import recorded_job
+    from osm_polygon_sentence_relevance.operator.oar import (
+        ExitClass,
+        JobState,
+        JobStatus,
+    )
+
+    inspection = recorded_job.ResumeInspection(
+        exit_code=None,
+        manifest_present=False,
+        progress=recorded_job.ProgressFacts(
+            completed=896, total=54462, identity_matches=True
+        ),
+        checkpoint_pairs=7,
+        checkpoint_parquet_shas_match=True,
+        identity_matches=True,
+        checkpoint_indexes=(0, 1, 2, 3, 4, 5, 6),
+    )
+    status = JobStatus(2961476, JobState.ERROR)
+    assert recorded_job.classify_terminal(status, inspection) is ExitClass.CONTINUE
+
+
+def test_classify_terminal_walltime_killed_with_no_progress_is_failed() -> None:
+    """A scheduler kill on an allocation that produced no checkpoints at all is FAILED."""
+
+    from osm_polygon_sentence_relevance.operator import recorded_job
+    from osm_polygon_sentence_relevance.operator.oar import (
+        ExitClass,
+        JobState,
+        JobStatus,
+    )
+
+    inspection = recorded_job.ResumeInspection(
+        exit_code=None,
+        manifest_present=False,
+        progress=recorded_job.ProgressFacts(
+            completed=0, total=0, identity_matches=False
+        ),
+        checkpoint_pairs=0,
+        checkpoint_parquet_shas_match=True,
+        identity_matches=False,
+    )
+    status = JobStatus(2961476, JobState.ERROR)
+    assert recorded_job.classify_terminal(status, inspection) is ExitClass.FAILED
+
+
+def test_classify_terminal_walltime_killed_with_manifest_is_complete() -> None:
+    """A scheduler kill AFTER the manifest was written is COMPLETE."""
+
+    from osm_polygon_sentence_relevance.operator import recorded_job
+    from osm_polygon_sentence_relevance.operator.oar import (
+        ExitClass,
+        JobState,
+        JobStatus,
+    )
+
+    inspection = recorded_job.ResumeInspection(
+        exit_code=None,
+        manifest_present=True,
+        progress=recorded_job.ProgressFacts(
+            completed=54462, total=54462, identity_matches=True
+        ),
+        checkpoint_pairs=426,
+        checkpoint_parquet_shas_match=True,
+        identity_matches=True,
+    )
+    status = JobStatus(2961476, JobState.ERROR)
+    assert recorded_job.classify_terminal(status, inspection) is ExitClass.COMPLETE
+
+
+def test_classify_terminal_missing_job_without_exit_code_but_with_partial_work_is_resumable() -> (
+    None
+):
+    """An OAR bookkeeping loss (MISSING) for a job whose exit code file was
+    also lost but whose checkpoints are intact must still be CONTINUE.
+    """
+
+    from osm_polygon_sentence_relevance.operator import recorded_job
+    from osm_polygon_sentence_relevance.operator.oar import (
+        ExitClass,
+        JobState,
+        JobStatus,
+    )
+
+    inspection = recorded_job.ResumeInspection(
+        exit_code=None,
+        manifest_present=False,
+        progress=recorded_job.ProgressFacts(
+            completed=128, total=54462, identity_matches=True
+        ),
+        checkpoint_pairs=1,
+        checkpoint_parquet_shas_match=True,
+        identity_matches=True,
+        checkpoint_indexes=(0,),
+    )
+    status = JobStatus(2961476, JobState.MISSING)
+    assert recorded_job.classify_terminal(status, inspection) is ExitClass.CONTINUE
+
+
+def test_classify_terminal_nonzero_exit_with_partial_checkpoints_is_failed() -> None:
+    """A genuine payload crash (nonzero exit code) is FAILED regardless of partial
+    work; the safety guard against blindly resubmitting deterministic failures
+    is preserved even when checkpoints validate.
+    """
+
+    from osm_polygon_sentence_relevance.operator import recorded_job
+    from osm_polygon_sentence_relevance.operator.oar import (
+        ExitClass,
+        JobState,
+        JobStatus,
+    )
+
+    inspection = recorded_job.ResumeInspection(
+        exit_code=137,
+        manifest_present=False,
+        progress=recorded_job.ProgressFacts(
+            completed=4, total=10, identity_matches=True
+        ),
+        checkpoint_pairs=4,
         checkpoint_parquet_shas_match=True,
         identity_matches=True,
     )
@@ -678,6 +817,60 @@ def test_classify_terminal_failed_for_nonzero_exit() -> None:
     )
     status = JobStatus(42, JobState.TERMINATED)
     assert recorded_job.classify_terminal(status, inspection) is ExitClass.FAILED
+
+
+def test_classify_terminal_nonzero_exit_overrides_manifest() -> None:
+    """A nonzero exit code overrides manifest_present.
+
+    A payload that crashes after writing the manifest but before the launcher's
+    exit-code write path must still be classified FAILED. The manifest is a
+    durable artifact but the launcher's nonzero exit code is the authoritative
+    signal of a deterministic payload failure: it must never be retried.
+    """
+
+    from osm_polygon_sentence_relevance.operator import recorded_job
+    from osm_polygon_sentence_relevance.operator.oar import (
+        ExitClass,
+        JobState,
+        JobStatus,
+    )
+
+    inspection = recorded_job.ResumeInspection(
+        exit_code=137,
+        manifest_present=True,
+        progress=recorded_job.ProgressFacts(
+            completed=54462, total=54462, identity_matches=True
+        ),
+        checkpoint_pairs=426,
+        checkpoint_parquet_shas_match=True,
+        identity_matches=True,
+    )
+    status = JobStatus(2961476, JobState.TERMINATED)
+    assert recorded_job.classify_terminal(status, inspection) is ExitClass.FAILED
+
+
+def test_classify_terminal_zero_exit_with_manifest_is_complete() -> None:
+    """Explicit zero exit code with a manifest is COMPLETE (the happy path)."""
+
+    from osm_polygon_sentence_relevance.operator import recorded_job
+    from osm_polygon_sentence_relevance.operator.oar import (
+        ExitClass,
+        JobState,
+        JobStatus,
+    )
+
+    inspection = recorded_job.ResumeInspection(
+        exit_code=0,
+        manifest_present=True,
+        progress=recorded_job.ProgressFacts(
+            completed=54462, total=54462, identity_matches=True
+        ),
+        checkpoint_pairs=426,
+        checkpoint_parquet_shas_match=True,
+        identity_matches=True,
+    )
+    status = JobStatus(2961476, JobState.TERMINATED)
+    assert recorded_job.classify_terminal(status, inspection) is ExitClass.COMPLETE
 
 
 def test_inspect_remote_resume_rejects_invalid_exit_file(tmp_path: Path) -> None:

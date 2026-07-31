@@ -344,13 +344,28 @@ def classify_terminal(
     status: JobStatus,
     inspection: ResumeInspection,
 ) -> ExitClass:
-    """Return the authoritative classification of a terminal allocation."""
+    """Return the authoritative classification of a terminal allocation.
 
-    if inspection.exit_code is None:
-        return ExitClass.FAILED
-    if inspection.exit_code != 0:
-        return ExitClass.FAILED
+    The classification is intentionally narrow:
+
+    * ``identity_matches`` is checked first because every other signal is
+      meaningless when the durable evidence does not belong to this run.
+    * An explicit nonzero ``exit_code`` is the authoritative signal of a
+      deterministic payload failure and overrides any durable artifact
+      (including a manifest written before the crash). It must never be
+      retried.
+    * ``manifest_present`` with no nonzero exit code proves the payload
+      reached finalization.
+    * ``exit_code is None`` (the launcher's exit-code file was lost to a
+      walltime kill) on an allocation that produced validated partial
+      checkpoints is classified CONTINUE rather than FAILED.
+    * ``MISSING`` OAR jobs with zero checkpoints must never be retried;
+      we surface that as :class:`ResumeError` rather than a classification.
+    """
+
     if not inspection.identity_matches:
+        return ExitClass.FAILED
+    if inspection.exit_code is not None and inspection.exit_code != 0:
         return ExitClass.FAILED
     if inspection.manifest_present:
         return ExitClass.COMPLETE

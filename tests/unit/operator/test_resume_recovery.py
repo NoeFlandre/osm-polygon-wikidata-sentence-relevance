@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 from typing import Any
 
@@ -330,3 +330,249 @@ def test_resume_idle_run_reports_nothing_to_reattach(
     args = _resume_args(config.run_id)
     assert cli._resume_run(config.run_id, args) == 0
     assert "nothing to reattach" in capsys.readouterr().out
+
+
+# ------------------------------------------------------------------
+# Narrow recovery from a previously FAILED allocation
+# ------------------------------------------------------------------
+
+
+def _failed_state(
+    *,
+    failed_job_id: int = 2961476,
+    site: str = "grenoble",
+    recovered_from_job_id: int | None = None,
+) -> SimpleNamespace:
+    """Build the minimal facts payload of an FAILED state for _reattach_decision tests."""
+
+    facts: dict[str, object] = {
+        "site": site,
+        "job_id": failed_job_id,
+        "failed_job_id": failed_job_id,
+        "active_stage": "label",
+    }
+    if recovered_from_job_id is not None:
+        facts["recovered_from_job_id"] = recovered_from_job_id
+    return SimpleNamespace(phase=RunPhase.FAILED, facts=facts)
+
+
+class _RecordingSsh:
+    """Tiny SSH stub that records the commands issued by ``mark_remote_status``."""
+
+    def __init__(self) -> None:
+        self.commands: list[str] = []
+
+    def run(self, command: str) -> SimpleNamespace:
+        self.commands.append(command)
+        return SimpleNamespace(stdout="", text="")
+
+
+def test_reattach_decision_returns_failed_candidate_with_valid_facts() -> None:
+    """A FAILED state with a recorded ``failed_job_id`` and ``site`` is a candidate."""
+
+    state = _failed_state()
+    assert cli._reattach_decision(state) == ("grenoble", 2961476)
+
+
+def test_reattach_decision_refuses_failed_state_without_site() -> None:
+    state = SimpleNamespace(
+        phase=RunPhase.FAILED,
+        facts={"failed_job_id": 2961476, "active_stage": "label"},
+    )
+    assert cli._reattach_decision(state) is None
+
+
+def test_reattach_decision_refuses_failed_state_without_failed_job_id() -> None:
+    state = SimpleNamespace(
+        phase=RunPhase.FAILED,
+        facts={"site": "grenoble", "active_stage": "label"},
+    )
+    assert cli._reattach_decision(state) is None
+
+
+def test_reattach_decision_refuses_already_recovered_failed_job() -> None:
+    """A previously-recovered FAILED allocation must not be recovered twice."""
+
+    state = _failed_state(recovered_from_job_id=2961476)
+    assert cli._reattach_decision(state) is None
+
+
+def test_reattach_decision_still_recognises_failed_state_with_different_recovery() -> (
+    None
+):
+    """If a prior recovery exists for a different job, the current failed_job_id is fresh."""
+
+    state = _failed_state(
+        failed_job_id=2962000,
+        recovered_from_job_id=2961476,
+    )
+    assert cli._reattach_decision(state) == ("grenoble", 2962000)
+
+
+def test_apply_classification_failed_from_failed_keeps_state_idempotent() -> None:
+    """A re-inspection that still classifies FAILED must stay in FAILED but advance the sequence."""
+
+    state = SimpleNamespace(
+        phase=RunPhase.FAILED,
+        facts={
+            "site": "grenoble",
+            "job_id": 2961476,
+            "failed_job_id": 2961476,
+            "active_stage": "label",
+        },
+    )
+    transitions: list[tuple[Any, Any, dict[str, object]]] = []
+
+    def transition(*, expected: Any, target: Any, facts: dict[str, object]) -> Any:
+        transitions.append((expected, target, dict(facts)))
+        return SimpleNamespace(phase=target, facts=facts)
+
+    def load() -> Any:
+        return state
+
+    store = SimpleNamespace(load=load, transition=transition)
+    layout = cli.RemoteLayout(PurePosixPath("/r"))
+    ssh = _RecordingSsh()
+    with pytest.raises(RuntimeError, match="failed deterministically"):
+        cli._apply_classification(
+            store=store,  # type: ignore[arg-type]
+            config=_config(),
+            ssh=ssh,  # type: ignore[arg-type]
+            layout=layout,
+            job_id=2961476,
+            active_stage="label",
+            classification=ExitClass.FAILED,
+        )
+    assert transitions == [
+        (
+            RunPhase.FAILED,
+            RunPhase.FAILED,
+            {"failed_job_id": 2961476},
+        )
+    ]
+
+
+def test_apply_classification_continue_from_failed_records_recovery_facts() -> None:
+    """A re-inspected FAILED allocation whose evidence is CONTINUE must record recovery facts."""
+
+    state = SimpleNamespace(
+        phase=RunPhase.FAILED,
+        facts={
+            "site": "grenoble",
+            "job_id": 2961476,
+            "failed_job_id": 2961476,
+            "active_stage": "label",
+        },
+    )
+    transitions: list[tuple[Any, Any, dict[str, object]]] = []
+
+    def transition(*, expected: Any, target: Any, facts: dict[str, object]) -> Any:
+        transitions.append((expected, target, dict(facts)))
+        return SimpleNamespace(phase=target, facts=facts)
+
+    def load() -> Any:
+        return state
+
+    store = SimpleNamespace(load=load, transition=transition)
+    cli._apply_classification(
+        store=store,  # type: ignore[arg-type]
+        config=_config(),
+        ssh=object(),  # type: ignore[arg-type]
+        layout=SimpleNamespace(),
+        job_id=2961476,
+        active_stage="label",
+        classification=ExitClass.CONTINUE,
+    )
+    assert len(transitions) == 1
+    expected, target, facts = transitions[0]
+    assert expected is RunPhase.FAILED
+    assert target is RunPhase.REMOTE_PREPARED
+    assert facts["recovered_from_job_id"] == 2961476
+    assert facts["recovery_attempt"] == 1
+    assert "walltime-killed" in facts["recovery_reason"]
+    assert facts["continued_after_job"] == 2961476
+
+
+def test_apply_classification_continue_from_failed_increments_recovery_attempt() -> (
+    None
+):
+    """Subsequent recoveries must increment the monotonic recovery_attempt counter."""
+
+    state = SimpleNamespace(
+        phase=RunPhase.FAILED,
+        facts={
+            "site": "grenoble",
+            "job_id": 2962000,
+            "failed_job_id": 2962000,
+            "recovered_from_job_id": 2961476,
+            "recovery_attempt": 1,
+            "recovery_reason": "previous walltime-kill",
+            "active_stage": "label",
+        },
+    )
+    transitions: list[tuple[Any, Any, dict[str, object]]] = []
+
+    def transition(*, expected: Any, target: Any, facts: dict[str, object]) -> Any:
+        transitions.append((expected, target, dict(facts)))
+        return SimpleNamespace(phase=target, facts=facts)
+
+    def load() -> Any:
+        return state
+
+    store = SimpleNamespace(load=load, transition=transition)
+    cli._apply_classification(
+        store=store,  # type: ignore[arg-type]
+        config=_config(),
+        ssh=object(),  # type: ignore[arg-type]
+        layout=SimpleNamespace(),
+        job_id=2962000,
+        active_stage="label",
+        classification=ExitClass.CONTINUE,
+    )
+    _, _, facts = transitions[0]
+    assert facts["recovery_attempt"] == 2
+    assert facts["recovered_from_job_id"] == 2962000
+
+
+def test_apply_classification_complete_from_failed_records_recovery_facts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A previously FAILED allocation that re-inspects as COMPLETE advances to COMPLETE with recovery."""
+
+    state = SimpleNamespace(
+        phase=RunPhase.FAILED,
+        facts={
+            "site": "grenoble",
+            "job_id": 2961476,
+            "failed_job_id": 2961476,
+            "active_stage": "label",
+        },
+    )
+    transitions: list[tuple[Any, Any, dict[str, object]]] = []
+
+    def transition(*, expected: Any, target: Any, facts: dict[str, object]) -> Any:
+        transitions.append((expected, target, dict(facts)))
+        return SimpleNamespace(phase=target, facts=facts)
+
+    def load() -> Any:
+        return state
+
+    store = SimpleNamespace(load=load, transition=transition)
+    layout = cli.RemoteLayout(PurePosixPath("/r"))
+    ssh = _RecordingSsh()
+    monkeypatch.setattr(cli, "label_publication_commit", lambda *a, **kw: "a" * 40)
+    cli._apply_classification(
+        store=store,  # type: ignore[arg-type]
+        config=_config(),
+        ssh=ssh,  # type: ignore[arg-type]
+        layout=layout,
+        job_id=2961476,
+        active_stage="label",
+        classification=ExitClass.COMPLETE,
+    )
+    # FAILED -> VALIDATED with recovery, then VALIDATED -> VERIFYING, VERIFYING -> COMPLETE
+    assert transitions[0][1] is RunPhase.VALIDATED
+    assert transitions[0][2]["recovered_from_job_id"] == 2961476
+    assert transitions[0][2]["recovery_attempt"] == 1
+    assert transitions[1][1] is RunPhase.VERIFYING
+    assert transitions[2][1] is RunPhase.COMPLETE
