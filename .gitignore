@@ -30,6 +30,7 @@ data/
 .coverage
 coverage.xml
 htmlcov/
+site/
 
 # Model weights / build output (never committed)
 *.onnx

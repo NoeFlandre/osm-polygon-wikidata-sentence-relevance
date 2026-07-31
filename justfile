@@ -26,4 +26,7 @@ build:
 verify-dist: build
     uv run python scripts/verify_distribution.py dist/*.whl dist/*.tar.gz
 
+docs-build:
+    uv run mkdocs build --strict --site-dir site
+
 ci: check verify-dist

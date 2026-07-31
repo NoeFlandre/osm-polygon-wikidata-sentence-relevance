@@ -10,7 +10,18 @@ uv sync --locked --all-extras --dev
 uv run pre-commit install
 ```
 
-`pytest-cov`, Ruff, ty, and pre-commit are locked development dependencies.
+`pytest-cov`, Ruff, ty, pre-commit, and MkDocs Material are locked project
+tools. The documentation extra is separate from the runtime and data extras:
+
+```bash
+uv sync --locked --extra docs
+just docs-build
+```
+
+`just docs-build` runs `mkdocs build --strict` and writes the generated site
+to the ignored `site/` directory. The public site is deployed by
+`.github/workflows/docs.yml` after a push to `main`.
+
 The root `justfile` provides the same command façade locally and in CI.
 
 ## Repository layout

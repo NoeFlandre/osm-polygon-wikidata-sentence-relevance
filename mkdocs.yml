@@ -1,0 +1,66 @@
+site_name: OSM Polygon Sentence Relevance
+site_description: Deterministic sentence segmentation and relevance labeling for OSM polygon sources.
+site_url: https://noeflandre.github.io/osm-polygon-wikidata-sentence-relevance/
+repo_name: NoeFlandre/osm-polygon-wikidata-sentence-relevance
+repo_url: https://github.com/NoeFlandre/osm-polygon-wikidata-sentence-relevance
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  language: en
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - content.code.copy
+    - search.highlight
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - pymdownx.details
+  - pymdownx.highlight
+  - pymdownx.superfences
+  - tables
+  - toc:
+      permalink: true
+
+exclude_docs: |
+  superpowers/*
+  **/.DS_Store
+
+nav:
+  - Home: index.md
+  - Guides:
+      - Getting started: guides/getting-started.md
+      - Reproducibility: guides/reproducibility.md
+      - Development: guides/development.md
+      - Grid'5000 production: guides/grid5000.md
+  - Architecture:
+      - Overview: architecture/overview.md
+      - Application: architecture/packages/application.md
+      - Labeling: architecture/packages/labeling.md
+      - Operator: architecture/packages/operator.md
+      - Output: architecture/packages/output.md
+      - Publishing: architecture/packages/publishing.md
+      - Sentences: architecture/packages/sentences.md
+      - Streaming operations: architecture/packages/streaming-operations.md
+      - Decisions:
+          - Domain package layout: architecture/decisions/0001-domain-package-layout.md
+          - Contracts package: architecture/decisions/0002-contracts-package.md
+  - Reference:
+      - CLI reference: reference/cli.md
+      - API: reference/api.md
+      - Data contract: reference/data-contract.md
+      - Grid'5000 operator: reference/grid5000-operator.md

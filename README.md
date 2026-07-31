@@ -1,6 +1,7 @@
 # OSM Polygon – Wikidata Sentence Relevance
 
 [![CI](https://github.com/NoeFlandre/osm-polygon-wikidata-sentence-relevance/actions/workflows/ci.yml/badge.svg)](https://github.com/NoeFlandre/osm-polygon-wikidata-sentence-relevance/actions/workflows/ci.yml)
+[![Documentation](https://img.shields.io/badge/docs-MkDocs%20Material-526CFE)](https://noeflandre.github.io/osm-polygon-wikidata-sentence-relevance/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](.python-version)
 
@@ -9,7 +10,8 @@ Wikipedia, and Wikivoyage article sections. The goal is to produce a flat,
 deduplicated table of sentences linked to their source polygon, section,
 and document metadata — suitable for downstream relevance modelling.
 
-Documentation index: [`docs/index.md`](docs/index.md).
+Public documentation: [MkDocs site](https://noeflandre.github.io/osm-polygon-wikidata-sentence-relevance/).
+Documentation source: [`docs/index.md`](docs/index.md).
 
 ## One-command Grid'5000 production
 

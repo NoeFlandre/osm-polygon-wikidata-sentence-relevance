@@ -1430,3 +1430,57 @@ def test_failure_reason_no_durable_work_is_stable_token() -> None:
     token = recorded_job.failure_reason(status, inspection)
     assert token == "no-durable-work"
     assert token in recorded_job.FAILURE_REASONS
+
+
+@pytest.mark.parametrize(
+    ("inspection", "expected"),
+    [
+        (
+            recorded_job.ResumeInspection(
+                exit_code=None,
+                manifest_present=False,
+                progress=recorded_job.ProgressFacts(
+                    completed=0, total=0, identity_matches=True
+                ),
+                checkpoint_pairs=0,
+                checkpoint_parquet_shas_match=True,
+                identity_matches=True,
+            ),
+            "manifest-incomplete",
+        ),
+        (
+            recorded_job.ResumeInspection(
+                exit_code=None,
+                manifest_present=False,
+                progress=recorded_job.ProgressFacts(
+                    completed=0, total=10, identity_matches=True
+                ),
+                checkpoint_pairs=1,
+                checkpoint_parquet_shas_match=True,
+                identity_matches=True,
+            ),
+            "checkpoint-progress-invalid",
+        ),
+        (
+            recorded_job.ResumeInspection(
+                exit_code=None,
+                manifest_present=False,
+                progress=recorded_job.ProgressFacts(
+                    completed=2, total=10, identity_matches=True
+                ),
+                checkpoint_pairs=1,
+                checkpoint_parquet_shas_match=True,
+                identity_matches=True,
+            ),
+            "deterministic-failure",
+        ),
+    ],
+)
+def test_failure_reason_covers_non_resumable_progress_states(
+    inspection: recorded_job.ResumeInspection, expected: str
+) -> None:
+    """Every non-resumable progress shape has a stable diagnostic token."""
+
+    token = recorded_job.failure_reason(JobStatus(2961476, JobState.ERROR), inspection)
+    assert token == expected
+    assert token in recorded_job.FAILURE_REASONS

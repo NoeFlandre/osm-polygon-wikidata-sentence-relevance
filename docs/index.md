@@ -4,6 +4,9 @@ This project builds a deterministic, sentence-level relevance dataset from
 OSM polygons joined to Wikipedia and Wikivoyage sections. It is currently
 pre-1.0 (alpha).
 
+The rendered documentation is published at
+<https://noeflandre.github.io/osm-polygon-wikidata-sentence-relevance/>.
+
 ## Audience entry points
 
 - **I want to run it once** → [Getting started](guides/getting-started.md)

@@ -108,3 +108,37 @@ def test_development_guide_matches_shared_quality_workflow() -> None:
     assert "just ci" in text
     assert "uv run pre-commit install" in text
     assert "mypy" not in text.lower()
+
+
+def test_mkdocs_site_and_pages_workflow_are_locked_and_strict() -> None:
+    project = _pyproject()
+    docs_extra = _names(project["project"]["optional-dependencies"]["docs"])
+    assert "mkdocs-material" in docs_extra
+    assert (
+        project["project"]["urls"]["Documentation"] == "https://noeflandre.github.io/"
+        "osm-polygon-wikidata-sentence-relevance/"
+    )
+
+    config = (ROOT / "mkdocs.yml").read_text(encoding="utf-8")
+    assert "site_name: OSM Polygon Sentence Relevance" in config
+    assert (
+        "site_url: https://noeflandre.github.io/"
+        "osm-polygon-wikidata-sentence-relevance/"
+    ) in config
+    assert "nav:" in config
+    assert "- Getting started: guides/getting-started.md" in config
+    assert "- CLI reference: reference/cli.md" in config
+    assert "- Data contract: reference/data-contract.md" in config
+
+    workflow = (ROOT / ".github/workflows/docs.yml").read_text(encoding="utf-8")
+    assert "branches: [main]" in workflow
+    assert "workflow_dispatch:" in workflow
+    assert "pages: write" in workflow
+    assert "id-token: write" in workflow
+    assert "mkdocs build --strict" in workflow
+    assert "actions/upload-pages-artifact" in workflow
+    assert "actions/deploy-pages" in workflow
+
+    justfile = (ROOT / "justfile").read_text(encoding="utf-8")
+    assert "docs-build:" in justfile
+    assert "mkdocs build --strict" in justfile

@@ -35,7 +35,7 @@ dependencies = [
 Homepage = "https://github.com/NoeFlandre/osm-polygon-wikidata-sentence-relevance"
 Repository = "https://github.com/NoeFlandre/osm-polygon-wikidata-sentence-relevance"
 Issues = "https://github.com/NoeFlandre/osm-polygon-wikidata-sentence-relevance/issues"
-Documentation = "https://github.com/NoeFlandre/osm-polygon-wikidata-sentence-relevance/tree/main/docs"
+Documentation = "https://noeflandre.github.io/osm-polygon-wikidata-sentence-relevance/"
 Changelog = "https://github.com/NoeFlandre/osm-polygon-wikidata-sentence-relevance/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
@@ -57,6 +57,9 @@ hub = [
     "matplotlib>=3.8",
     "numpy>=1.26",
     "pillow>=10.0",
+]
+docs = [
+    "mkdocs-material>=9.6,<10",
 ]
 operator = [
     "click>=8.4,<9",
