@@ -248,7 +248,8 @@ validate_clean_checkout() {
             continue
         fi
 
-        if checkout_guard_is_allowed_ignored_entry "${status_code}" "${path}"; then
+        if checkout_guard_is_allowed_ignored_entry \
+            "${status_code}" "${path}" "${repo_root}" "${current_user}"; then
             continue
         fi
 
@@ -277,6 +278,8 @@ validate_clean_checkout() {
 checkout_guard_is_allowed_ignored_entry() {
     local status_code="$1"
     local path="$2"
+    local repo_root="${3:-}"
+    local current_user="${4:-$(id -un)}"
 
     if [ "${status_code}" != "!!" ]; then
         return 1
@@ -285,6 +288,25 @@ checkout_guard_is_allowed_ignored_entry() {
     case "${path}" in
         OAR.*.stderr|OAR.*.stdout)
             return 0
+            ;;
+        __pycache__|*/__pycache__)
+            # Python creates these ignored directories during every job.
+            # They are safe only when they are a regular, user-owned
+            # directory directly below this checkout; do not admit a
+            # symlink or any path that could escape the repository.
+            case "${path}" in
+                /*|../*|*/../*|*/..)
+                    return 1
+                    ;;
+            esac
+            local cache_path="${repo_root}/${path}"
+            if [ ! -d "${cache_path}" ] || [ -L "${cache_path}" ]; then
+                return 1
+            fi
+            local cache_owner
+            cache_owner="$(stat -c '%U' "${cache_path}" 2>/dev/null || stat -f '%Su' "${cache_path}")"
+            [ "${cache_owner}" = "${current_user}" ]
+            return
             ;;
     esac
     return 1

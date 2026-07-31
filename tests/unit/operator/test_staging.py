@@ -120,3 +120,23 @@ def test_prepare_label_assets_requires_revision_and_marker() -> None:
         Stager(RecordingSsh(["bad\n"])).prepare_label_assets(  # type: ignore[arg-type]
             _config(), layout
         )
+
+
+def test_clean_generated_python_caches_is_scoped_to_runtime_sources() -> None:
+    ssh = RecordingSsh(["PYTHON_CACHES_CLEAN\n"])
+    layout = RemoteLayout(PurePosixPath("/home/user/operator/run"))
+    Stager(ssh).clean_generated_python_caches(layout)  # type: ignore[arg-type]
+    command = ssh.commands[0]
+    assert "repo=/home/user/operator/run/repo" in command
+    assert 'for tree in "$repo/src" "$repo/scripts"' in command
+    assert 'find -P "$tree"' in command
+    assert "rm -rf --" in command
+    assert "PYTHON_CACHES_CLEAN" in command
+
+
+def test_clean_generated_python_caches_requires_success_marker() -> None:
+    layout = RemoteLayout(PurePosixPath("/home/user/operator/run"))
+    with pytest.raises(RuntimeError, match="cache cleanup"):
+        Stager(RecordingSsh(["unexpected\n"])).clean_generated_python_caches(  # type: ignore[arg-type]
+            layout
+        )

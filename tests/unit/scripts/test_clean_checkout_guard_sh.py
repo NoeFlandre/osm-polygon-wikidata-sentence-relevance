@@ -129,6 +129,54 @@ def test_guard_accepts_grid5000_oar_output(tmp_path: Path) -> None:
     _expect_pass(result)
 
 
+def test_guard_accepts_python_bytecode_caches(tmp_path: Path) -> None:
+    """Generated ``__pycache__`` directories must not poison a reuse run."""
+
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    package = repo / "src" / "package"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text("\n")
+    subprocess.run(
+        ["git", "-C", str(repo), "add", "src/package/__init__.py"],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(repo), "commit", "-m", "add-package", "-q"],
+        check=True,
+    )
+    cache = repo / "src" / "package" / "__pycache__"
+    cache.mkdir(parents=True)
+    (cache / "module.cpython-312.pyc").write_bytes(b"bytecode")
+    (repo / ".git" / "info" / "exclude").write_text("__pycache__/\n")
+    result = _run_guard(repo)
+    _expect_pass(result)
+
+
+def test_guard_rejects_symlinked_python_bytecode_cache(tmp_path: Path) -> None:
+    """A cache path must not be a symlink that escapes the checkout."""
+
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    package = repo / "src" / "package"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text("\n")
+    subprocess.run(
+        ["git", "-C", str(repo), "add", "src/package/__init__.py"],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(repo), "commit", "-m", "add-package", "-q"],
+        check=True,
+    )
+    outside = tmp_path / "outside-cache"
+    outside.mkdir()
+    os.symlink(str(outside), str(package / "__pycache__"))
+    (repo / ".git" / "info" / "exclude").write_text("__pycache__/\n")
+    result = _run_guard(repo)
+    _expect_fail(result)
+
+
 def test_guard_rejects_non_oar_ignored_file(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     _init_repo(repo)

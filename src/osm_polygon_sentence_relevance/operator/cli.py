@@ -938,6 +938,9 @@ def _optimize_queued_start(
             raise RuntimeError("fallback is no longer queued")
         _ssh, layout, oar = client(site)
         label_assets = assets[site]
+        stager = Stager(_ssh)
+        if hasattr(stager, "clean_generated_python_caches"):
+            stager.clean_generated_python_caches(layout)
         return oar.submit(
             label_submission(
                 config,

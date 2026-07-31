@@ -102,6 +102,33 @@ printf 'STAGING_OK reused=%s\\n' "$reused"
             raise RuntimeError("remote staging did not return its success marker")
         return StagingResult(layout, "reused=true" in result.stdout)
 
+    def clean_generated_python_caches(self, layout: RemoteLayout) -> None:
+        """Remove only Python caches before a guarded job submission.
+
+        The checkout guard rejects unexpected ignored entries. Python imports
+        can recreate ``__pycache__`` after staging, so cleanup must happen
+        immediately before every allocation. The command is confined to the
+        managed checkout's ``src`` and ``scripts`` trees and refuses a
+        symlinked repository root.
+        """
+
+        repo = _q(layout.repo)
+        script = f"""
+set -euo pipefail
+repo={repo}
+[ -d "$repo/.git" ]
+[ ! -L "$repo" ]
+for tree in "$repo/src" "$repo/scripts"; do
+  if [ -d "$tree" ] && [ ! -L "$tree" ]; then
+    find -P "$tree" -type d -name __pycache__ -prune -exec rm -rf -- {{}} +
+  fi
+done
+printf 'PYTHON_CACHES_CLEAN\\n'
+""".strip()
+        result = self._ssh.run(script)
+        if "PYTHON_CACHES_CLEAN" not in result.stdout:
+            raise RuntimeError("remote Python cache cleanup failed")
+
     def prepare_label_assets(
         self,
         config: OperatorConfig,

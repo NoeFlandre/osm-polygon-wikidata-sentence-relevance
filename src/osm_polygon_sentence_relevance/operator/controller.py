@@ -127,6 +127,11 @@ class Controller:
 
         request: SubmissionRequest
         selected = component or self.config.stage
+        # Python imports during staging can leave ignored ``__pycache__``
+        # directories behind. Clean them immediately before the scheduler
+        # sees the checkout; test doubles may intentionally omit this seam.
+        if hasattr(self.stager, "clean_generated_python_caches"):
+            self.stager.clean_generated_python_caches(self.layout)
         if selected is Stage.SPLIT:
             request = split_submission(self.config, self.layout)
         elif selected is Stage.LABEL:

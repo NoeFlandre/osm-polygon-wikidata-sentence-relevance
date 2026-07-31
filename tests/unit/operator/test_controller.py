@@ -54,10 +54,14 @@ class FakeState:
 class FakeStager:
     def __init__(self) -> None:
         self.calls = 0
+        self.cleanup_calls = 0
 
     def prepare(self, _config: object, layout: RemoteLayout) -> SimpleNamespace:
         self.calls += 1
         return SimpleNamespace(layout=layout, reused=True)
+
+    def clean_generated_python_caches(self, _layout: RemoteLayout) -> None:
+        self.cleanup_calls += 1
 
 
 class FakeOar:
@@ -118,13 +122,14 @@ def test_prepare_advances_every_durable_phase_and_is_idempotent() -> None:
 
 
 def test_submit_split_and_reuse_existing_job() -> None:
-    controller, state, oar, _stager, _emitted = _controller(
+    controller, state, oar, stager, _emitted = _controller(
         phase=RunPhase.REMOTE_PREPARED
     )
     assert controller.submit(component=Stage.SPLIT) == 42
     assert state.value.phase is RunPhase.SUBMITTED
     assert state.value.facts["active_stage"] == "split"
     assert len(oar.requests) == 1
+    assert stager.cleanup_calls == 1
     assert controller.submit(component=Stage.SPLIT) == 42
     assert len(oar.requests) == 1
 
