@@ -32,6 +32,9 @@ coverage.xml
 htmlcov/
 site/
 
+# Internal planning documents are not part of the public repository.
+docs/superpowers/
+
 # Model weights / build output (never committed)
 *.onnx
 *.safetensors
