@@ -52,6 +52,7 @@ from osm_polygon_sentence_relevance.operator.remote_completion import (
     assert_remote_exit_zero,
     label_publication_commit,
     mark_remote_status,
+    publish_label,
     publish_split,
     remote_exit_code,
 )
@@ -441,7 +442,16 @@ def _apply_classification(
         if is_label:
             hub_commit: str | None = None
             if config.requirements.row_limit == 0:
-                hub_commit = label_publication_commit(ssh, layout, job_id)
+                try:
+                    hub_commit = label_publication_commit(ssh, layout, job_id)
+                except RuntimeError as exc:
+                    if str(exc) != (
+                        "label publication did not report an immutable Hub commit"
+                    ):
+                        raise
+                    hub_commit = publish_label(
+                        ssh, layout, layout.label_output, config.output_dataset_id
+                    )
             facts: dict[str, object] = {"label_job_id": job_id}
             if hub_commit is not None:
                 facts["hub_commit"] = hub_commit

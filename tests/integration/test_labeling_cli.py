@@ -48,6 +48,31 @@ def _input(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def test_publish_command_does_not_require_label_runtime_arguments(
+    tmp_path: Path,
+) -> None:
+    calls: list[tuple[Path, str]] = []
+
+    def publish(output_dir: Path, dataset_id: str) -> object:
+        calls.append((output_dir, dataset_id))
+        return type("Publication", (), {"commit_id": "a" * 40, "commit_url": "url"})()
+
+    assert (
+        main(
+            [
+                "publish",
+                "--output-dir",
+                str(tmp_path / "output"),
+                "--dataset-id",
+                "owner/dataset",
+            ],
+            publish_fn=publish,
+        )
+        == 0
+    )
+    assert calls == [(tmp_path / "output", "owner/dataset")]
+
+
 def test_label_command_runs_and_reports_resumable_result(
     tmp_path: Path, capsys
 ) -> None:

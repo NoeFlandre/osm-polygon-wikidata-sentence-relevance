@@ -271,7 +271,6 @@ def main(
 
     try:
         args = _parser().parse_args(argv)
-        plan = _resolve_runtime_plan(args)
         if args.command == "publish":
             result = publish_fn(Path(args.output_dir), args.dataset_id)
             print(
@@ -281,6 +280,7 @@ def main(
                 )
             )
             return 0
+        plan = _resolve_runtime_plan(args)
         if args.command == "probe":
             return _probe(args, engine_factory(args))
         input_path = Path(args.input_parquet)

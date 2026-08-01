@@ -72,6 +72,33 @@ def publish_split(
     return commit_id
 
 
+def publish_label(
+    ssh: SshClient,
+    layout: RemoteLayout,
+    output_dir: PurePosixPath,
+    dataset_id: str,
+) -> str:
+    """Publish an already-finalized label output and return its Hub commit."""
+
+    code = (
+        "from osm_polygon_sentence_relevance.labeling.publication import "
+        "publish_labeled_dataset; "
+        f"r=publish_labeled_dataset({str(output_dir)!r},{dataset_id!r},"
+        "target_revision='main'); print(r.commit_id)"
+    )
+    command = " ".join(
+        shlex.quote(value)
+        for value in (str(layout.repo / ".venv/bin/python"), "-c", code)
+    )
+    result = ssh.run(command)
+    commit_id = _result_text(result).strip()
+    if len(commit_id) != 40 or any(
+        character not in "0123456789abcdef" for character in commit_id
+    ):
+        raise RuntimeError("Hugging Face label publication did not return a commit")
+    return commit_id
+
+
 def label_publication_commit(
     ssh: SshClient,
     layout: RemoteLayout,
@@ -119,6 +146,7 @@ __all__ = [
     "assert_remote_exit_zero",
     "label_publication_commit",
     "mark_remote_status",
+    "publish_label",
     "publish_split",
     "remote_exit_code",
 ]

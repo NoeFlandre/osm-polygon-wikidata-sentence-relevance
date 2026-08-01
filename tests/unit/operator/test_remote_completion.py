@@ -128,6 +128,31 @@ def test_publish_split_short_output_raises_runtime_error(short_output: str) -> N
         )  # type: ignore[arg-type]
 
 
+def test_publish_label_constructs_exact_quoted_command_and_returns_commit() -> None:
+    ssh = _FakeSsh("c" * 40 + "\n")
+    layout = RemoteLayout(PurePosixPath("/r"))
+    output_dir = PurePosixPath("/label output; $(touch bad)")
+    dataset_id = "owner/labels; `echo bad`"
+
+    commit = remote_completion.publish_label(
+        ssh,  # type: ignore[arg-type]
+        layout,
+        output_dir,
+        dataset_id,
+    )
+
+    assert commit == "c" * 40
+    tokens = shlex.split(ssh.commands[0])
+    assert tokens[:2] == ["/r/repo/.venv/bin/python", "-c"]
+    assert repr(str(output_dir)) in tokens[2]
+    assert repr(dataset_id) in tokens[2]
+    assert (
+        "from osm_polygon_sentence_relevance.labeling.publication import "
+        "publish_labeled_dataset"
+    ) in tokens[2]
+    assert "target_revision='main'" in tokens[2]
+
+
 def test_label_publication_commit_selects_latest_valid_record() -> None:
     older_commit = "a" * 40
     latest_commit = "b" * 40

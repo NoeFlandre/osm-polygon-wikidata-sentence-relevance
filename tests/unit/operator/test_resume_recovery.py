@@ -576,3 +576,40 @@ def test_apply_classification_complete_from_failed_records_recovery_facts(
     assert transitions[0][2]["recovery_attempt"] == 1
     assert transitions[1][1] is RunPhase.VERIFYING
     assert transitions[2][1] is RunPhase.COMPLETE
+
+
+def test_apply_classification_publishes_completed_output_when_log_has_no_commit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = SimpleNamespace(
+        phase=RunPhase.RUNNING,
+        facts={"active_stage": "label"},
+    )
+    transitions: list[tuple[Any, Any, dict[str, object]]] = []
+
+    def transition(*, expected: Any, target: Any, facts: dict[str, object]) -> Any:
+        transitions.append((expected, target, dict(facts)))
+        return SimpleNamespace(phase=target, facts=facts)
+
+    store = SimpleNamespace(load=lambda: state, transition=transition)
+    monkeypatch.setattr(
+        cli,
+        "label_publication_commit",
+        lambda *_a, **_kw: (_ for _ in ()).throw(
+            RuntimeError("label publication did not report an immutable Hub commit")
+        ),
+    )
+    monkeypatch.setattr(cli, "publish_label", lambda *_a, **_kw: "d" * 40)
+
+    cli._apply_classification(
+        store=store,  # type: ignore[arg-type]
+        config=_config(),
+        ssh=_RecordingSsh(),  # type: ignore[arg-type]
+        layout=cli.RemoteLayout(PurePosixPath("/r")),
+        job_id=2963288,
+        active_stage="label",
+        classification=ExitClass.COMPLETE,
+    )
+
+    assert transitions[0][2]["hub_commit"] == "d" * 40
+    assert transitions[-1][2]["published"] is True
