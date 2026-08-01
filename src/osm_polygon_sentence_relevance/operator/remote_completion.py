@@ -78,13 +78,124 @@ def publish_label(
     output_dir: PurePosixPath,
     dataset_id: str,
 ) -> str:
-    """Publish an already-finalized label output and return its Hub commit."""
+    """Publish finalized labels with a frontend-compatible Hub-only check.
 
+    This recovery path intentionally avoids importing the package's Parquet
+    validator: some Grid'5000 frontends cannot import the remote NumPy build.
+    It validates the closed output file set, manifest-recorded SHA-256 values,
+    and immutable Hub readback before returning the commit.
+    """
+
+    script = f"""
+import hashlib
+import json
+import tempfile
+from pathlib import Path
+
+from huggingface_hub import (
+    CommitOperationAdd,
+    CommitOperationDelete,
+    HfApi,
+    hf_hub_download,
+)
+
+root = Path({str(output_dir)!r})
+dataset_id = {dataset_id!r}
+target_revision = 'main'
+expected = (
+    'sentences.parquet',
+    'manifest.json',
+    'README.md',
+    'assets/label_distribution.png',
+    'assets/positive_languages.png',
+)
+files = {{
+    str(path.relative_to(root))
+    for path in root.rglob('*')
+    if path.is_file() and not path.is_symlink()
+}}
+if files != set(expected):
+    raise RuntimeError('label output file set is invalid')
+manifest = json.loads((root / 'manifest.json').read_text(encoding='utf-8'))
+if manifest.get('dataset_repo_id') != dataset_id:
+    raise RuntimeError('label output dataset ID mismatch')
+digests = manifest.get('artifact_sha256')
+if not isinstance(digests, dict):
+    raise RuntimeError('label output artifact hashes are missing')
+for relative in expected:
+    if relative in {{'manifest.json', 'README.md'}}:
+        continue
+    actual = hashlib.sha256((root / relative).read_bytes()).hexdigest()
+    if actual != digests.get(relative):
+        raise RuntimeError('label output hash mismatch')
+
+api = HfApi()
+remote = set(
+    api.list_repo_files(
+        repo_id=dataset_id,
+        repo_type='dataset',
+        revision=target_revision,
+    )
+)
+allowed = set(expected) | {{
+    '.gitattributes',
+    'assets/geographic_coverage.png',
+    'assets/language_distribution.png',
+}}
+if remote - allowed:
+    raise RuntimeError('remote label tree contains unexpected files')
+operations = [
+    CommitOperationAdd(
+        path_in_repo=relative,
+        path_or_fileobj=str(root / relative),
+    )
+    for relative in expected
+]
+operations.extend(
+    CommitOperationDelete(path_in_repo=relative)
+    for relative in remote & {{
+        'assets/geographic_coverage.png',
+        'assets/language_distribution.png',
+    }}
+)
+info = api.create_commit(
+    repo_id=dataset_id,
+    repo_type='dataset',
+    operations=operations,
+    commit_message=(
+        f"Publish {{manifest.get('statistics', {{}}).get('row_count', 0)}} "
+        'Afghanistan relevance labels'
+    ),
+    revision=target_revision,
+)
+commit_id = info.oid
+if not isinstance(commit_id, str) or len(commit_id) != 40 or any(
+    character not in '0123456789abcdef' for character in commit_id
+):
+    raise RuntimeError('Hub returned an invalid commit')
+with tempfile.TemporaryDirectory(prefix='label-readback-') as temporary:
+    for relative in expected:
+        downloaded = Path(
+            hf_hub_download(
+                repo_id=dataset_id,
+                repo_type='dataset',
+                revision=commit_id,
+                filename=relative,
+                local_dir=temporary,
+            )
+        )
+        if relative not in {{'manifest.json', 'README.md'}}:
+            actual = hashlib.sha256(downloaded.read_bytes()).hexdigest()
+            if actual != digests.get(relative):
+                raise RuntimeError('Hub readback hash mismatch')
+print(commit_id)
+"""
     code = (
-        "from osm_polygon_sentence_relevance.labeling.publication import "
-        "publish_labeled_dataset; "
-        f"r=publish_labeled_dataset({str(output_dir)!r},{dataset_id!r},"
-        "target_revision='main'); print(r.commit_id)"
+        "from huggingface_hub import CommitOperationAdd, CommitOperationDelete, "
+        "HfApi, hf_hub_download; "
+        f"output_dir={str(output_dir)!r}; "
+        f"dataset_id={dataset_id!r}; target_revision='main'; "
+        f"exec({script!r})"
     )
     command = " ".join(
         shlex.quote(value)

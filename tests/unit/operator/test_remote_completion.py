@@ -147,9 +147,12 @@ def test_publish_label_constructs_exact_quoted_command_and_returns_commit() -> N
     assert repr(str(output_dir)) in tokens[2]
     assert repr(dataset_id) in tokens[2]
     assert (
-        "from osm_polygon_sentence_relevance.labeling.publication import "
-        "publish_labeled_dataset"
+        "from huggingface_hub import "
+        "CommitOperationAdd, CommitOperationDelete, HfApi, hf_hub_download"
     ) in tokens[2]
+    assert "artifact_sha256" in tokens[2]
+    assert "create_commit" in tokens[2]
+    assert "publish_labeled_dataset" not in tokens[2]
     assert "target_revision='main'" in tokens[2]
 
 
