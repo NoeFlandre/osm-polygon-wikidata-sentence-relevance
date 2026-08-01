@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import shlex
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 
 import pytest
@@ -128,32 +128,53 @@ def test_publish_split_short_output_raises_runtime_error(short_output: str) -> N
         )  # type: ignore[arg-type]
 
 
-def test_publish_label_constructs_exact_quoted_command_and_returns_commit() -> None:
-    ssh = _FakeSsh("c" * 40 + "\n")
-    layout = RemoteLayout(PurePosixPath("/r"))
-    output_dir = PurePosixPath("/label output; $(touch bad)")
-    dataset_id = "owner/labels; `echo bad`"
+def test_publish_label_fetches_once_and_reuses_seagate_relay(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(remote_completion, "DATA_ROOT", tmp_path)
+    fetched: list[tuple[str, Path]] = []
 
-    commit = remote_completion.publish_label(
+    class _Transfer:
+        def __init__(self, *, ssh_target: str) -> None:
+            assert ssh_target == "grenoble"
+
+        def fetch(self, remote_path: str, local_path: Path) -> None:
+            fetched.append((remote_path, local_path))
+            local_path.write_bytes(b"release")
+
+    monkeypatch.setattr(remote_completion, "RemoteTransfer", _Transfer)
+    published: list[tuple[Path, str]] = []
+
+    def _publish(directory: Path, dataset_id: str) -> str:
+        published.append((directory, dataset_id))
+        return "c" * 40
+
+    monkeypatch.setattr(remote_completion, "_publish_local_label_output", _publish)
+    ssh = _FakeSsh()
+    ssh.target = "grenoble"  # type: ignore[attr-defined]
+    layout = RemoteLayout(PurePosixPath("/remote/run-123"))
+
+    first = remote_completion.publish_label(
         ssh,  # type: ignore[arg-type]
         layout,
-        output_dir,
-        dataset_id,
+        PurePosixPath("/remote/run-123/label-output"),
+        "owner/labels",
+    )
+    second = remote_completion.publish_label(
+        ssh,  # type: ignore[arg-type]
+        layout,
+        PurePosixPath("/remote/run-123/label-output"),
+        "owner/labels",
     )
 
-    assert commit == "c" * 40
-    tokens = shlex.split(ssh.commands[0])
-    assert tokens[:2] == ["/r/repo/.venv/bin/python", "-c"]
-    assert repr(str(output_dir)) in tokens[2]
-    assert repr(dataset_id) in tokens[2]
-    assert (
-        "from huggingface_hub import "
-        "CommitOperationAdd, CommitOperationDelete, HfApi, hf_hub_download"
-    ) in tokens[2]
-    assert "artifact_sha256" in tokens[2]
-    assert "create_commit" in tokens[2]
-    assert "publish_labeled_dataset" not in tokens[2]
-    assert "target_revision='main'" in tokens[2]
+    assert first == second == "c" * 40
+    assert len(fetched) == 5
+    assert len(published) == 2
+    assert published[0][0] == published[1][0]
+    assert published[0][1] == "owner/labels"
+    assert sorted(path.name for _, path in fetched) == sorted(
+        Path(relative).name for relative in remote_completion._LABEL_RELEASE_FILES
+    )
 
 
 def test_label_publication_commit_selects_latest_valid_record() -> None:
