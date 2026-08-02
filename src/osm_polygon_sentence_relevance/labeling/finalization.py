@@ -23,6 +23,13 @@ class LabelFinalizationError(RuntimeError):
     """Raised when complete labeled output cannot be proven."""
 
 
+_HERO_IMAGE_URL = (
+    "https://raw.githubusercontent.com/NoeFlandre/"
+    "osm-polygon-wikidata-sentence-relevance/main/docs/assets/"
+    "afghanistan-labeling-hero.png"
+)
+
+
 @dataclass(frozen=True, slots=True)
 class ValidatedLabeledPublication:
     """Validated facts used by publication."""
@@ -245,6 +252,8 @@ configs:
   - split: train
     path: sentences.parquet
 ---
+
+![Afghanistan sentence relevance dataset overview]({_HERO_IMAGE_URL})
 
 # Afghanistan polygon sentence relevance labels
 

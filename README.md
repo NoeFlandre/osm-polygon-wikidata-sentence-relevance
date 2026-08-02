@@ -1,3 +1,5 @@
+![Afghanistan sentence relevance dataset overview](docs/assets/afghanistan-labeling-hero.png)
+
 # OSM Polygon – Wikidata Sentence Relevance
 
 [![CI](https://github.com/NoeFlandre/osm-polygon-wikidata-sentence-relevance/actions/workflows/ci.yml/badge.svg)](https://github.com/NoeFlandre/osm-polygon-wikidata-sentence-relevance/actions/workflows/ci.yml)

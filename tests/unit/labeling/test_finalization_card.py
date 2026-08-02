@@ -124,6 +124,21 @@ def test_card_includes_github_repository_link(tmp_path: Path) -> None:
     )
 
 
+def test_card_starts_with_hero_image_after_front_matter(tmp_path: Path) -> None:
+    output = _build_publication(tmp_path)
+    card = (output / "README.md").read_text()
+    hero = (
+        "![Afghanistan sentence relevance dataset overview]("
+        "https://raw.githubusercontent.com/NoeFlandre/"
+        "osm-polygon-wikidata-sentence-relevance/main/docs/assets/"
+        "afghanistan-labeling-hero.png)"
+    )
+    assert hero in card
+    assert card.index(hero) < card.index(
+        "# Afghanistan polygon sentence relevance labels"
+    )
+
+
 def test_card_includes_immutable_input_revision_link(tmp_path: Path) -> None:
     output = _build_publication(tmp_path)
     card = (output / "README.md").read_text()
