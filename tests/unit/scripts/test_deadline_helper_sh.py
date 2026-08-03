@@ -298,7 +298,7 @@ def test_helper_signal_target_is_only_the_child(
         time.sleep(0.5)
         assert not sibling_marker.exists(), "helper signalled an unrelated process"
         # Sibling is still alive; clean it up.
-        sibling.terminate()
+        sibling.kill()
         sibling.wait(timeout=5)
     finally:
         if sibling.poll() is None:
