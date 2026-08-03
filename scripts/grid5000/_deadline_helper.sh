@@ -96,7 +96,8 @@ deadline_helper_run() {
         return 1
     fi
 
-    exec "${timeout_bin}" --foreground --preserve-status \
+    "${timeout_bin}" --foreground --preserve-status \
         --signal=INT --kill-after="${grace_seconds}" \
         "${duration_seconds}" "$@"
+    return $?
 }

@@ -42,7 +42,14 @@ jobs:
 
       - name: Quality and tests
         # just typecheck delegates to: uv run ty check
-        run: just check
+        env:
+          # Keep pytest fixtures off the runner's /tmp. The production
+          # streaming guard must continue to reject real /tmp paths, while
+          # CI tests need a durable non-denylisted fixture root.
+          TMPDIR: ${{ runner.temp }}/pytest-tmp
+        run: |
+          mkdir -p "$TMPDIR"
+          just check
 
       - name: Build and verify distributions
         run: just verify-dist

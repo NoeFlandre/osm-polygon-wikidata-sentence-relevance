@@ -179,7 +179,8 @@ def test_helper_executes_timeout_with_spaces_and_shell_metacharacters_quoted(
     hostile_timeout.write_text(
         "#!/usr/bin/env bash\n"
         f"printf '%s\\n' \"${{1}}:${{2}}\" >> '{marker}'\n"
-        "shift 2\n"
+        'while [[ "$1" == -* ]]; do shift; done\n'
+        "shift\n"
         '"$@"\n'
     )
     hostile_timeout.chmod(0o755)
