@@ -29,6 +29,12 @@ _HERO_IMAGE_URL = (
     "osm-polygon-wikidata-sentence-relevance/main/docs/assets/"
     "afghanistan-labeling-hero.png"
 )
+TRACKIO_SPACE_ID = "NoeFlandre/afghanistan-labeling-trackio"
+TRACKIO_SPACE_URL = f"https://huggingface.co/spaces/{TRACKIO_SPACE_ID}"
+PRESENTATION_URL = (
+    "https://noeflandre.github.io/osm-polygon-wikidata-sentence-relevance/"
+    "presentations/afghanistan-dataset-overview/index.html"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -328,6 +334,13 @@ The valid label values are **yes**, **no**, and **uncertain** (lowercase). Every
 | Unique polygons | {analytics["unique_polygons"]:,} |
 | Unique languages | {analytics["unique_languages"]:,} |
 | Strong-positive yield (both labels yes) | {rate(analytics["strong_positive_yield"])} |
+
+## Trackio
+
+The metrics and plots for this release are logged as one static run in the
+[public Trackio dashboard]({TRACKIO_SPACE_URL}).
+
+For a visual introduction, see the [Afghanistan dataset presentation]({PRESENTATION_URL}).
 
 ### Joint labels
 

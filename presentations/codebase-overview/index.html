@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Codebase overview</title>
+  <link rel="stylesheet" href="../shared/styles.css">
+</head>
+<body data-title="Codebase overview">
+  <main class="deck">
+    <section class="slide active">
+      <div class="kicker"><span>Codebase overview</span><span>01</span></div>
+      <h1>A pipeline to label sentences<br>for landuse and polygon relevance</h1>
+      <p class="subtitle">Clean local control. Remote CUDA work. Validated public artifacts.</p>
+      <div class="rule"></div>
+      <p class="lead"><strong>One command</strong>, with safe stop and resume.</p>
+      <div class="footer">osm-polygon-wikidata-sentence-relevance · Python 3.12+ · uv-managed</div>
+    </section>
+
+    <section class="slide">
+      <div class="kicker"><span>Codebase overview</span><span>02</span></div>
+      <h2>One command moves work from Mac to GPU and back</h2>
+      <p class="subtitle">The Mac owns identity, policy checks, monitoring, and publication. Grid’5000 owns inference.</p>
+      <div class="flow">
+        <div class="flow-step"><span class="num">01</span><h3>Mac operator</h3><p>Validate checkout, resolve immutable input, and create durable state.</p></div>
+        <div class="flow-step"><span class="num">02</span><h3>Grid’5000</h3><p>Select a policy-compliant site and submit a CUDA allocation.</p></div>
+        <div class="flow-step"><span class="num">03</span><h3>Remote runtime</h3><p>Run the pinned model and write validated batch checkpoints.</p></div>
+        <div class="flow-step"><span class="num">04</span><h3>Mac relay</h3><p>Read back the export, check it, and publish one Hub commit.</p></div>
+      </div>
+      <div class="panel" style="margin-top:7%;"><strong>Inference never falls back to the Mac.</strong> Ctrl-C stops monitoring only. Checkpoints and remote jobs remain.</div>
+      <div class="footer">Operator entry point: osm-polygon-grid5000 run --scope region --region afghanistan-latest --stage all</div>
+    </section>
+
+    <section class="slide">
+      <div class="kicker"><span>Codebase overview</span><span>03</span></div>
+      <h2>The repository has clear layers</h2>
+      <p class="subtitle">Each layer owns one kind of decision, so the public flow stays small while contracts stay explicit.</p>
+      <div class="two-col equal" style="margin-top:7%;">
+        <div class="outline"><strong class="blue">contracts</strong><br><span class="muted">schemas, constants, errors</span></div>
+        <div class="outline"><strong class="blue">sentences</strong><br><span class="muted">SAT segmentation, boundaries, finalization</span></div>
+        <div class="outline"><strong class="blue">labeling</strong><br><span class="muted">prompt, engine, validation, checkpoints</span></div>
+        <div class="outline"><strong class="orange">application</strong><br><span class="muted">pipeline and restartable shard work</span></div>
+        <div class="outline"><strong class="blue">operator</strong><br><span class="muted">SSH, OAR, policy, state, resume</span></div>
+        <div class="outline"><strong class="blue">output / publishing</strong><br><span class="muted">manifest, card, plots, Hub commit</span></div>
+      </div>
+      <div class="footer">The package layout follows the architecture documented under docs/architecture/.</div>
+    </section>
+
+    <section class="slide">
+      <div class="kicker"><span>Codebase overview</span><span>04</span></div>
+      <h2>Sentence generation is deterministic</h2>
+      <p class="subtitle">The split stage turns joined sections into clean, deduplicated sentence rows before labeling begins.</p>
+      <div class="flow" style="margin-top:4%;">
+        <div class="flow-step"><span class="num">01</span><h3>Discover</h3><p>Read the immutable six-table shard set for each region.</p></div>
+        <div class="flow-step"><span class="num">02</span><h3>Join</h3><p>Connect polygons to Wikipedia and Wikivoyage with integrity checks.</p></div>
+        <div class="flow-step"><span class="num">03</span><h3>Segment</h3><p>SaT infers boundaries. A conservative residual pass repairs clear punctuation boundaries.</p></div>
+        <div class="flow-step"><span class="num">04</span><h3>Finalize</h3><p>Trim, deduplicate, hash, validate, and export the stable schema.</p></div>
+      </div>
+      <div class="panel" style="margin-top:3%; padding:1.6% 3%;">Output keeps sentence text, neighbors, document metadata, polygon metadata, coordinates, and content hashes.</div>
+      <div class="footer">Core modules: ingestion, joins, sentences, finalization, and output validation.</div>
+    </section>
+
+    <section class="slide">
+      <div class="kicker"><span>Codebase overview</span><span>05</span></div>
+      <h2>Labeling is a second, resumable stage</h2>
+      <p class="subtitle">It adds two decisions without changing the source sentence or polygon metadata.</p>
+      <div class="two-col equal">
+        <div class="panel"><div class="label">PROMPT CONTEXT</div><ul class="bullets"><li>Target, previous, and next sentence</li><li>Polygon name and country</li><li>Language, page, and section title</li><li>OSM primary tag plus all OSM tags</li><li>Strict JSON and closed reason codes</li></ul></div>
+        <div class="outline"><div class="label">RUNTIME CONTRACT</div><p style="margin-top:10%; font-size:clamp(19px,2.4vw,30px); font-weight:700;">Qwen3.6-27B-Q4_K_M.gguf</p><p class="muted">llama.cpp on remote CUDA</p><p class="blue" style="margin-top:12%; font-size:clamp(18px,2.2vw,28px); font-weight:700;">parse → validate → repair → checkpoint</p><p class="muted" style="margin-top:8%;">Every batch binds to input, model, prompt, source commit, and server configuration.</p></div>
+      </div>
+      <div class="footer">Core modules: labeling/prompt.py, runner.py, validation.py, checkpoint.py, finalization.py.</div>
+    </section>
+
+    <section class="slide">
+      <div class="kicker"><span>Codebase overview</span><span>06</span></div>
+      <h2>Durable state makes walltime ordinary</h2>
+      <p class="subtitle">A run is a sequence of validated phases.</p>
+      <div class="state-row" style="margin-top:4%;">
+        <div class="state"><strong>created</strong><span>identity fixed</span></div><span class="state-arrow">→</span>
+        <div class="state"><strong>prepared</strong><span>assets staged</span></div><span class="state-arrow">→</span>
+        <div class="state"><strong>running</strong><span>OAR + logs</span></div><span class="state-arrow">→</span>
+        <div class="state"><strong>checkpointed</strong><span>batch safe</span></div><span class="state-arrow">→</span>
+        <div class="state"><strong>validated</strong><span>final files</span></div><span class="state-arrow">→</span>
+        <div class="state" style="background:#e7f5ff;"><strong class="blue">complete</strong><span>published</span></div>
+      </div>
+      <div class="panel" style="margin-top:3%; padding:1.6% 3%;"><strong>Resume rules</strong><br>Identity mismatch fails closed. Valid checkpoints are reused. Partial work is preserved. Remote jobs are reattached instead of duplicated when evidence says they are active.</div>
+      <div class="footer">State and checkpoint files live on the external data root with atomic writes and strict permissions.</div>
+    </section>
+
+    <section class="slide">
+      <div class="kicker"><span>Codebase overview</span><span>07</span></div>
+      <h2>Safety is enforced at the boundaries</h2>
+      <p class="subtitle">The pipeline refuses unsafe shortcuts before remote work or publication can begin.</p>
+      <ul class="bullets" style="margin-top:7%;">
+        <li><strong>Policy.</strong> Usage-policy checks run before every OAR submission.</li>
+        <li><strong>Storage.</strong> Soft-quota headroom is checked. Only managed completed runs can be cleaned.</li>
+        <li><strong>Identity.</strong> Source commit, input revision, model, prompt, and batch settings must match.</li>
+        <li><strong>Execution.</strong> GPU inference stays on the allocated CUDA node. No Mac fallback.</li>
+        <li><strong>Publication.</strong> Schema, hashes, card, and asset allowlist are checked before one Hub commit.</li>
+      </ul>
+      <div class="footer">Safety is part of the public contract, not an operator checklist kept outside the code.</div>
+    </section>
+
+    <section class="slide">
+      <div class="kicker"><span>Codebase overview</span><span>08</span></div>
+      <h2>Public artifacts are validated before upload</h2>
+      <p class="subtitle">The final boundary turns a run into a small, inspectable release.</p>
+      <div class="flow" style="margin-top:4%;">
+        <div class="flow-step"><span class="num">01</span><h3>Finalize</h3><p>Merge validated checkpoints and write sentences.parquet.</p></div>
+        <div class="flow-step"><span class="num">02</span><h3>Measure</h3><p>Compute counts, hashes, languages, coordinates, and label breakdowns from the table.</p></div>
+        <div class="flow-step"><span class="num">03</span><h3>Render</h3><p>Generate manifest, concise README, and deterministic PNG assets.</p></div>
+        <div class="flow-step"><span class="num">04</span><h3>Publish</h3><p>Read back the committed tree and compare bytes, schema, and metadata.</p></div>
+      </div>
+      <div class="panel" style="margin-top:3%; padding:1.6% 3%;"><strong>Release contract.</strong> sentences.parquet, manifest.json, README.md, and the two PNG assets.</div>
+      <div class="footer">Output and publishing modules own schema, hashes, card equality, and the Hub commit.</div>
+    </section>
+
+    <section class="slide">
+      <div class="kicker"><span>Codebase overview</span><span>09</span></div>
+      <h2>The toolchain keeps changes reviewable</h2>
+      <p class="subtitle">The repository uses a short, explicit developer loop.</p>
+      <div class="metric-grid" style="grid-template-columns:repeat(5,1fr);">
+        <div class="metric"><strong>uv</strong><span>locked environments</span></div>
+        <div class="metric"><strong>Ruff</strong><span>format + lint</span></div>
+        <div class="metric"><strong>Ty</strong><span>static types</span></div>
+        <div class="metric"><strong>pytest</strong><span>regression suite</span></div>
+        <div class="metric"><strong>Just</strong><span>repeatable checks</span></div>
+      </div>
+      <div class="panel" style="margin-top:9%;"><strong>pre-commit · GitHub Actions · MkDocs Material</strong><br><span class="muted">One clean command path is documented, tested, and published with the same source revision.</span></div>
+      <div class="footer">See CONTRIBUTING.md, justfile, pyproject.toml, .pre-commit-config.yaml, and .github/workflows/.</div>
+    </section>
+
+    <section class="slide">
+      <div class="kicker"><span>Codebase overview</span><span>10</span></div>
+      <h2>Start with the operator, then follow the contracts</h2>
+      <p class="subtitle">The fastest route for a new contributor is to read the public flow before implementation details.</p>
+      <div class="two-col equal" style="margin-top:3%;">
+        <div class="panel" style="padding:2% 3%;"><div class="label">RUN</div><div class="command" style="margin-top:4%; padding:3% 4%;">uv run osm-polygon-grid5000 run \
+  --scope region \
+  --region afghanistan-latest \
+  --stage all</div><p class="muted" style="margin-top:4%; margin-bottom:0;">Then read docs/reference/grid5000-operator.md and docs/architecture/overview.md.</p></div>
+        <div class="outline" style="padding:2% 3%;"><div class="label">PROJECT LINKS</div><p style="margin-top:4%; margin-bottom:0; font-size:clamp(15px,1.7vw,21px); line-height:1.55;"><a class="link" href="https://github.com/NoeFlandre/osm-polygon-wikidata-sentence-relevance">GitHub repository</a><br><span class="muted">Source, tests, and public docs</span><br><br><a class="link" href="https://huggingface.co/datasets/NoeFlandre/osm-polygon-wikidata-sentence-relevance">Hugging Face dataset</a><br><span class="muted">Published Afghanistan release</span></p></div>
+      </div>
+      <p class="lead muted" style="margin-top:2%; margin-bottom:0;">The Afghanistan release is the current proof of concept. The same contracts are designed to scale by region.</p>
+      <div class="footer">Public docs: https://noeflandre.github.io/osm-polygon-wikidata-sentence-relevance/</div>
+    </section>
+  </main>
+  <nav class="controls" aria-label="Presentation controls"><button data-action="prev" type="button">Previous</button><span class="counter">1 / 10</span><button data-action="next" type="button">Next</button></nav>
+  <script src="../shared/deck.js"></script>
+</body>
+</html>

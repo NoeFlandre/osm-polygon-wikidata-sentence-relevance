@@ -9,6 +9,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from osm_polygon_sentence_relevance.labeling.cli import main
+from osm_polygon_sentence_relevance.labeling.finalization import TRACKIO_SPACE_ID
 
 
 class Engine:
@@ -106,7 +107,7 @@ def test_track_command_logs_one_static_run_without_runtime_arguments() -> None:
             "output_dir": Path("/data/output"),
             "project": "project",
             "run_name": "run",
-            "space_id": None,
+            "space_id": TRACKIO_SPACE_ID,
         }
     ]
 

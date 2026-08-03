@@ -134,10 +134,15 @@ uv run osm-polygon-label-sentences track \
   --project afghanistan-labeling
 ```
 
-Add `--space-id OWNER/SPACE` to sync the static run to a Hugging Face Space.
+By default this syncs to the public
+[Afghanistan Trackio dashboard](https://huggingface.co/spaces/NoeFlandre/afghanistan-labeling-trackio).
+Use `--space-id OWNER/SPACE` to choose another Hugging Face Space.
 The command validates the manifest against the Parquet before initializing
 Trackio, then records one step (`step=0`) containing the KPI cards, tables,
 PNG plots, and interactive slice HTML.
+
+For a visual introduction, see the [Afghanistan dataset presentation](https://noeflandre.github.io/osm-polygon-wikidata-sentence-relevance/presentations/afghanistan-dataset-overview/index.html).
+For the implementation, see the [codebase overview](https://noeflandre.github.io/osm-polygon-wikidata-sentence-relevance/presentations/codebase-overview/index.html).
 
 ## Development setup
 

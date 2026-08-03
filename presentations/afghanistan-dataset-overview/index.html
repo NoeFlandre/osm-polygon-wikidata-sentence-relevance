@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Afghanistan dataset overview</title>
+  <link rel="stylesheet" href="../shared/styles.css">
+</head>
+<body data-title="Afghanistan dataset overview">
+  <main class="deck">
+    <section class="slide active">
+      <div class="kicker"><span>Dataset overview</span><span>01</span></div>
+      <h1>Afghanistan<br>sentence relevance</h1>
+      <p class="subtitle">A complete, labeled sentence table for one country</p>
+      <div class="rule"></div>
+      <p class="lead"><strong>54,462 rows</strong> · <strong>161 polygons</strong> · <strong>115 languages</strong></p>
+      <p class="lead muted">LLM-generated labels, published as a reproducible proof of concept.</p>
+      <img class="hero" src="../assets/afghanistan-labeling-hero.png" alt="Afghanistan dataset label overview">
+      <div class="footer">NoeFlandre/osm-polygon-wikidata-sentence-relevance · Apache-2.0 dataset release</div>
+    </section>
+
+    <section class="slide">
+      <div class="kicker"><span>Dataset overview</span><span>02</span></div>
+      <h2>One row joins language, place, and evidence</h2>
+      <p class="subtitle">The table keeps the source sentence and the model decision side by side.</p>
+      <div class="two-col">
+        <div class="panel">
+          <div class="label">REAL ROW · ARABIC WIKIPEDIA</div>
+          <p class="example-sentence">حالة الطقس في مطار نيلي .</p>
+          <p class="meta">sentence_id · 0<br>polygon_id · afghanistan-latest:way:1008689574<br>polygon_name · فرودگاه نیلی<br>language · ar · source · wikipedia</p>
+        </div>
+        <div class="outline">
+          <div class="label">DECISION FIELDS</div>
+          <div class="decision">
+            <span>landuse / cover</span><span class="value red">no</span>
+            <span class="reason">no_landuse_or_cover</span>
+            <span>target polygon</span><span class="value blue">yes</span>
+            <span class="reason">direct_polygon_reference</span>
+            <span>evidence</span><span class="value">مطار نيلي</span>
+          </div>
+        </div>
+      </div>
+      <div class="footer">Example values are read from the first row of the published Parquet artifact.</div>
+    </section>
+
+    <section class="slide">
+      <div class="kicker"><span>Dataset overview</span><span>03</span></div>
+      <h2>It covers one country at useful scale</h2>
+      <p class="subtitle">Large enough for analysis, still easy to inspect as a proof of concept.</p>
+      <div class="metric-grid" style="margin-top:4%;">
+        <div class="metric"><strong>54,462</strong><span>labeled sentence rows</span></div>
+        <div class="metric"><strong>161</strong><span>unique OSM polygons</span></div>
+        <div class="metric"><strong>1,680</strong><span>source documents</span></div>
+        <div class="metric"><strong>115</strong><span>language codes</span></div>
+      </div>
+      <div class="panel" style="margin-top:5%; padding:2% 3%;">
+        <div class="label">SOURCE MIX</div>
+        <div class="two-col equal" style="margin-top:2%;">
+          <p><strong>Wikipedia</strong><br><span class="muted">54,152 rows · 99.4%</span></p>
+          <p><strong>Wikivoyage</strong><br><span class="muted">310 rows · 0.6%</span></p>
+        </div>
+        <p class="muted" style="margin-top:2%; margin-bottom:0;">All 54,462 rows have latitude and longitude coordinates.</p>
+      </div>
+      <div class="footer">Counts are computed from the final Parquet table.</div>
+    </section>
+
+    <section class="slide">
+      <div class="kicker"><span>Dataset overview</span><span>04</span></div>
+      <h2>The two questions are independent</h2>
+      <p class="subtitle">A sentence can describe land use without naming the polygon, or name the polygon without describing land use.</p>
+      <div class="two-col">
+        <div class="chart-wrap"><img class="chart" src="../assets/label_distribution.png" alt="Land-use and polygon label distribution"></div>
+        <div class="side-list">
+          <h3>JOINT LABELS</h3>
+          <p><strong>no / no</strong><br>28,089</p>
+          <p><strong class="blue">no / yes</strong><br>15,965</p>
+          <p><strong class="blue">yes / yes</strong><br>9,911</p>
+          <p><strong class="orange">yes / no</strong><br>497</p>
+        </div>
+      </div>
+      <div class="footer">Labels are landuse_relevance / polygon_relevance. Values are from the final manifest.</div>
+    </section>
+
+    <section class="slide">
+      <div class="kicker"><span>Dataset overview</span><span>05</span></div>
+      <h2>Positive land-use labels span many languages</h2>
+      <p class="subtitle">The first 15 languages account for 6,836 of 10,408 positive land-use rows.</p>
+      <div class="two-col">
+        <div class="chart-wrap"><img class="chart" src="../assets/positive_languages.png" alt="Positive land-use language distribution"></div>
+        <div class="side-list">
+          <h3>TOP COUNTS</h3>
+          <p><strong>en</strong> 1,355<br><strong>fa</strong> 755<br><strong>de</strong> 559<br><strong>ps</strong> 495<br><strong>fr</strong> 476<br><strong>uz</strong> 475<br><strong>es</strong> 380</p>
+          <p class="muted">115 language codes appear in the table. The chart shows positive land-use rows.</p>
+        </div>
+      </div>
+      <div class="footer">Counts are derived from language and landuse_relevance == yes.</div>
+    </section>
+
+    <section class="slide">
+      <div class="kicker"><span>Dataset overview</span><span>06</span></div>
+      <h2>Labels come from a fixed, auditable context</h2>
+      <p class="subtitle">The model receives local context to resolve references. It is not asked to rewrite the sentence.</p>
+      <div class="flow" style="margin-top:4%;">
+        <div class="flow-step"><span class="num">01</span><h3>Source row</h3><p>Sentence, neighbors, polygon name, region, language, section title, and URL metadata.</p></div>
+        <div class="flow-step"><span class="num">02</span><h3>OSM context</h3><p>Primary OSM tag plus every stored OSM tag, kept deterministic and complete.</p></div>
+        <div class="flow-step"><span class="num">03</span><h3>Qwen3.6</h3><p>Q4_K_M GGUF served by llama.cpp on a remote CUDA GPU.</p></div>
+        <div class="flow-step"><span class="num">04</span><h3>Strict output</h3><p>Closed labels and reason codes are parsed, repaired, and checkpointed.</p></div>
+      </div>
+      <div class="panel" style="margin-top:3%; padding:1.6% 3%;"><strong>The two decisions</strong><br>1. Is the sentence relevant to land use or land cover?<br>2. Is it relevant to the named polygon?</div>
+      <div class="footer">Prompt version: afghanistan-landuse-polygon-v2.</div>
+    </section>
+
+    <section class="slide">
+      <div class="kicker"><span>Dataset overview</span><span>07</span></div>
+      <h2>The release is reproducible, not ground truth</h2>
+      <p class="subtitle">Every artifact is tied to immutable inputs, a model file, a prompt version, and a content hash.</p>
+      <div class="panel">
+        <div class="label">PROVENANCE</div>
+        <p class="meta" style="margin-top:8%;"><strong>Input</strong> · 9f595311898e<br><strong>Model</strong> · unsloth/Qwen3.6-27B-MTP-GGUF<br><strong>File</strong> · Qwen3.6-27B-Q4_K_M.gguf<br><strong>Engine</strong> · llama.cpp<br><strong>Prompt</strong> · afghanistan-landuse-polygon-v2<br><strong>Parquet SHA</strong> · 4e9f3300a3f93d5…</p>
+      </div>
+      <div class="footer">Labels are model output and should be audited before use as training truth.</div>
+    </section>
+
+    <section class="slide">
+      <div class="kicker"><span>Dataset overview</span><span>08</span></div>
+      <h2>A useful starting point for relevance work</h2>
+      <p class="subtitle">The release is ready for inspection and downstream experiments, with its limits visible.</p>
+      <div class="two-col equal">
+        <div class="panel"><div class="label">GOOD FIT</div><ul class="bullets"><li>Analyze which sentences mention a mapped polygon.</li><li>Study multilingual land-use and land-cover language.</li><li>Build a reviewed seed set for future classifiers.</li></ul></div>
+        <div class="outline"><div class="label red">READ WITH CARE</div><ul class="bullets"><li>Labels are generated by a language model, not human ground truth.</li><li>The scope is Afghanistan only and uses one fixed prompt.</li></ul></div>
+      </div>
+      <p class="lead muted">Dataset: <a class="link" href="https://huggingface.co/datasets/NoeFlandre/osm-polygon-wikidata-sentence-relevance">Hugging Face</a> · License: Apache-2.0</p>
+      <div class="footer">Public release for inspection and proof-of-concept work.</div>
+    </section>
+  </main>
+  <nav class="controls" aria-label="Presentation controls"><button data-action="prev" type="button">Previous</button><span class="counter">1 / 8</span><button data-action="next" type="button">Next</button></nav>
+  <script src="../shared/deck.js"></script>
+</body>
+</html>

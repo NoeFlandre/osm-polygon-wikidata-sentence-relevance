@@ -17,7 +17,7 @@ from .canary import select_canary_rows
 from .checkpoint import CheckpointStore
 from .contracts import RunIdentity
 from .engine import LabelEngine
-from .finalization import finalize_labeled_dataset
+from .finalization import TRACKIO_SPACE_ID, finalize_labeled_dataset
 from .prompt import PROMPT_VERSION, build_messages
 from .publication import publish_labeled_dataset
 from .repair import BoundedRepair
@@ -147,8 +147,11 @@ def _parser() -> argparse.ArgumentParser:
     track.add_argument("--run-name", default=None)
     track.add_argument(
         "--space-id",
-        default=None,
-        help="Optional Hugging Face Space ID for the Trackio static run",
+        default=TRACKIO_SPACE_ID,
+        help=(
+            "Hugging Face Space ID for the Trackio static run "
+            f"(default: {TRACKIO_SPACE_ID})"
+        ),
     )
     return parser
 

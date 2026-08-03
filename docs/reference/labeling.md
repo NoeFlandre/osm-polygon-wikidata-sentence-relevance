@@ -37,9 +37,11 @@ osm-polygon-label-sentences track \
   --run-name final-afghanistan
 ```
 
-Add `--space-id OWNER/SPACE` to sync the static run to a Hugging Face Space.
-Without it, Trackio uses its normal local storage. The command validates the
-manifest analytics against a fresh computation from `sentences.parquet` before
+By default the run is synced to the public
+[Afghanistan Trackio dashboard](https://huggingface.co/spaces/NoeFlandre/afghanistan-labeling-trackio).
+Use `--space-id OWNER/SPACE` to choose another Space, or call the Python API
+with `space_id=None` for local-only storage. The command validates the manifest
+analytics against a fresh computation from `sentences.parquet` before
 initializing Trackio. It records one `step=0` containing:
 
 - KPI cards for total labeled sentences, unique polygons, unique languages,
@@ -50,3 +52,6 @@ initializing Trackio. It records one `step=0` containing:
 - A selector-based HTML table for language, source, and `osm_primary_tag`.
   Groups below 100 sentences are omitted; each shown group has both-yes rate,
   uncertain rate, and sample size.
+
+The [Afghanistan dataset presentation](https://noeflandre.github.io/osm-polygon-wikidata-sentence-relevance/presentations/afghanistan-dataset-overview/index.html)
+provides a visual overview of the published table and labeling method.

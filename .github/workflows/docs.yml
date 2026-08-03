@@ -36,6 +36,18 @@ jobs:
       - name: Build strict site
         run: uv run mkdocs build --strict --site-dir site
 
+      - name: Add public HTML presentations
+        run: |
+          mkdir -p site/presentations/afghanistan-dataset-overview
+          mkdir -p site/presentations/codebase-overview
+          mkdir -p site/presentations/shared
+          mkdir -p site/presentations/assets
+          cp presentations/index.html site/presentations/index.html
+          cp presentations/afghanistan-dataset-overview/index.html site/presentations/afghanistan-dataset-overview/index.html
+          cp presentations/codebase-overview/index.html site/presentations/codebase-overview/index.html
+          cp presentations/shared/deck.js presentations/shared/styles.css site/presentations/shared/
+          cp presentations/assets/*.png site/presentations/assets/
+
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3.0.1
         with:

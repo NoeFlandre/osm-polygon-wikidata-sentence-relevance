@@ -150,6 +150,13 @@ def test_finalization_generates_factual_card_manifest_and_plots(tmp_path: Path) 
     assert "12.50 seconds" in card
     assert "unsloth/Qwen3.6-27B-MTP-GGUF" in card
     assert (
+        "https://huggingface.co/spaces/NoeFlandre/afghanistan-labeling-trackio" in card
+    )
+    assert (
+        "https://noeflandre.github.io/osm-polygon-wikidata-sentence-relevance/"
+        "presentations/afghanistan-dataset-overview/index.html" in card
+    )
+    assert (
         (output / "assets" / "label_distribution.png")
         .read_bytes()
         .startswith(b"\x89PNG")
