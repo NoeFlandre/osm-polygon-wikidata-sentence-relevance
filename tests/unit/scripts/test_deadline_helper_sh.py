@@ -59,7 +59,7 @@ def _make_dummy_child(tmp_path: Path, *, behaviour: str, duration: float) -> Pat
     script.write_text(
         "#!/usr/bin/env bash\n"
         f"set -e\n"
-        f"trap 'echo trapped >> {tmp_path}/child.signal' INT TERM\n"
+        f"trap 'echo trapped >> {tmp_path}/child.signal; exit 0' INT TERM\n"
         f"echo started >> {tmp_path}/child.signal\n"
         f"case '{behaviour}' in\n"
         f"  early)\n"
