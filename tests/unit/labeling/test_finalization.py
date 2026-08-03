@@ -150,6 +150,13 @@ def test_finalization_generates_factual_card_manifest_and_plots(tmp_path: Path) 
     assert "12.50 seconds" in card
     assert "unsloth/Qwen3.6-27B-MTP-GGUF" in card
     assert (
+        "https://huggingface.co/datasets/NoeFlandre/osm-polygon-wikidata-only" in card
+    )
+    assert "## Sentence preparation" in card
+    assert "wtpsplit` SaT model (`sat-12l-sm`)" in card
+    assert card.index("## Dataset metrics") < card.index("## Sentence preparation")
+    assert card.index("## Sentence preparation") < card.index("## Label summary")
+    assert (
         "https://huggingface.co/spaces/NoeFlandre/afghanistan-labeling-trackio" in card
     )
     assert (

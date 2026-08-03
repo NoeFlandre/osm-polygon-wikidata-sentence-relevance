@@ -31,6 +31,9 @@ _HERO_IMAGE_URL = (
 )
 TRACKIO_SPACE_ID = "NoeFlandre/afghanistan-labeling-trackio"
 TRACKIO_SPACE_URL = f"https://huggingface.co/spaces/{TRACKIO_SPACE_ID}"
+INPUT_DATASET_URL = (
+    "https://huggingface.co/datasets/NoeFlandre/osm-polygon-wikidata-only"
+)
 PRESENTATION_URL = (
     "https://noeflandre.github.io/osm-polygon-wikidata-sentence-relevance/"
     "presentations/afghanistan-dataset-overview/index.html"
@@ -310,21 +313,14 @@ configs:
 
 > **Warning:** the labels below are **model-generated**. They are not ground truth and must be audited before use as authoritative training data.
 
-This release contains **{row_count:,} labeled sentences** from the Afghanistan-only sentence dataset. {scope} Each row independently records two boolean decisions:
+This release contains **{row_count:,} labeled sentences** extracted from the
+[NoeFlandre/osm-polygon-wikidata-only dataset]({INPUT_DATASET_URL}). {scope} Each
+row independently records two boolean decisions:
 
 1. **Land use / land cover relevance** -- does the target sentence describe land use or land cover for the polygon?
 2. **Target polygon relevance** -- does the target sentence describe the *named polygon* itself?
 
 Every decision also carries a short reason code selected from the closed enumerations in the prompt.
-
-## Label summary
-
-The valid label values are **yes**, **no**, and **uncertain** (lowercase). Every row carries one label per question:
-
-| Question | yes | no | uncertain |
-|---|---:|---:|---:|
-| Land use / land cover | {value(land, "yes")} | {value(land, "no")} | {value(land, "uncertain")} |
-| Target polygon | {value(polygon, "yes")} | {value(polygon, "no")} | {value(polygon, "uncertain")} |
 
 ## Dataset metrics
 
@@ -334,6 +330,36 @@ The valid label values are **yes**, **no**, and **uncertain** (lowercase). Every
 | Unique polygons | {analytics["unique_polygons"]:,} |
 | Unique languages | {analytics["unique_languages"]:,} |
 | Strong-positive yield (both labels yes) | {rate(analytics["strong_positive_yield"])} |
+
+## Sentence preparation
+
+The sentences were extracted from the linked upstream dataset after its article
+and polygon joins. Each source section was consumed once by the multilingual
+`wtpsplit` SaT model (`sat-12l-sm`). SaT proposes boundaries; it does not rewrite
+the text. A conservative repair then separates only high-confidence punctuation
+boundaries that remain inside a model segment. It keeps terminal punctuation
+with the preceding sentence and avoids splitting abbreviations, initials,
+lowercase or numeric continuations, and URL query strings. For Arabic-tagged
+rows, a period boundary also requires the following clause to begin in Arabic
+script.
+
+Each segment is trimmed and normalized deterministically: Unicode NFC is
+applied, selected zero-width and control characters are handled, whitespace is
+collapsed, and leading MediaWiki edit markers are removed. Case, punctuation,
+accents, ZWNJ, and ZWJ are preserved. Empty normalized segments are dropped.
+Adjacent context is assigned before deduplication, then exact duplicates are
+collapsed by `(polygon_id, language, sentence_text_normalized)` using a stable
+canonical occurrence. Publication scans the final table with the same
+high-confidence boundary predicate and refuses any residual embedded boundary.
+
+## Label summary
+
+The valid label values are **yes**, **no**, and **uncertain** (lowercase). Every row carries one label per question:
+
+| Question | yes | no | uncertain |
+|---|---:|---:|---:|
+| Land use / land cover | {value(land, "yes")} | {value(land, "no")} | {value(land, "uncertain")} |
+| Target polygon | {value(polygon, "yes")} | {value(polygon, "no")} | {value(polygon, "uncertain")} |
 
 ## Trackio
 
