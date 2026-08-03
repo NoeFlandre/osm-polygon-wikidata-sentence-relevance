@@ -147,7 +147,6 @@ def test_finalization_generates_factual_card_manifest_and_plots(tmp_path: Path) 
     card = (output / "README.md").read_text()
     assert "3 labeled sentences" in card
     assert "2 (66.67%)" in card
-    assert "12.50 seconds" in card
     assert "unsloth/Qwen3.6-27B-MTP-GGUF" in card
     assert (
         "https://huggingface.co/datasets/NoeFlandre/osm-polygon-wikidata-only" in card
@@ -155,11 +154,21 @@ def test_finalization_generates_factual_card_manifest_and_plots(tmp_path: Path) 
     assert "## Sentence preparation" in card
     assert "wtpsplit` SaT model (`sat-12l-sm`)" in card
     assert card.index("## Dataset metrics") < card.index("## Sentence preparation")
-    assert card.index("## Sentence preparation") < card.index("## Label summary")
+    assert card.index("## Sentence preparation") < card.index("## Sentence labeling")
+    assert card.index("## Sentence labeling") < card.index("## Label summary")
     assert "| Land use / land cover | Polygon relevance | Count | Share |" in card
     assert "| Stage | Polygons |" in card
     assert "![Joint label heatmap]" not in card
     assert "![Polygon coverage funnel]" not in card
+    assert "slice_yield.html" not in card
+    assert "public Trackio dashboard provides an interactive slice table" in card
+    assert "## Label and reason codes" not in card
+    assert "![Label distributions]" not in card
+    assert "## Language coverage" in card
+    assert "![Positive-label languages]" in card
+    assert "## Repair" not in card
+    assert "## Runtime" not in card
+    assert "Initial inference:" not in card
     assert (
         "https://huggingface.co/spaces/NoeFlandre/afghanistan-labeling-trackio" in card
     )

@@ -218,9 +218,6 @@ def _render_card(
 ) -> str:
     land = stats["landuse_relevance"]
     polygon = stats["polygon_relevance"]
-    land_reasons = stats.get("landuse_reasons", {})
-    polygon_reasons = stats.get("polygon_reasons", {})
-    positive_languages = stats.get("positive_languages", {})
     analytics = stats["analytics"]
 
     def percent(count: int) -> str:
@@ -233,52 +230,12 @@ def _render_card(
         return f"{count:,} ({percent(count)})"
 
     server_config = _server_config(identity)
-    initial_inference = float(timing.get("initial_inference_seconds", 0.0))
-    repair_inference = float(timing.get("repair_inference_seconds", 0.0))
-    total_inference = float(timing.get("inference_seconds", 0.0))
-    total_wall = float(timing.get("total_wall_seconds", 0.0))
-    repair_total = int(timing.get("repair_rows_total", 0))
-    repair_succeeded = int(timing.get("repair_rows_succeeded", 0))
-    repair_exhausted = int(timing.get("repair_rows_exhausted", 0))
-    completed = int(timing.get("completed", row_count))
-    total = int(timing.get("total", row_count))
-    interrupted = bool(timing.get("interrupted", False))
-    throughput = (completed / total_inference) if total_inference > 0 else 0.0
 
     scope = (
         f"This is a representative **{row_count:,}-row canary** selected "
         "deterministically for source and language coverage."
         if identity.get("row_limit", 0)
         else "This release labels the complete Afghanistan input."
-    )
-
-    repair_summary = (
-        f"{repair_succeeded:,} repaired of {repair_total:,} attempted "
-        f"({repair_exhausted:,} exhausted after repair attempts)"
-        if repair_total
-        else "No repair attempts were needed."
-    )
-
-    language_lines = (
-        "\n".join(
-            f"- {language}: {count:,}" for language, count in positive_languages.items()
-        )
-        or "- (none)"
-    )
-
-    land_reason_lines = (
-        "\n".join(f"- `{code}`: {count:,}" for code, count in land_reasons.items())
-        or "- (none)"
-    )
-    polygon_reason_lines = (
-        "\n".join(f"- `{code}`: {count:,}" for code, count in polygon_reasons.items())
-        or "- (none)"
-    )
-
-    allocation_lines = (
-        f"- Completed allocations: {max(1, total // 5000):,}"
-        if not interrupted
-        else f"- Last run interrupted at {completed:,}/{total:,} rows"
     )
 
     def rate(value: float) -> str:
@@ -352,6 +309,21 @@ collapsed by `(polygon_id, language, sentence_text_normalized)` using a stable
 canonical occurrence. Publication scans the final table with the same
 high-confidence boundary predicate and refuses any residual embedded boundary.
 
+## Sentence labeling
+
+The labeler used `{identity["model_repo_id"]}` (`{identity["model_file"]}`), pinned at model revision `{identity["model_revision"]}`, through `{identity["engine"]} {identity["engine_version"]}`. Prompt `{identity["prompt_version"]}` supplied the model with:
+
+- the **target sentence**
+- the immediately **adjacent** sentences
+- the **polygon name**
+- the **region / country** (`{identity.get("region", "afghanistan")}`)
+- the **language** code
+- the **page title** and **section title**
+- the **primary OSM tag**
+- every other **OSM tag**
+
+Structured output was validated against the closed enumerations and re-issued under repair until either a valid label pair was produced or the per-row retry budget was exhausted.
+
 ## Label summary
 
 The valid label values are **yes**, **no**, and **uncertain** (lowercase). Every row carries one label per question:
@@ -393,40 +365,14 @@ The bars show the normalized share of all labeled sentences for each reason code
 
 ![Reason-code distribution](https://huggingface.co/datasets/{dataset_repo_id}/resolve/main/assets/reason_code_distribution.png)
 
-The [slice-yield table](https://huggingface.co/datasets/{dataset_repo_id}/resolve/main/assets/slice_yield.html) provides selectors for language, source, and `osm_primary_tag`. It shows both-yes rate, uncertain rate, and sample size; groups smaller than 100 sentences are omitted. The release contains {slice_count:,} qualifying groups.
+The public Trackio dashboard provides an interactive slice table for language,
+source, and `osm_primary_tag`. It shows both-yes rate, uncertain rate, and
+sample size; groups smaller than 100 sentences are omitted. The release
+contains {slice_count:,} qualifying groups.
 
-## Label and reason codes
-
-Land-use / land-cover reasons:
-
-{land_reason_lines}
-
-Polygon-relevance reasons:
-
-{polygon_reason_lines}
-
-Positive-label language coverage (top languages, sorted by count):
-
-{language_lines}
-
-![Label distributions](https://huggingface.co/datasets/{dataset_repo_id}/resolve/main/assets/label_distribution.png)
+## Language coverage
 
 ![Positive-label languages](https://huggingface.co/datasets/{dataset_repo_id}/resolve/main/assets/positive_languages.png)
-
-## Method
-
-The labeler used `{identity["model_repo_id"]}` (`{identity["model_file"]}`), pinned at model revision `{identity["model_revision"]}`, through `{identity["engine"]} {identity["engine_version"]}`. Prompt `{identity["prompt_version"]}` supplied the model with:
-
-- the **target sentence**
-- the immediately **adjacent** sentences
-- the **polygon name**
-- the **region / country** (`{identity.get("region", "afghanistan")}`)
-- the **language** code
-- the **page title** and **section title**
-- the **primary OSM tag**
-- every other **OSM tag**
-
-Structured output was validated against the closed enumerations and re-issued under repair until either a valid label pair was produced or the per-row retry budget was exhausted.
 
 ## Model provenance
 
@@ -439,22 +385,6 @@ Structured output was validated against the closed enumerations and re-issued un
   - `llama_per_slot_context`: `{server_config["llama_per_slot_context"]}`
   - `llama_total_context`: `{server_config["llama_total_context"]}`
   - `request_concurrency`: `{server_config["request_concurrency"]}`
-
-## Repair
-
-{repair_summary}
-
-- Initial inference: **{initial_inference:.2f} seconds**
-- Repair inference: **{repair_inference:.2f} seconds**
-- Combined inference: **{total_inference:.2f} seconds**
-
-## Runtime
-
-- Total elapsed: **{total_wall:.2f} seconds**
-- Throughput: **{throughput:.3f} rows/second**
-- Rows completed: **{completed:,} / {total:,}**
-
-{allocation_lines}
 
 ## Provenance
 
