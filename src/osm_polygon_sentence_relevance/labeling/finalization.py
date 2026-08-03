@@ -376,8 +376,6 @@ Counts and percentages use all labeled sentences.
 |---|---|---:|---:|
 {joint_lines}
 
-![Joint label heatmap](https://huggingface.co/datasets/{dataset_repo_id}/resolve/main/assets/joint_label_heatmap.png)
-
 ### Polygon coverage
 
 The funnel counts unique polygons with at least one sentence meeting each condition.
@@ -388,8 +386,6 @@ The funnel counts unique polygons with at least one sentence meeting each condit
 | At least one polygon-relevant sentence | {funnel["polygon_relevant_polygons"]:,} |
 | At least one land-use / land-cover-relevant sentence | {funnel["landuse_relevant_polygons"]:,} |
 | At least one sentence with both labels yes | {funnel["both_yes_polygons"]:,} |
-
-![Polygon coverage funnel](https://huggingface.co/datasets/{dataset_repo_id}/resolve/main/assets/polygon_coverage_funnel.png)
 
 ### Reason-code distribution
 

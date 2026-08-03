@@ -156,6 +156,10 @@ def test_finalization_generates_factual_card_manifest_and_plots(tmp_path: Path) 
     assert "wtpsplit` SaT model (`sat-12l-sm`)" in card
     assert card.index("## Dataset metrics") < card.index("## Sentence preparation")
     assert card.index("## Sentence preparation") < card.index("## Label summary")
+    assert "| Land use / land cover | Polygon relevance | Count | Share |" in card
+    assert "| Stage | Polygons |" in card
+    assert "![Joint label heatmap]" not in card
+    assert "![Polygon coverage funnel]" not in card
     assert (
         "https://huggingface.co/spaces/NoeFlandre/afghanistan-labeling-trackio" in card
     )
