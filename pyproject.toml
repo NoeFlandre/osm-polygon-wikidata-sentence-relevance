@@ -58,6 +58,9 @@ hub = [
     "numpy>=1.26",
     "pillow>=10.0",
 ]
+tracking = [
+    "trackio==0.26.0",
+]
 docs = [
     "mkdocs-material>=9.6,<10",
 ]

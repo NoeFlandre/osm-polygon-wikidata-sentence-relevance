@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -71,6 +72,43 @@ def test_publish_command_does_not_require_label_runtime_arguments(
         == 0
     )
     assert calls == [(tmp_path / "output", "owner/dataset")]
+
+
+def test_track_command_logs_one_static_run_without_runtime_arguments() -> None:
+    calls: list[dict[str, object]] = []
+
+    def track(output_dir: Path, **kwargs: object) -> object:
+        calls.append({"output_dir": output_dir, **kwargs})
+        return SimpleNamespace(
+            project="project",
+            run_name="run",
+            row_count=10,
+            kpis={"strong_positive_yield": 0.5},
+            space_id=None,
+        )
+
+    result = main(
+        [
+            "track",
+            "--output-dir",
+            "/data/output",
+            "--project",
+            "project",
+            "--run-name",
+            "run",
+        ],
+        track_fn=track,
+    )
+
+    assert result == 0
+    assert calls == [
+        {
+            "output_dir": Path("/data/output"),
+            "project": "project",
+            "run_name": "run",
+            "space_id": None,
+        }
+    ]
 
 
 def test_label_command_runs_and_reports_resumable_result(

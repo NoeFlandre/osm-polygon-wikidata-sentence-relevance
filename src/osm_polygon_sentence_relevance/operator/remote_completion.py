@@ -20,6 +20,10 @@ _LABEL_RELEASE_FILES: tuple[str, ...] = (
     "README.md",
     "assets/label_distribution.png",
     "assets/positive_languages.png",
+    "assets/joint_label_heatmap.png",
+    "assets/polygon_coverage_funnel.png",
+    "assets/reason_code_distribution.png",
+    "assets/slice_yield.html",
 )
 
 

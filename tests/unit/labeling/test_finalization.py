@@ -138,6 +138,10 @@ def test_finalization_generates_factual_card_manifest_and_plots(tmp_path: Path) 
     assert set(manifest["artifact_sha256"]) == {
         "assets/label_distribution.png",
         "assets/positive_languages.png",
+        "assets/joint_label_heatmap.png",
+        "assets/polygon_coverage_funnel.png",
+        "assets/reason_code_distribution.png",
+        "assets/slice_yield.html",
         "sentences.parquet",
     }
     card = (output / "README.md").read_text()
@@ -303,6 +307,10 @@ def test_publication_is_one_commit_and_includes_all_artifacts(tmp_path: Path) ->
         "README.md",
         "assets/label_distribution.png",
         "assets/positive_languages.png",
+        "assets/joint_label_heatmap.png",
+        "assets/polygon_coverage_funnel.png",
+        "assets/reason_code_distribution.png",
+        "assets/slice_yield.html",
     }
 
 
@@ -382,6 +390,10 @@ def test_publication_default_hub_integration_verifies_exact_commit(
                 "README.md",
                 "assets/label_distribution.png",
                 "assets/positive_languages.png",
+                "assets/joint_label_heatmap.png",
+                "assets/polygon_coverage_funnel.png",
+                "assets/reason_code_distribution.png",
+                "assets/slice_yield.html",
                 ".gitattributes",
             ],
         }

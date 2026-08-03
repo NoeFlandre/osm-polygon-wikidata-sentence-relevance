@@ -15,6 +15,7 @@ from typing import Any
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from .analytics import build_label_analytics, render_analytics_assets
 from .canary import select_canary_rows
 from .checkpoint import CheckpointStore
 
@@ -46,6 +47,21 @@ _FILES = (
     "README.md",
     "assets/label_distribution.png",
     "assets/positive_languages.png",
+    "assets/joint_label_heatmap.png",
+    "assets/polygon_coverage_funnel.png",
+    "assets/reason_code_distribution.png",
+    "assets/slice_yield.html",
+)
+_ANALYTICS_ASSETS = _FILES[5:]
+_ANALYTICS_COLUMNS = (
+    "polygon_id",
+    "language",
+    "source",
+    "osm_primary_tag",
+    "landuse_relevance",
+    "polygon_relevance",
+    "landuse_reason",
+    "polygon_reason",
 )
 
 
@@ -123,6 +139,22 @@ def _server_config(identity: dict[str, Any]) -> dict[str, int]:
     }
 
 
+def _analytics_table(table: pa.Table) -> pa.Table:
+    """Supply null dimensions for legacy fixtures lacking optional metadata.
+
+    Production labeling always carries these columns. Keeping null columns for
+    older checkpoint fixtures preserves the publication contract without
+    inventing polygon, source, or tag values.
+    """
+
+    for name in _ANALYTICS_COLUMNS:
+        if name not in table.column_names:
+            table = table.append_column(
+                name, pa.nulls(table.num_rows, type=pa.string())
+            )
+    return table
+
+
 def _validate_split_timing(timing: dict[str, Any]) -> None:
     """Ensure the persisted timing uses the split inference schema."""
 
@@ -180,6 +212,7 @@ def _render_card(
     land_reasons = stats.get("landuse_reasons", {})
     polygon_reasons = stats.get("polygon_reasons", {})
     positive_languages = stats.get("positive_languages", {})
+    analytics = stats["analytics"]
 
     def percent(count: int) -> str:
         if row_count == 0:
@@ -239,6 +272,18 @@ def _render_card(
         else f"- Last run interrupted at {completed:,}/{total:,} rows"
     )
 
+    def rate(value: float) -> str:
+        return f"{value * 100:.2f}%"
+
+    joint_lines = "\n".join(
+        f"| {land} | {polygon} | {analytics['joint_counts'][f'{land}|{polygon}']:,} | "
+        f"{rate(analytics['joint_percentages'][f'{land}|{polygon}'])} |"
+        for land in ("yes", "no", "uncertain")
+        for polygon in ("yes", "no", "uncertain")
+    )
+    funnel = analytics["coverage_funnel"]
+    slice_count = len(analytics.get("slices", []))
+
     return f"""---
 license: apache-2.0
 task_categories:
@@ -274,6 +319,46 @@ The valid label values are **yes**, **no**, and **uncertain** (lowercase). Every
 |---|---:|---:|---:|
 | Land use / land cover | {value(land, "yes")} | {value(land, "no")} | {value(land, "uncertain")} |
 | Target polygon | {value(polygon, "yes")} | {value(polygon, "no")} | {value(polygon, "uncertain")} |
+
+## Dataset metrics
+
+| Metric | Value |
+|---|---:|
+| Labeled sentences | {analytics["total_labeled_sentences"]:,} |
+| Unique polygons | {analytics["unique_polygons"]:,} |
+| Unique languages | {analytics["unique_languages"]:,} |
+| Strong-positive yield (both labels yes) | {rate(analytics["strong_positive_yield"])} |
+
+### Joint labels
+
+Counts and percentages use all labeled sentences.
+
+| Land use / land cover | Polygon relevance | Count | Share |
+|---|---|---:|---:|
+{joint_lines}
+
+![Joint label heatmap](https://huggingface.co/datasets/{dataset_repo_id}/resolve/main/assets/joint_label_heatmap.png)
+
+### Polygon coverage
+
+The funnel counts unique polygons with at least one sentence meeting each condition.
+
+| Stage | Polygons |
+|---|---:|
+| All polygons | {funnel["all_polygons"]:,} |
+| At least one polygon-relevant sentence | {funnel["polygon_relevant_polygons"]:,} |
+| At least one land-use / land-cover-relevant sentence | {funnel["landuse_relevant_polygons"]:,} |
+| At least one sentence with both labels yes | {funnel["both_yes_polygons"]:,} |
+
+![Polygon coverage funnel](https://huggingface.co/datasets/{dataset_repo_id}/resolve/main/assets/polygon_coverage_funnel.png)
+
+### Reason-code distribution
+
+The bars show the normalized share of all labeled sentences for each reason code.
+
+![Reason-code distribution](https://huggingface.co/datasets/{dataset_repo_id}/resolve/main/assets/reason_code_distribution.png)
+
+The [slice-yield table](https://huggingface.co/datasets/{dataset_repo_id}/resolve/main/assets/slice_yield.html) provides selectors for language, source, and `osm_primary_tag`. It shows both-yes rate, uncertain rate, and sample size; groups smaller than 100 sentences are omitted. The release contains {slice_count:,} qualifying groups.
 
 ## Label and reason codes
 
@@ -419,15 +504,19 @@ def finalize_labeled_dataset(
                 ]
             ),
         }
+        analytics = build_label_analytics(_analytics_table(table))
+        stats["analytics"] = analytics.to_dict()
         timing_path = store.root / "timing.json"
         timing = json.loads(timing_path.read_text()) if timing_path.is_file() else {}
         _render_plots(table, staging / "assets")
+        render_analytics_assets(analytics, staging / "assets")
         artifact_sha256 = {
             name: _sha256(staging / name)
             for name in (
                 "sentences.parquet",
                 "assets/label_distribution.png",
                 "assets/positive_languages.png",
+                *(_ANALYTICS_ASSETS),
             )
         }
         manifest = _manifest(
@@ -495,6 +584,7 @@ def validate_labeled_publication(directory: Path) -> ValidatedLabeledPublication
         "sentences.parquet",
         "assets/label_distribution.png",
         "assets/positive_languages.png",
+        *(_ANALYTICS_ASSETS),
     ):
         if artifact_sha256.get(name) != _sha256(directory / name):
             raise LabelFinalizationError("artifact SHA-256 mismatch")
@@ -506,6 +596,9 @@ def validate_labeled_publication(directory: Path) -> ValidatedLabeledPublication
     for field in ("landuse_relevance", "polygon_relevance"):
         if stats.get(field) != _distribution(table[field].to_pylist()):
             raise LabelFinalizationError("labeled publication statistics mismatch")
+    expected_analytics = build_label_analytics(_analytics_table(table)).to_dict()
+    if stats.get("analytics") != expected_analytics:
+        raise LabelFinalizationError("labeled publication analytics mismatch")
     persisted_card = (directory / "README.md").read_text()
     rendered_card = _render_card(
         dataset_repo_id=str(manifest["dataset_repo_id"]),

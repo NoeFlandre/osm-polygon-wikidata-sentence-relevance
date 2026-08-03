@@ -116,6 +116,29 @@ factual dataset card and publish to the existing Hub dataset.
 Production inference uses the Grid'5000 CUDA workflow documented in
 [`docs/guides/grid5000.md`](docs/guides/grid5000.md).
 
+## Final Afghanistan labeling metrics
+
+The published card and manifest are rendered from the final labeled Parquet.
+The current Afghanistan release contains **54,462 labeled sentences**, **161
+unique polygons**, and **115 languages**. The strong-positive yield, where both
+questions are `yes`, is **18.20%**. The card also contains the joint-label
+heatmap, polygon coverage funnel, normalized reason-code charts, and a
+selector-based slice table for language, source, and `osm_primary_tag`.
+
+After finalization, log those same validated facts as one static Trackio run:
+
+```bash
+uv sync --locked --extra tracking
+uv run osm-polygon-label-sentences track \
+  --output-dir /path/to/label-publication \
+  --project afghanistan-labeling
+```
+
+Add `--space-id OWNER/SPACE` to sync the static run to a Hugging Face Space.
+The command validates the manifest against the Parquet before initializing
+Trackio, then records one step (`step=0`) containing the KPI cards, tables,
+PNG plots, and interactive slice HTML.
+
 ## Development setup
 
 This project uses [uv](https://github.com/astral-sh/uv) for Python
@@ -183,7 +206,7 @@ triggering any network access.
 
 ## Optional extras
 
-The base install pulls in only `pyarrow`. Two extras are available:
+The base install pulls in only `pyarrow`. Three extras are available:
 
 - `segmentation` (`wtpsplit==2.2.1` + `torch>=2.2,<3`) — installs the
   `wtpsplit` SaT adapter and its PyTorch runtime, as required by the
@@ -197,6 +220,8 @@ The base install pulls in only `pyarrow`. Two extras are available:
 - `hub` (`huggingface_hub>=0.20.0`) — required for Hub input acquisition
   through `--input-dataset-id` and for programmatic publishing through
   `publish_export_directory`.
+- `tracking` (`trackio==0.26.0`) — required for the explicit `track` command,
+  which logs one final static run from a validated labeled publication.
 
 Both extras are imported lazily; importing their respective modules is
 side-effect-free when the dependency is not installed.

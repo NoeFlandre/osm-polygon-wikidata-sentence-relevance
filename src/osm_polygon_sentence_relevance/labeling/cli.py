@@ -29,6 +29,7 @@ from .runtime import (
     build_runtime_plan,
     resolve_engine_factory,
 )
+from .tracking import log_static_labeling_run
 from .validation import parse_label_response
 
 MODEL_REPO_ID = "unsloth/Qwen3.6-27B-MTP-GGUF"
@@ -138,6 +139,17 @@ def _parser() -> argparse.ArgumentParser:
     publish = sub.add_parser("publish", help="Validate and publish final artifacts")
     publish.add_argument("--output-dir", required=True)
     publish.add_argument("--dataset-id", required=True)
+    track = sub.add_parser(
+        "track", help="Log one static Trackio run from final labeled artifacts"
+    )
+    track.add_argument("--output-dir", required=True)
+    track.add_argument("--project", required=True)
+    track.add_argument("--run-name", default=None)
+    track.add_argument(
+        "--space-id",
+        default=None,
+        help="Optional Hugging Face Space ID for the Trackio static run",
+    )
     return parser
 
 
@@ -266,6 +278,7 @@ def main(
         [argparse.Namespace], LabelEngine
     ] = _default_engine_factory,
     publish_fn: Callable[..., Any] = publish_labeled_dataset,
+    track_fn: Callable[..., Any] = log_static_labeling_run,
 ) -> int:
     """Run one explicit labeling operation."""
 
@@ -276,6 +289,26 @@ def main(
             print(
                 json.dumps(
                     {"commit_id": result.commit_id, "commit_url": result.commit_url},
+                    sort_keys=True,
+                )
+            )
+            return 0
+        if args.command == "track":
+            result = track_fn(
+                Path(args.output_dir),
+                project=args.project,
+                run_name=args.run_name,
+                space_id=args.space_id,
+            )
+            print(
+                json.dumps(
+                    {
+                        "project": result.project,
+                        "run_name": result.run_name,
+                        "rows": result.row_count,
+                        "kpis": result.kpis,
+                        "space_id": result.space_id,
+                    },
                     sort_keys=True,
                 )
             )

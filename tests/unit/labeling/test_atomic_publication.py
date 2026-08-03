@@ -2,19 +2,21 @@
 
 The publisher must:
 
-1. validate the local 5-file labeled release first;
+1. validate the local labeled release first;
 2. inspect the target repository's current tree;
 3. construct one Hub commit that:
    - adds/replaces:
      sentences.parquet, manifest.json, README.md,
-     assets/label_distribution.png, assets/positive_languages.png
+     assets/label_distribution.png, assets/positive_languages.png,
+     assets/joint_label_heatmap.png, assets/polygon_coverage_funnel.png,
+     assets/reason_code_distribution.png, assets/slice_yield.html
    - deletes only explicitly allowlisted obsolete paths
      (assets/geographic_coverage.png, assets/language_distribution.png)
    - preserves .gitattributes
 4. refuse publication if unexpected remote content exists;
 5. after the commit, snapshot_download the immutable commit tree and
-   verify exactly .gitattributes plus the five labeled-release files;
-6. independently validate all five artifacts (row count, every SHA);
+   verify exactly .gitattributes plus the labeled-release files;
+6. independently validate every artifact (row count, every SHA);
 7. verify the target revision is ``main``;
 8. do not create a branch or repository;
 9. do not accept a token argument.
@@ -206,7 +208,7 @@ def _build_publication(tmp_path: Path) -> Path:
 
 
 # ---------------------------------------------------------------------------
-# 1. Clean replacement: only the five labeled-release files exist remotely.
+# 1. Clean replacement: only the labeled-release files exist remotely.
 # ---------------------------------------------------------------------------
 
 
@@ -240,6 +242,10 @@ def test_clean_replacement_atomically_replaces(tmp_path: Path) -> None:
         "README.md",
         "assets/label_distribution.png",
         "assets/positive_languages.png",
+        "assets/joint_label_heatmap.png",
+        "assets/polygon_coverage_funnel.png",
+        "assets/reason_code_distribution.png",
+        "assets/slice_yield.html",
     }
     add_paths = {op["path_in_repo"] for op in operations if op["op"] == "add"}
     delete_paths = {op["path_in_repo"] for op in operations if op["op"] == "delete"}

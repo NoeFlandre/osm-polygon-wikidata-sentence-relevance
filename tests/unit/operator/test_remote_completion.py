@@ -168,7 +168,7 @@ def test_publish_label_fetches_once_and_reuses_seagate_relay(
     )
 
     assert first == second == "c" * 40
-    assert len(fetched) == 5
+    assert len(fetched) == 9
     assert len(published) == 2
     assert published[0][0] == published[1][0]
     assert published[0][1] == "owner/labels"

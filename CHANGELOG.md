@@ -18,6 +18,8 @@ pre-1.0 package.
   serving with a llama.cpp fallback, factual timing/ETA, and atomic labels.
 - Automatic labeled-dataset finalization, data-derived card statistics and
   plots, closed-layout validation, and single-commit Hugging Face publication.
+- Deterministic final-label analytics and an optional Trackio `track` command
+  that logs one static run with KPI cards, tables, plots, and slice yields.
 - A guarded, non-publishing Afghanistan labeling canary with deterministic
   source/language coverage, real structured-inference probing, and
   non-interactive high-memory Grid'5000 submission.
