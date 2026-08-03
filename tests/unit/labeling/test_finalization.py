@@ -151,6 +151,9 @@ def test_finalization_generates_factual_card_manifest_and_plots(tmp_path: Path) 
     assert (
         "https://huggingface.co/datasets/NoeFlandre/osm-polygon-wikidata-only" in card
     )
+    assert (
+        "https://github.com/NoeFlandre/osm-polygon-wikidata-sentence-relevance" in card
+    )
     assert "## Sentence preparation" in card
     assert "wtpsplit` SaT model (`sat-12l-sm`)" in card
     assert card.index("## Dataset metrics") < card.index("## Sentence preparation")

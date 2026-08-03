@@ -1,4 +1,4 @@
-"""Improved labeled dataset card tests.
+"""Public labeled-dataset card contract tests.
 
 The dataset card (README.md) must:
 
@@ -6,13 +6,12 @@ The dataset card (README.md) must:
 - link to the immutable input dataset revision on the Hub
 - include a model-generated-labels warning
 - define the two independent questions (land-use/land-cover; polygon)
-- document the label values and reason-code meaning
+- document the label values and reason-code distribution
 - enumerate the exact context supplied to the model
 - record model repo + GGUF file + immutable model revision + llama.cpp
   version + prompt version + server configuration
-- record repair counts
 - show total rows and label distributions
-- show runtime / throughput / completed allocation count
+- omit operational runtime and allocation details
 - license under Apache-2.0
 - be re-renderable from the labeled Parquet + validated manifest, and
   equality-checked by the publication validator.
@@ -166,13 +165,12 @@ def test_card_defines_both_independent_questions(tmp_path: Path) -> None:
 def test_card_documents_label_values_and_reasons(tmp_path: Path) -> None:
     output = _build_publication(tmp_path)
     card = (output / "README.md").read_text()
-    # Yes/no/uncertain labels and explicit_land_use reason are documented.
+    # Label values are documented; detailed reason codes remain in the plot.
     for token in (
         "yes",
         "no",
         "uncertain",
-        "explicit_land_use",
-        "direct_polygon_reference",
+        "Reason-code distribution",
     ):
         assert token in card, f"missing {token!r} in card"
 
@@ -208,17 +206,18 @@ def test_card_records_model_provenance_and_server_config(tmp_path: Path) -> None
     assert "65536" in card  # total context
 
 
-def test_card_records_repair_counts(tmp_path: Path) -> None:
+def test_card_omits_repair_and_runtime_sections(tmp_path: Path) -> None:
     output = _build_publication(tmp_path)
-    card = (output / "README.md").read_text()
-    assert "repair" in card.lower()
+    card = (output / "README.md").read_text().lower()
+    assert "## repair" not in card
+    assert "## runtime" not in card
 
 
-def test_card_shows_runtime_throughput_and_allocations(tmp_path: Path) -> None:
+def test_card_omits_runtime_throughput_and_allocations(tmp_path: Path) -> None:
     output = _build_publication(tmp_path)
-    card = (output / "README.md").read_text()
-    assert "seconds" in card
-    assert "row" in card.lower()
+    card = (output / "README.md").read_text().lower()
+    for token in ("initial inference", "throughput", "completed allocations"):
+        assert token not in card
 
 
 def test_card_license_is_apache_2(tmp_path: Path) -> None:
@@ -287,38 +286,21 @@ def test_card_link_to_input_revision_uses_full_sha(tmp_path: Path) -> None:
     assert re.search(pattern, card)
 
 
-def test_card_does_not_contain_hardcoded_total_seconds(tmp_path: Path) -> None:
-    """Counts and runtimes must derive from the manifest, not be baked in."""
+def test_card_omits_timing_when_manifest_changes(tmp_path: Path) -> None:
+    """Operational timing changes do not alter the public-facing card."""
 
     output = _build_publication(tmp_path)
-    # The card embeds the runtime literally because the timing comes
-    # from the validated manifest. Mutating the timing on disk must
-    # therefore change the persisted card, which proves the value is
-    # not hard-coded into the renderer.
+    original = (output / "README.md").read_text()
     manifest = json.loads((output / "manifest.json").read_text())
     manifest["timing"]["total_wall_seconds"] = 4321.0
     (output / "manifest.json").write_text(json.dumps(manifest))
-    with pytest.raises(LabelFinalizationError, match="card"):
-        validate_labeled_publication(output)
+    assert (output / "README.md").read_text() == original
 
 
-def test_card_mentions_throughput_when_run_is_complete(tmp_path: Path) -> None:
-    """Throughput is rendered only when ``total > 0`` and the run completed."""
-
+def test_card_omits_allocation_metrics(tmp_path: Path) -> None:
     output = _build_publication(tmp_path)
     card = (output / "README.md").read_text().lower()
-    assert "throughput" in card or "rows/s" in card or "rows/sec" in card
-
-
-def test_card_uses_runtime_metrics_for_allocations(tmp_path: Path) -> None:
-    output = _build_publication(tmp_path)
-    card = (output / "README.md").read_text()
-    # The completed-allocation count is exposed as ``completed allocations``.
-    assert (
-        "allocation" in card.lower()
-        or "completed" in card.lower()
-        or "rows completed" in card.lower()
-    )
+    assert "allocation" not in card
 
 
 def test_validator_rejects_card_drift(tmp_path: Path) -> None:

@@ -34,6 +34,9 @@ TRACKIO_SPACE_URL = f"https://huggingface.co/spaces/{TRACKIO_SPACE_ID}"
 INPUT_DATASET_URL = (
     "https://huggingface.co/datasets/NoeFlandre/osm-polygon-wikidata-only"
 )
+GITHUB_REPO_URL = (
+    "https://github.com/NoeFlandre/osm-polygon-wikidata-sentence-relevance"
+)
 PRESENTATION_URL = (
     "https://noeflandre.github.io/osm-polygon-wikidata-sentence-relevance/"
     "presentations/afghanistan-dataset-overview/index.html"
@@ -273,6 +276,8 @@ configs:
 This release contains **{row_count:,} labeled sentences** extracted from the
 [NoeFlandre/osm-polygon-wikidata-only dataset]({INPUT_DATASET_URL}). {scope} Each
 row independently records two boolean decisions:
+
+Code and reproduction instructions are in the [GitHub repository]({GITHUB_REPO_URL}).
 
 1. **Land use / land cover relevance** -- does the target sentence describe land use or land cover for the polygon?
 2. **Target polygon relevance** -- does the target sentence describe the *named polygon* itself?
