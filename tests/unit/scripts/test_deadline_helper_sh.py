@@ -1,6 +1,6 @@
 """Executable shell tests for the graceful pre-walltime deadline helper.
 
-The deadline helper wraps the labeling CLI with ``timeout --foreground
+The deadline helper wraps the labeling CLI with ``timeout
 --preserve-status --signal=INT --kill-after=10m`` so a 12-hour OAR
 allocation exits cleanly before OAR's final TERM/KILL window. These
 tests exercise the helper against controlled subprocesses so we know
@@ -93,9 +93,9 @@ def _invoke(
     script_path = tmp_path / "invoke.sh"
     script_path.write_text(
         "#!/usr/bin/env bash\n"
-        f"set +e\n"
         f"export TIMEOUT_BIN='{timeout_bin}'\n"
         f". '{HELPER}'\n"
+        "set +e\n"
         f"deadline_helper_run '{duration}' '{grace}' '{child}' {' '.join(extra_args)}\n"
         f"echo exit=$?\n"
     )

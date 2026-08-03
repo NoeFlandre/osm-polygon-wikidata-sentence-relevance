@@ -11,10 +11,13 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
 from osm_polygon_sentence_relevance.cli import main
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _fake_acquire(dataset_id, requested_revision, **kwargs):
@@ -97,7 +100,7 @@ class TestCLIDeviceArgument:
             capture_output=True,
             text=True,
             check=False,
-            cwd="/Users/noeflandre/osm-polygon-wikidata-sentence-relevance",
+            cwd=REPO_ROOT,
         )
         assert result.returncode == 0, (
             f"subprocess failed: stdout={result.stdout!r} stderr={result.stderr!r}"
@@ -127,7 +130,7 @@ class TestCLIDeviceArgument:
             capture_output=True,
             text=True,
             check=False,
-            cwd="/Users/noeflandre/osm-polygon-wikidata-sentence-relevance",
+            cwd=REPO_ROOT,
         )
         assert result.returncode == 0, (
             f"subprocess failed: stdout={result.stdout!r} stderr={result.stderr!r}"
@@ -165,7 +168,7 @@ class TestCLIDeviceArgument:
             capture_output=True,
             text=True,
             check=False,
-            cwd="/Users/noeflandre/osm-polygon-wikidata-sentence-relevance",
+            cwd=REPO_ROOT,
         )
         assert result.returncode == 0, (
             f"subprocess failed: stdout={result.stdout!r} stderr={result.stderr!r}"

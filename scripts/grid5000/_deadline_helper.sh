@@ -14,8 +14,11 @@
 #   <child>     -- executable to invoke
 #   [args...]   -- forwarded to the child
 #
-# Implementation detail: GNU ``timeout --foreground --preserve-status
-# --signal=INT --kill-after=<grace> <duration> <child> [args...]``.
+# Implementation detail: GNU ``timeout --preserve-status --signal=INT
+# --kill-after=<grace> <duration> <child> [args...]``. Without
+# ``--foreground``, GNU timeout places the child in its own process group,
+# so the grace-period escalation also reaches descendants such as the
+# model server and does not leave them running after a deadline.
 # ``--preserve-status`` makes the wrapper return the child's exit status
 # when the child exits on its own within the duration; ``--kill-after``
 # escalates to SIGKILL only if SIGINT is ignored for the grace window.
@@ -96,8 +99,16 @@ deadline_helper_run() {
         return 1
     fi
 
-    "${timeout_bin}" --foreground --preserve-status \
+    local status
+    # Keep the command in an ``if`` so this helper behaves correctly when it
+    # is sourced by a caller running with ``set -e``. The caller still gets
+    # the exact timeout/child status through the function return value.
+    if "${timeout_bin}" --preserve-status \
         --signal=INT --kill-after="${grace_seconds}" \
-        "${duration_seconds}" "$@"
-    return $?
+        "${duration_seconds}" "$@"; then
+        status=$?
+    else
+        status=$?
+    fi
+    return "${status}"
 }
