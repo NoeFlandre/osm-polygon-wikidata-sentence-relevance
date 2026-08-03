@@ -283,7 +283,7 @@ def test_helper_signal_target_is_only_the_child(
         [
             "bash",
             "-c",
-            f"trap 'echo killed >> {sibling_marker}' INT TERM; sleep 30",
+            f"trap 'echo killed >> {sibling_marker}; exit 0' INT TERM; sleep 30",
         ],
     )
     try:
