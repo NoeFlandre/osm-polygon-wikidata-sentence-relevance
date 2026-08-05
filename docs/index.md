@@ -1,8 +1,10 @@
 # OSM Polygon Sentence Relevance — Documentation
 
 This project builds a deterministic, sentence-level relevance dataset from
-OSM polygons joined to Wikipedia and Wikivoyage sections. It is currently
-pre-1.0 (alpha).
+OSM polygons joined to Wikipedia and Wikivoyage sections. Its first public
+dataset release is `v1.0.0`, an Afghanistan-only artifact; broader regional
+processing is planned for later releases. The Python package remains version
+`0.1.0`.
 
 The rendered documentation is published at
 <https://noeflandre.github.io/osm-polygon-wikidata-sentence-relevance/>.

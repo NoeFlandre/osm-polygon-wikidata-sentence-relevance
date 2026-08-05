@@ -58,6 +58,15 @@ locally.
 - **Hugging Face (output dataset)**: [NoeFlandre/osm-polygon-wikidata-sentence-relevance](https://huggingface.co/datasets/NoeFlandre/osm-polygon-wikidata-sentence-relevance)
 - **Hugging Face (input dataset)**: [NoeFlandre/osm-polygon-wikidata-only](https://huggingface.co/datasets/NoeFlandre/osm-polygon-wikidata-only)
 
+## V1 dataset release
+
+`v1.0.0` is the first public dataset release. It is intentionally limited to
+the complete Afghanistan labeling artifact: **54,462 labeled sentences**, 161
+polygons, and 115 languages, published on Hugging Face at
+[`NoeFlandre/osm-polygon-wikidata-sentence-relevance`](https://huggingface.co/datasets/NoeFlandre/osm-polygon-wikidata-sentence-relevance).
+The Python package remains version `0.1.0`; broader regional processing will be
+handled by later releases.
+
 ## Current status
 
 The package is pre-1.0 (version `0.1.0`, alpha). It provides a
@@ -106,7 +115,7 @@ aggregation remain identical with or without `--work-dir`. See
 - Hugging Face dataset repository creation.
 - Concurrency (parallel shard segmentation).
 
-An Afghanistan-only labeling proof of concept is available through
+The V1 Afghanistan labeling release is available through
 `osm-polygon-label-sentences`. It produces independent land-use/land-cover and
 target-polygon relevance labels with exact evidence excerpts. Label batches are
 atomic, resumable, identity-bound, and timed. Grid'5000 canaries select

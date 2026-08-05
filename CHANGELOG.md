@@ -1,8 +1,17 @@
 # Changelog
 
 All notable changes are documented here. The project follows
-[Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and remains a
-pre-1.0 package.
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The Python package
+remains pre-1.0; the first public dataset release is `v1.0.0` and is limited
+to Afghanistan.
+
+## [1.0.0] - 2026-08-03
+
+- First public dataset release: the complete Afghanistan artifact with 54,462
+  labeled sentences, 161 polygons, and 115 languages, published to
+  `NoeFlandre/osm-polygon-wikidata-sentence-relevance` on Hugging Face.
+- Bound the release to the immutable input, model, prompt, and source revisions
+  recorded in its manifest.
 
 ## [Unreleased]
 
