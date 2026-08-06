@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import json
-
 import pyarrow as pa
 import pytest
 
@@ -142,7 +140,7 @@ def test_analytics_rejects_missing_or_invalid_label_columns() -> None:
         build_label_analytics(invalid)
 
 
-def test_render_analytics_assets_writes_pngs_and_selector_html(tmp_path) -> None:
+def test_render_analytics_assets_writes_public_pngs_only(tmp_path) -> None:
     analytics = build_label_analytics(_table())
     render_analytics_assets(analytics, tmp_path)
     for name in (
@@ -151,10 +149,4 @@ def test_render_analytics_assets_writes_pngs_and_selector_html(tmp_path) -> None
         "reason_code_distribution.png",
     ):
         assert (tmp_path / name).read_bytes().startswith(b"\x89PNG")
-    html = (tmp_path / "slice_yield.html").read_text()
-    assert 'id="dimension"' in html
-    assert (
-        'const SLICE_FIELDS = ["both_yes_rate","uncertain_rate","sample_size"]' in html
-    )
-    assert '"sample_size"' in html
-    json.loads(html.split("const SLICES = ", 1)[1].split(";", 1)[0])
+    assert not (tmp_path / "slice_yield.html").exists()

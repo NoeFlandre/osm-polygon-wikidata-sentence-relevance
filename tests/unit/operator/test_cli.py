@@ -17,7 +17,7 @@ from osm_polygon_sentence_relevance.operator.controller import LiveProgress
 from osm_polygon_sentence_relevance.operator.oar import ExitClass, JobState, JobStatus
 from osm_polygon_sentence_relevance.operator.sites import SiteProbe
 from osm_polygon_sentence_relevance.operator.staging import LabelAssets
-from osm_polygon_sentence_relevance.operator.state import RunPhase
+from osm_polygon_sentence_relevance.operator.state import RunPhase, StateStore
 from osm_polygon_sentence_relevance.operator.workflows import (
     RemoteLayout,
     label_submission,
@@ -44,6 +44,9 @@ def _run_args(
         remote_free_bytes=8 * 1024**3,
         request_concurrency=None,
         row_limit=0,
+        sampling_h3_resolution=3,
+        sampling_seed="sentence-relevance-v2",
+        sampling_target=200000,
         scope="region",
         site=list(cli.DEFAULT_SITES) if sites is None else sites,
         stage=stage,
@@ -56,6 +59,57 @@ def test_typer_help_exposes_exact_command_set() -> None:
     assert result.exit_code == 0
     for command in ("run", "resume", "status", "cleanup"):
         assert command in result.stdout
+
+
+def test_v2_sampling_target_expands_in_place_and_never_decreases(
+    tmp_path: Path,
+) -> None:
+    kwargs = {
+        "scope": "region",
+        "region": "afghanistan-latest",
+        "stage": "label",
+        "source_commit": "a" * 40,
+        "input_revision": "b" * 40,
+    }
+    base = OperatorConfig.build(**kwargs, sampling_target=200_000)
+    store = StateStore(tmp_path)
+    store.load_or_create(base.run_identity)
+    cli._sync_sampling_target(store, base)
+    assert store.load().facts["sampling_target"] == 200_000
+
+    expanded = OperatorConfig.build(**kwargs, sampling_target=400_000)
+    store.load_or_create(expanded.run_identity)
+    cli._sync_sampling_target(store, expanded)
+    assert store.load().facts["sampling_target"] == 400_000
+
+    reduced = OperatorConfig.build(**kwargs, sampling_target=100_000)
+    store.load_or_create(reduced.run_identity)
+    with pytest.raises(RuntimeError, match="cannot decrease"):
+        cli._sync_sampling_target(store, reduced)
+
+
+def test_v2_expansion_reopens_a_completed_run_for_continuation(
+    tmp_path: Path,
+) -> None:
+    kwargs = {
+        "scope": "region",
+        "region": "afghanistan-latest",
+        "stage": "label",
+        "source_commit": "a" * 40,
+        "input_revision": "b" * 40,
+    }
+    initial = OperatorConfig.build(**kwargs, sampling_target=200_000)
+    store = StateStore(tmp_path)
+    store.load_or_create(initial.run_identity)
+    cli._sync_sampling_target(store, initial)
+    store.transition(expected=RunPhase.CREATED, target=RunPhase.COMPLETE)
+
+    expanded = OperatorConfig.build(**kwargs, sampling_target=400_000)
+    cli._sync_sampling_target(store, expanded)
+
+    state = store.load()
+    assert state.phase is RunPhase.REMOTE_PREPARED
+    assert state.facts["sampling_target"] == 400_000
 
 
 def test_typer_run_delegates_current_defaults(
@@ -93,10 +147,92 @@ def test_typer_run_delegates_current_defaults(
         "remote_free_bytes": 8 * 1024**3,
         "request_concurrency": None,
         "row_limit": 0,
+        "sampling_h3_resolution": 3,
+        "sampling_seed": "sentence-relevance-v2",
+        "sampling_target": None,
         "scope": "region",
         "site": list(cli.DEFAULT_SITES),
         "stage": "label",
     }
+
+
+def test_sampling_target_defaults_to_v2_only_for_all_label_runs() -> None:
+    regional = _run_args()
+    regional.sampling_target = None
+    assert cli._sampling_target_for_run(regional) is None
+
+    worldwide = _run_args()
+    worldwide.scope = "all"
+    worldwide.region = None
+    worldwide.sampling_target = None
+    assert cli._sampling_target_for_run(worldwide) == 200_000
+
+
+def test_positive_sampling_target_is_rejected_for_regional_runs() -> None:
+    with pytest.raises(ValueError, match="scope all"):
+        cli._sampling_target_for_run(_run_args())
+
+
+def test_typer_resume_exposes_sampling_target(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: list[SimpleNamespace] = []
+    monkeypatch.setattr(cli, "_resume_handler", lambda args: seen.append(args) or 0)
+
+    result = runner.invoke(
+        cli.app,
+        [
+            "resume",
+            "a" * 20,
+            "--sampling-target",
+            "400000",
+        ],
+        color=False,
+    )
+
+    assert result.exit_code == 0
+    assert len(seen) == 1
+    assert seen[0].sampling_target == 400_000
+
+
+def test_resume_expands_target_without_changing_run_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = OperatorConfig.build(
+        scope="region",
+        region="afghanistan-latest",
+        stage="label",
+        source_commit="a" * 40,
+        input_revision="b" * 40,
+        sampling_target=200_000,
+    )
+    store = StateStore(tmp_path)
+    store.load_or_create(config.run_identity)
+    cli._sync_sampling_target(store, config)
+    monkeypatch.setattr(cli, "DATA_ROOT", tmp_path)
+    args = SimpleNamespace(
+        command="resume",
+        run_id=config.run_id,
+        site=list(cli.DEFAULT_SITES),
+        gpu_memory_mb=40_000,
+        poll_seconds=0.0,
+        sampling_target=400_000,
+    )
+
+    assert cli._resume_run(config.run_id, args) == 0
+
+    assert store.load().facts["sampling_target"] == 400_000
+    assert (
+        config.run_id
+        == OperatorConfig.build(
+            scope="region",
+            region="afghanistan-latest",
+            stage="label",
+            source_commit="a" * 40,
+            input_revision="b" * 40,
+            sampling_target=400_000,
+        ).run_id
+    )
 
 
 def test_typer_explicit_sites_extend_defaults(
@@ -426,6 +562,8 @@ def test_run_label_reuses_checkpoints_and_completes(
         ),
     )
     args = _run_args(sites=["nancy"])
+    args.scope = "all"
+    args.region = None
     assert cli._run(args) == 0
     state = _FakeStore.instances[-1].value
     assert state.phase is RunPhase.COMPLETE

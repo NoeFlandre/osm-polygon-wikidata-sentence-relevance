@@ -546,6 +546,9 @@ def test_resume_reroutes_cross_site_and_submits_exactly_one_new_allocation(
         stage="label",
         source_commit="d" * 40,
         input_revision="b" * 40,
+        # This fixture represents the pre-V2 persisted run whose remote
+        # layout is keyed by the legacy identity.
+        sampling_target=None,
     )
 
     # Patch recorded_job inspect/classify to use the actual on-disk fixtures
@@ -712,6 +715,7 @@ def test_resume_same_site_avoids_relay(
         stage="label",
         source_commit="d" * 40,
         input_revision="b" * 40,
+        sampling_target=None,
     )
 
     classification = cli._classify_or_continue(
@@ -807,6 +811,7 @@ def test_missing_job_with_complete_durable_evidence_classifies_complete(
         stage="label",
         source_commit="d" * 40,
         input_revision="b" * 40,
+        sampling_target=None,
     )
 
     classification = cli._classify_or_continue(
@@ -840,6 +845,7 @@ def _store_at(
         stage="label",
         source_commit="d" * 40,
         input_revision="b" * 40,
+        sampling_target=None,
     )
     store = StateStore(root)
     store.load_or_create(config.run_identity)
@@ -1046,6 +1052,7 @@ def test_resume_failed_with_valid_partial_checkpoints_recovers_and_submits_one_c
         stage="label",
         source_commit="d" * 40,
         input_revision="b" * 40,
+        sampling_target=None,
     )
     classification = cli._classify_or_continue(
         _resume_args("6578fb2269130a41d243"),

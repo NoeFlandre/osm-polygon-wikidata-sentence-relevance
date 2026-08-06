@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass
@@ -14,6 +13,7 @@ import pyarrow as pa
 LABELS: tuple[str, ...] = ("yes", "no", "uncertain")
 SLICE_DIMENSIONS: tuple[str, ...] = ("language", "source", "osm_primary_tag")
 MIN_SLICE_ROWS = 100
+H3_MAP_ASSET_NAME = "h3_sentence_distribution.png"
 _REQUIRED_COLUMNS = frozenset(
     {
         "polygon_id",
@@ -211,6 +211,44 @@ def build_label_analytics(table: pa.Table) -> LabelAnalytics:
     )
 
 
+def h3_sentence_distribution(
+    table: pa.Table, *, resolution: int
+) -> tuple[dict[str, int], int]:
+    """Count labeled sentences per H3 cell and report missing coordinates.
+
+    Counts are derived from every finalized row. Rows without coordinates are
+    retained in the returned missing count and are not assigned an invented
+    geographic cell.
+    """
+
+    if (
+        isinstance(resolution, bool)
+        or not isinstance(resolution, int)
+        or not 0 <= resolution <= 15
+    ):
+        raise ValueError("H3 resolution must be an integer in [0, 15]")
+    if "lat" not in table.column_names or "lon" not in table.column_names:
+        return {}, table.num_rows
+    try:
+        import h3
+    except ImportError as exc:  # pragma: no cover - optional dependency boundary
+        raise RuntimeError("install the operator extra to render the H3 map") from exc
+    counts: Counter[str] = Counter()
+    missing = 0
+    for lat, lon in zip(
+        table["lat"].to_pylist(), table["lon"].to_pylist(), strict=True
+    ):
+        if lat is None or lon is None:
+            missing += 1
+            continue
+        try:
+            cell = str(h3.latlng_to_cell(float(lat), float(lon), resolution))
+        except (TypeError, ValueError, h3.H3ValueError) as exc:
+            raise ValueError("finalized coordinates cannot be mapped to H3") from exc
+        counts[cell] += 1
+    return dict(sorted(counts.items())), missing
+
+
 def _plotter() -> Any:
     try:
         import matplotlib
@@ -300,22 +338,75 @@ def _render_reasons(analytics: LabelAnalytics, path: Path) -> None:
     plt.close(fig)
 
 
-def _render_slice_html(analytics: LabelAnalytics, path: Path) -> None:
-    data = json.dumps([item.to_dict() for item in analytics.slices], sort_keys=True)
-    dimensions = json.dumps(list(SLICE_DIMENSIONS))
-    document = f"""<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><title>Strong-positive yield by slice</title>
-<style>body{{font:15px system-ui,sans-serif;color:#17324d;margin:2rem;max-width:70rem}}\nlabel{{font-weight:600}} select{{margin-left:.5rem;padding:.3rem}} table{{border-collapse:collapse;margin-top:1rem;width:100%}} th,td{{border-bottom:1px solid #d7e1e8;padding:.5rem;text-align:left}} th{{background:#edf4f7}} .note{{color:#526875}}</style>
-</head><body><h1>Strong-positive yield by slice</h1>
-<p class="note">Only groups with at least {MIN_SLICE_ROWS} sentences are shown. Rates are computed from the final labeled table.</p>
-<label for="dimension">Slice dimension</label><select id="dimension"></select>
-<table><thead><tr><th>Value</th><th>Both yes</th><th>Uncertain</th><th>Sample size</th></tr></thead><tbody id="rows"></tbody></table>
-<script>const SLICES = {data}; const DIMENSIONS = {dimensions}; const SLICE_FIELDS = ["both_yes_rate","uncertain_rate","sample_size"]; const select = document.getElementById('dimension'); const rows = document.getElementById('rows');
-DIMENSIONS.forEach((d) => {{ const option=document.createElement('option'); option.value=d; option.textContent=d; select.appendChild(option); }});
-function render() {{ rows.replaceChildren(); SLICES.filter((item) => item.dimension === select.value).forEach((item) => {{ const row=document.createElement('tr'); [item.value, (item.both_yes_rate*100).toFixed(2)+'%', (item.uncertain_rate*100).toFixed(2)+'%', item.sample_size.toLocaleString()].forEach((value) => {{ const cell=document.createElement('td'); cell.textContent=value; row.appendChild(cell); }}); rows.appendChild(row); }}); }}
-select.addEventListener('change', render); if (DIMENSIONS.length) {{ select.value = DIMENSIONS[0]; render(); }}
-</script></body></html>"""
-    path.write_text(document)
+def render_h3_sentence_distribution(
+    table: pa.Table,
+    path: Path,
+    *,
+    resolution: int,
+    scope_label: str,
+) -> dict[str, Any]:
+    """Render a deterministic hexagon map of sentence coordinates.
+
+    The returned summary is written into the manifest by finalization, so the
+    map's resolution, cell counts, and unlocated-row count are auditable from
+    the same Parquet input.
+    """
+
+    counts, missing = h3_sentence_distribution(table, resolution=resolution)
+    plt = _plotter()
+    from matplotlib.collections import PatchCollection
+    from matplotlib.colors import LogNorm
+    from matplotlib.patches import Polygon
+
+    fig, axis = plt.subplots(figsize=(14, 7), dpi=140)
+    patches: list[Any] = []
+    values: list[int] = []
+    try:
+        import h3
+    except ImportError as exc:  # pragma: no cover - guarded above
+        raise RuntimeError("install the operator extra to render the H3 map") from exc
+    for cell, count in counts.items():
+        boundary = h3.cell_to_boundary(cell)
+        longitudes = [float(point[1]) for point in boundary]
+        latitudes = [float(point[0]) for point in boundary]
+        if max(longitudes) - min(longitudes) > 180:
+            longitudes = [
+                longitude - 360 if longitude > 0 else longitude
+                for longitude in longitudes
+            ]
+        patches.append(
+            Polygon(list(zip(longitudes, latitudes, strict=True)), closed=True)
+        )
+        values.append(count)
+    if patches:
+        collection = PatchCollection(
+            patches,
+            cmap="viridis",
+            norm=LogNorm(vmin=1, vmax=max(values)),
+            linewidth=0.15,
+            edgecolor="#ffffff",
+        )
+        collection.set_array(values)
+        axis.add_collection(collection)
+        fig.colorbar(collection, ax=axis, label="Labeled sentences per H3 cell")
+    axis.set_xlim(-180, 180)
+    axis.set_ylim(-90, 90)
+    axis.set_xlabel("Longitude")
+    axis.set_ylabel("Latitude")
+    axis.set_title(
+        f"{scope_label} labeled-sentence distribution by H3 cell (r{resolution})"
+    )
+    axis.grid(color="#d8e1e8", linewidth=0.4, alpha=0.7)
+    fig.tight_layout()
+    _save_png(fig, path)
+    plt.close(fig)
+    return {
+        "resolution": resolution,
+        "cell_count": len(counts),
+        "sentence_count": sum(counts.values()),
+        "missing_coordinate_count": missing,
+        "cells": counts,
+    }
 
 
 def render_analytics_assets(analytics: LabelAnalytics, assets: Path) -> None:
@@ -325,17 +416,19 @@ def render_analytics_assets(analytics: LabelAnalytics, assets: Path) -> None:
     _render_heatmap(analytics, assets / "joint_label_heatmap.png")
     _render_funnel(analytics, assets / "polygon_coverage_funnel.png")
     _render_reasons(analytics, assets / "reason_code_distribution.png")
-    _render_slice_html(analytics, assets / "slice_yield.html")
     for path in assets.iterdir():
         os.chmod(path, 0o600)
 
 
 __all__ = [
+    "H3_MAP_ASSET_NAME",
     "LABELS",
     "MIN_SLICE_ROWS",
     "SLICE_DIMENSIONS",
     "LabelAnalytics",
     "SliceYield",
     "build_label_analytics",
+    "h3_sentence_distribution",
+    "render_h3_sentence_distribution",
     "render_analytics_assets",
 ]

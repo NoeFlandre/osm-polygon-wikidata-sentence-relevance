@@ -535,6 +535,36 @@ def test_canonical_json_stable_despite_mapping_order() -> None:
     assert first.run_id == second.run_id
 
 
+def test_v2_target_expansion_reuses_the_same_immutable_run_identity() -> None:
+    base = OperatorConfig.build(
+        scope="region",
+        region="afghanistan-latest",
+        stage="label",
+        source_commit="a" * 40,
+        input_revision="b" * 40,
+        sampling_target=200_000,
+    )
+    expanded = OperatorConfig.build(
+        scope="region",
+        region="afghanistan-latest",
+        stage="label",
+        source_commit="a" * 40,
+        input_revision="b" * 40,
+        sampling_target=400_000,
+    )
+    assert base.run_id == expanded.run_id
+    assert (
+        base.run_identity.checkpoint_dict() == expanded.run_identity.checkpoint_dict()
+    )
+    assert base.run_identity.to_dict()["sampling_target"] == 200_000
+    assert expanded.run_identity.to_dict()["sampling_target"] == 400_000
+    resumed = OperatorConfig.from_persisted(
+        {**base.run_identity.checkpoint_dict(), "sampling_target": 400_000}
+    )
+    assert resumed.run_id == base.run_id
+    assert resumed.requirements.sampling_target == 400_000
+
+
 def test_run_id_is_twenty_lowercase_hex_chars() -> None:
     config = OperatorConfig.build(
         scope="region",

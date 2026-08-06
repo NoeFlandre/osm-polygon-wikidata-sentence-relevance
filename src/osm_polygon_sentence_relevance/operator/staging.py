@@ -46,6 +46,9 @@ class Stager:
         extras = "--extra hub"
         if config.stage in {Stage.SPLIT, Stage.ALL}:
             extras += " --extra segmentation"
+        if config.stage in {Stage.LABEL, Stage.ALL}:
+            # Label selection uses H3 and the operator's runtime support.
+            extras += " --extra operator"
         repo_url = (
             "https://github.com/NoeFlandre/osm-polygon-wikidata-sentence-relevance.git"
         )

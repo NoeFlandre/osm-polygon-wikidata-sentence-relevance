@@ -351,6 +351,41 @@ def test_retrieve_to_seagate_builds_inventory_from_real_checkpoint_store(
     assert len(fetched_files) == 6
 
 
+def test_retrieve_preserves_checkpoint_mirror_outbox(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    src_dir = tmp_path / "source"
+    src_dir.mkdir()
+    _build_real_checkpoint_set(src_dir)
+    mirror = src_dir / ".checkpoint-mirror"
+    (mirror / "pending").mkdir(parents=True)
+    (mirror / "uploaded").mkdir()
+    (mirror / "pending" / "batch-000002.json").write_text('{"schema_version":1}\n')
+    (mirror / "status.json").write_text('{"schema_version":1}\n')
+    seagate = tmp_path / "seagate"
+    seagate.mkdir()
+    fake = _FakeRemote(root=tmp_path / "frontend-sophia")
+    fake.root.mkdir()
+    fake.remote_map[str(src_dir)] = src_dir
+    fake.remote_map[str(src_dir / "checkpoints")] = src_dir / "checkpoints"
+    for path in src_dir.rglob("*"):
+        if path.is_file():
+            fake.remote_map[str(path)] = path
+    _patch_subprocess(monkeypatch, fake)
+
+    inventory = relay.retrieve_to_seagate(
+        source=relay.RemoteTransfer(ssh_target="sophia"),
+        source_checkpoint_root=str(src_dir),
+        destination_root=seagate,
+        run_id="7e8f1a748497e3dbcc56",
+        expected_run_identity=_identity().to_dict(),
+    )
+    assert inventory.mirror_paths
+    assert (
+        inventory.root / ".checkpoint-mirror" / "pending" / "batch-000002.json"
+    ).read_text() == '{"schema_version":1}\n'
+
+
 def test_retrieve_rejects_unsafe_remote_paths(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -23,7 +23,6 @@ _LABEL_RELEASE_FILES: tuple[str, ...] = (
     "assets/joint_label_heatmap.png",
     "assets/polygon_coverage_funnel.png",
     "assets/reason_code_distribution.png",
-    "assets/slice_yield.html",
 )
 
 
@@ -46,7 +45,6 @@ def _publish_local_label_output(directory: Path, dataset_id: str) -> str:
     return publish_labeled_dataset(  # type: ignore[no-any-return]
         directory,
         dataset_id,
-        target_revision="main",
     ).commit_id
 
 

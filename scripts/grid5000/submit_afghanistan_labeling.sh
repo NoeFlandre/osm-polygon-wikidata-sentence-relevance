@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Submit one non-interactive Afghanistan labeling run from a Grid'5000 frontend.
+# Submit one non-interactive sentence-labeling allocation from a Grid'5000 frontend.
 #
 # The launcher's parallelism is a first-class positional argument. The
 # supported set is the small validated set {1, 2, 4, 8, 16, 32}; the wrapper
@@ -46,8 +46,8 @@ if [ "${BASH_SOURCE[0]}" != "$0" ]; then
     return 0
 fi
 
-if [ "$#" -ne 17 ]; then
-    echo "submit_afghanistan_labeling: exactly seventeen arguments are required" >&2
+if [ "$#" -ne 20 ]; then
+    echo "submit_afghanistan_labeling: exactly twenty arguments are required" >&2
     exit 2
 fi
 
@@ -103,6 +103,9 @@ ROW_LIMIT="${14}"; readonly ROW_LIMIT
 LLAMA_PARALLEL="${15}"; readonly LLAMA_PARALLEL
 LLAMA_PER_SLOT_CONTEXT="${16}"; readonly LLAMA_PER_SLOT_CONTEXT
 REQUEST_CONCURRENCY="${17}"; readonly REQUEST_CONCURRENCY
+SAMPLING_TARGET="${18}"; readonly SAMPLING_TARGET
+SAMPLING_SEED="${19}"; readonly SAMPLING_SEED
+SAMPLING_H3_RESOLUTION="${20}"; readonly SAMPLING_H3_RESOLUTION
 GPU_MIN_MEMORY_MB="${LABEL_GPU_MIN_MEMORY_MB:-40000}"; readonly GPU_MIN_MEMORY_MB
 
 RUN_ROOT="${REPO_ROOT_CANON%/*}"
@@ -128,7 +131,10 @@ if ! [[ "${MODEL_REVISION}" =~ ^[0-9a-f]{40}$ ]] || \
 fi
 if ! [[ "${DATASET_ID}" =~ ^[^/[:space:]]+/[^/[:space:]]+$ ]] || \
    ! [[ "${BATCH_SIZE}" =~ ^[1-9][0-9]*$ ]] || \
-   ! [[ "${ROW_LIMIT}" =~ ^(0|[1-9][0-9]*)$ ]]; then
+   ! [[ "${ROW_LIMIT}" =~ ^(0|[1-9][0-9]*)$ ]] || \
+   ! [[ "${SAMPLING_TARGET}" =~ ^(0|[1-9][0-9]*)$ ]] || \
+   ! [[ "${SAMPLING_SEED}" != *[[:space:]]* ]] || [ -z "${SAMPLING_SEED}" ] || \
+   ! [[ "${SAMPLING_H3_RESOLUTION}" =~ ^(0|[1-9]|1[0-5])$ ]]; then
     echo "submit_afghanistan_labeling: dataset ID or numeric argument is invalid" >&2
     exit 2
 fi

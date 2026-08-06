@@ -15,9 +15,22 @@ from typing import Any
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from .analytics import build_label_analytics, render_analytics_assets
-from .canary import select_canary_rows
+from .analytics import (
+    H3_MAP_ASSET_NAME,
+    build_label_analytics,
+    h3_sentence_distribution,
+    render_analytics_assets,
+    render_h3_sentence_distribution,
+)
 from .checkpoint import CheckpointStore
+from .releases import (
+    V1_TRACKIO_SPACE_ID,
+    ReleaseLane,
+    release_lane,
+    release_prefix,
+    trackio_space_url,
+)
+from .sampling import select_label_rows
 
 
 class LabelFinalizationError(RuntimeError):
@@ -29,8 +42,9 @@ _HERO_IMAGE_URL = (
     "osm-polygon-wikidata-sentence-relevance/main/docs/assets/"
     "afghanistan-labeling-hero.png"
 )
-TRACKIO_SPACE_ID = "NoeFlandre/afghanistan-labeling-trackio"
-TRACKIO_SPACE_URL = f"https://huggingface.co/spaces/{TRACKIO_SPACE_ID}"
+# Backwards-compatible name for callers that log the historical V1 release.
+TRACKIO_SPACE_ID = V1_TRACKIO_SPACE_ID
+TRACKIO_SPACE_URL = trackio_space_url(ReleaseLane.V1_AFGHANISTAN)
 INPUT_DATASET_URL = (
     "https://huggingface.co/datasets/NoeFlandre/osm-polygon-wikidata-only"
 )
@@ -53,7 +67,7 @@ class ValidatedLabeledPublication:
     files: tuple[Path, ...]
 
 
-_FILES = (
+_BASE_FILES = (
     "sentences.parquet",
     "manifest.json",
     "README.md",
@@ -62,9 +76,9 @@ _FILES = (
     "assets/joint_label_heatmap.png",
     "assets/polygon_coverage_funnel.png",
     "assets/reason_code_distribution.png",
-    "assets/slice_yield.html",
 )
-_ANALYTICS_ASSETS = _FILES[5:]
+_V2_FILES = (*_BASE_FILES, f"assets/{H3_MAP_ASSET_NAME}")
+_ANALYTICS_ASSETS = _BASE_FILES[5:]
 _ANALYTICS_COLUMNS = (
     "polygon_id",
     "language",
@@ -81,7 +95,53 @@ def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def _render_plots(table: pa.Table, assets: Path) -> None:
+def _publication_revision(identity: dict[str, Any]) -> str:
+    """Return the single Hugging Face revision used for public releases."""
+
+    del identity
+    return "main"
+
+
+def _scope_label(table: pa.Table) -> str:
+    """Derive a concise scope label from the finalized rows."""
+
+    if "region" not in table.column_names:
+        return "Dataset"
+    values = {
+        str(value).strip()
+        for value in table["region"].to_pylist()
+        if value is not None and str(value).strip()
+    }
+    if len(values) != 1:
+        return "Global" if len(values) > 1 else "Dataset"
+    value = next(iter(values)).removesuffix("-latest")
+    return value.replace("_", " ").replace("-", " ").title() or "Dataset"
+
+
+def _identity_scope_label(identity: dict[str, Any]) -> str:
+    """Return the legacy scope used when rendering a card without its table."""
+
+    if release_lane(identity) is ReleaseLane.V2_WORLDWIDE:
+        return "Worldwide"
+
+    region = identity.get("region")
+    if isinstance(region, str) and region.strip():
+        value = region.strip().removesuffix("-latest")
+        return value.replace("_", " ").replace("-", " ").title()
+    return "Afghanistan"
+
+
+def _release_files(identity: dict[str, Any]) -> tuple[str, ...]:
+    """Return the local file layout required by this release lane."""
+
+    return (
+        _V2_FILES if release_lane(identity) is ReleaseLane.V2_WORLDWIDE else _BASE_FILES
+    )
+
+
+def _render_plots(
+    table: pa.Table, assets: Path, *, scope_label: str = "Afghanistan"
+) -> None:
     try:
         import matplotlib
 
@@ -105,7 +165,7 @@ def _render_plots(table: pa.Table, assets: Path) -> None:
         axis.set_ylabel("Sentences")
         axis.bar_label(bars, labels=[f"{value:,}" for value in values])
         axis.spines[["top", "right"]].set_visible(False)
-    fig.suptitle("Afghanistan relevance labels")
+    fig.suptitle(f"{scope_label} relevance labels")
     fig.tight_layout()
     fig.savefig(assets / "label_distribution.png", metadata={"Software": ""})
     plt.close(fig)
@@ -125,7 +185,9 @@ def _render_plots(table: pa.Table, assets: Path) -> None:
     names = [name for name, _ in reversed(top)]
     values = [value for _, value in reversed(top)]
     bars = axis.barh(names, values, color="#2878B5")
-    axis.set_title("Languages among land-use / land-cover positive sentences")
+    axis.set_title(
+        f"Languages among {scope_label.lower()} land-use / land-cover positive sentences"
+    )
     axis.set_xlabel("Sentences")
     axis.bar_label(bars, labels=[f"{value:,}" for value in values], padding=3)
     axis.spines[["top", "right"]].set_visible(False)
@@ -195,6 +257,7 @@ def _manifest(
     statistics: dict[str, Any],
     identity: dict[str, Any],
     timing: dict[str, Any],
+    publication_revision: str = "main",
 ) -> dict[str, Any]:
     """Build the publication manifest with explicit server configuration."""
 
@@ -202,6 +265,11 @@ def _manifest(
     return {
         "schema_version": 1,
         "dataset_repo_id": dataset_repo_id,
+        "publication_revision": publication_revision,
+        "release_lane": release_lane(identity).value,
+        "release_prefix": ""
+        if release_lane(identity) is ReleaseLane.V1_AFGHANISTAN
+        else "v2-worldwide",
         "parquet_sha256": parquet_sha256,
         "artifact_sha256": artifact_sha256,
         "statistics": statistics,
@@ -218,6 +286,8 @@ def _render_card(
     stats: dict[str, Any],
     identity: dict[str, Any],
     timing: dict[str, Any],
+    scope_label: str | None = None,
+    publication_revision: str | None = None,
 ) -> str:
     land = stats["landuse_relevance"]
     polygon = stats["polygon_relevance"]
@@ -234,11 +304,67 @@ def _render_card(
 
     server_config = _server_config(identity)
 
-    scope = (
-        f"This is a representative **{row_count:,}-row canary** selected "
-        "deterministically for source and language coverage."
-        if identity.get("row_limit", 0)
-        else "This release labels the complete Afghanistan input."
+    scope_label = scope_label or _identity_scope_label(identity)
+    publication_revision = publication_revision or _publication_revision(identity)
+    lane = release_lane(identity)
+    is_v1_afghanistan = lane is ReleaseLane.V1_AFGHANISTAN
+    remote_prefix = "" if is_v1_afghanistan else "v2-worldwide"
+    remote_data_path = (
+        "sentences.parquet" if is_v1_afghanistan else "v2-worldwide/sentences.parquet"
+    )
+    if identity.get("row_limit", 0):
+        scope = (
+            f"This is a representative **{row_count:,}-row canary** selected "
+            "deterministically for source and language coverage."
+        )
+    elif identity.get("sampling_version") is not None and identity.get(
+        "sampling_target", 0
+    ):
+        scope = (
+            f"This release contains a deterministic stratified sample of "
+            f"**{row_count:,} rows** from the {scope_label} input."
+        )
+    else:
+        scope = f"This release labels the complete {scope_label} input."
+    asset_base = f"https://huggingface.co/datasets/{dataset_repo_id}/resolve/main/"
+    if remote_prefix:
+        asset_base += f"{remote_prefix}/"
+    asset_base += "assets"
+    pretty_name = f"{scope_label} polygon sentence relevance labels"
+    hero = (
+        f"![{scope_label} sentence relevance dataset overview]({_HERO_IMAGE_URL})\n\n"
+        if is_v1_afghanistan
+        else ""
+    )
+    release_trackio_url = trackio_space_url(lane)
+    release_links = (
+        "## Release lane\n\n"
+        "This is the preserved V1 Afghanistan release. The worldwide stratified\n"
+        "release is published separately under `v2-worldwide/` on the same HF\n"
+        "`main` revision.\n\n"
+        "## Trackio\n\n"
+        "The metrics and plots for this release are logged in the\n"
+        f"[public Trackio dashboard]({release_trackio_url}).\n\n"
+        f"For a visual introduction, see the [{scope_label} dataset presentation]({PRESENTATION_URL}).\n\n"
+        if is_v1_afghanistan
+        else (
+            "## Release lane\n\n"
+            "This is the V2 worldwide stratified release. Its files live under\n"
+            "`v2-worldwide/` on the same HF `main` revision as the preserved V1\n"
+            "Afghanistan files.\n\n"
+            "## Trackio\n\n"
+            "Batch progress and final metrics are logged in the separate\n"
+            f"[worldwide Trackio dashboard]({release_trackio_url}).\n\n"
+        )
+    )
+    slice_note = (
+        "The public Trackio dashboard provides an interactive slice table for language, "
+        "source, and `osm_primary_tag`. It shows both-yes rate, uncertain rate, and "
+        "sample size; groups smaller than 100 sentences are omitted."
+        if is_v1_afghanistan
+        else "The separate worldwide Trackio dashboard provides an interactive slice "
+        "table for language, source, and `osm_primary_tag`; groups smaller than 100 "
+        "sentences are omitted."
     )
 
     def rate(value: float) -> str:
@@ -253,23 +379,33 @@ def _render_card(
     funnel = analytics["coverage_funnel"]
     slice_count = len(analytics.get("slices", []))
 
+    h3_note = ""
+    if lane is ReleaseLane.V2_WORLDWIDE:
+        h3_stats = stats.get("h3_sentence_distribution", {})
+        h3_note = (
+            "\n### Geographic distribution\n\n"
+            "The map shows every labeled sentence assigned to its H3 cell. "
+            f"Resolution `{h3_stats.get('resolution', identity.get('h3_resolution'))}`; "
+            f"{h3_stats.get('cell_count', 0):,} occupied cells and "
+            f"{h3_stats.get('missing_coordinate_count', 0):,} rows without coordinates.\n\n"
+            f"![Worldwide labeled-sentence distribution by H3 cell]({asset_base}/{H3_MAP_ASSET_NAME})\n"
+        )
+
     return f"""---
 license: apache-2.0
 task_categories:
 - text-classification
 language:
 - multilingual
-pretty_name: Afghanistan polygon sentence relevance labels
+pretty_name: {pretty_name}
 configs:
 - config_name: default
   data_files:
   - split: train
-    path: sentences.parquet
+    path: {remote_data_path}
 ---
 
-![Afghanistan sentence relevance dataset overview]({_HERO_IMAGE_URL})
-
-# Afghanistan polygon sentence relevance labels
+{hero}# {pretty_name}
 
 > **Warning:** the labels below are **model-generated**. They are not ground truth and must be audited before use as authoritative training data.
 
@@ -321,7 +457,7 @@ The labeler used `{identity["model_repo_id"]}` (`{identity["model_file"]}`), pin
 - the **target sentence**
 - the immediately **adjacent** sentences
 - the **polygon name**
-- the **region / country** (`{identity.get("region", "afghanistan")}`)
+- the **region / country** (`{scope_label}`)
 - the **language** code
 - the **page title** and **section title**
 - the **primary OSM tag**
@@ -338,14 +474,7 @@ The valid label values are **yes**, **no**, and **uncertain** (lowercase). Every
 | Land use / land cover | {value(land, "yes")} | {value(land, "no")} | {value(land, "uncertain")} |
 | Target polygon | {value(polygon, "yes")} | {value(polygon, "no")} | {value(polygon, "uncertain")} |
 
-## Trackio
-
-The metrics and plots for this release are logged as one static run in the
-[public Trackio dashboard]({TRACKIO_SPACE_URL}).
-
-For a visual introduction, see the [Afghanistan dataset presentation]({PRESENTATION_URL}).
-
-### Joint labels
+{release_links}### Joint labels
 
 Counts and percentages use all labeled sentences.
 
@@ -368,17 +497,15 @@ The funnel counts unique polygons with at least one sentence meeting each condit
 
 The bars show the normalized share of all labeled sentences for each reason code.
 
-![Reason-code distribution](https://huggingface.co/datasets/{dataset_repo_id}/resolve/main/assets/reason_code_distribution.png)
+![Reason-code distribution]({asset_base}/reason_code_distribution.png)
 
-The public Trackio dashboard provides an interactive slice table for language,
-source, and `osm_primary_tag`. It shows both-yes rate, uncertain rate, and
-sample size; groups smaller than 100 sentences are omitted. The release
-contains {slice_count:,} qualifying groups.
+{slice_note} The release contains {slice_count:,} qualifying groups.
 
 ## Language coverage
 
-![Positive-label languages](https://huggingface.co/datasets/{dataset_repo_id}/resolve/main/assets/positive_languages.png)
+![Positive-label languages]({asset_base}/positive_languages.png)
 
+{h3_note}
 ## Model provenance
 
 - Repository: [`{identity["model_repo_id"]}`](https://huggingface.co/{identity["model_repo_id"]}/tree/{identity["model_revision"]})
@@ -393,12 +520,50 @@ contains {slice_count:,} qualifying groups.
 
 ## Provenance
 
-- Input dataset revision: [`{identity["input_dataset_revision"]}"`](https://huggingface.co/datasets/NoeFlandre/osm-polygon-wikidata-sentence-relevance/tree/{identity["input_dataset_revision"]})
+- Input dataset revision: [`{identity["input_dataset_revision"]}`](https://huggingface.co/datasets/NoeFlandre/osm-polygon-wikidata-sentence-relevance/tree/{identity["input_dataset_revision"]})
 - Input Parquet SHA-256: `{identity["input_sha256"]}`
 - Source commit: `{identity["source_commit"]}`
 
 The original sentence and polygon metadata are preserved. Added fields are `landuse_relevance`, `polygon_relevance`, `landuse_reason`, `polygon_reason`, and `label_evidence`. See `manifest.json` for the exact counts, hashes, run identity, and server configuration. Code and reproduction instructions: [`NoeFlandre/osm-polygon-wikidata-sentence-relevance`](https://github.com/NoeFlandre/osm-polygon-wikidata-sentence-relevance).
 """
+
+
+def _validate_replaceable_v2_output(
+    directory: Path, current_identity: dict[str, Any]
+) -> None:
+    """Allow replacement only for a validated earlier V2 target."""
+
+    if directory.is_symlink() or not directory.is_dir():
+        raise LabelFinalizationError(
+            "existing output must be a regular V2 publication directory"
+        )
+    try:
+        manifest = json.loads((directory / "manifest.json").read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise LabelFinalizationError("existing V2 output manifest is invalid") from exc
+    previous_identity = manifest.get("run_identity")
+    if not isinstance(previous_identity, dict):
+        raise LabelFinalizationError("existing V2 output identity is missing")
+    if release_lane(previous_identity) is not ReleaseLane.V2_WORLDWIDE:
+        raise LabelFinalizationError("existing output is not a V2 publication")
+    previous_immutable = dict(previous_identity)
+    current_immutable = dict(current_identity)
+    previous_target = previous_immutable.pop("sampling_target", None)
+    current_target = current_immutable.pop("sampling_target", None)
+    if previous_immutable != current_immutable:
+        raise LabelFinalizationError("existing V2 output identity does not match")
+    if (
+        isinstance(previous_target, bool)
+        or not isinstance(previous_target, int)
+        or isinstance(current_target, bool)
+        or not isinstance(current_target, int)
+        or current_target <= previous_target
+    ):
+        raise LabelFinalizationError("existing V2 output target is not expandable")
+    try:
+        validate_labeled_publication(directory)
+    except LabelFinalizationError as exc:
+        raise LabelFinalizationError("existing V2 output failed validation") from exc
 
 
 def finalize_labeled_dataset(
@@ -411,12 +576,13 @@ def finalize_labeled_dataset(
         raise LabelFinalizationError(
             "input Parquet SHA-256 does not match run identity"
         )
-    table = select_canary_rows(pq.read_table(input_path), store.identity.row_limit)
-    regions = set(table["region"].to_pylist())
-    if regions != {"afghanistan"}:
-        raise LabelFinalizationError(
-            "labeling finalization is restricted to Afghanistan"
-        )
+    table = select_label_rows(
+        pq.read_table(input_path),
+        row_limit=store.identity.row_limit,
+        sampling_target=store.identity.sampling_target,
+        sampling_seed=store.identity.sampling_seed,
+        h3_resolution=store.identity.h3_resolution,
+    )
     records = store.load_all()
     by_id = {record.sentence_id: record for record in records}
     ids = table["sentence_id"].to_pylist()
@@ -435,8 +601,35 @@ def finalize_labeled_dataset(
     for name, values in additions.items():
         table = table.append_column(name, pa.array(values, type=pa.string()))
     output_dir = Path(output_dir)
-    if output_dir.exists():
-        raise LabelFinalizationError("output directory must not already exist")
+    identity = store.identity.to_dict()
+    lane = release_lane(identity)
+    regions = (
+        {
+            str(value).strip().removesuffix("-latest")
+            for value in table["region"].to_pylist()
+            if value is not None and str(value).strip()
+        }
+        if "region" in table.column_names
+        else set()
+    )
+    if lane is ReleaseLane.V2_WORLDWIDE:
+        if len(regions) < 2 or regions == {"afghanistan"}:
+            raise LabelFinalizationError(
+                "worldwide V2 publication requires multiple input regions"
+            )
+    elif regions and regions != {"afghanistan"}:
+        raise LabelFinalizationError(
+            "V1 Afghanistan publication cannot contain other regions"
+        )
+    # ``Path.exists()`` is false for a dangling symlink. Treat any symlink at
+    # the output path as existing so replacement validation fails closed.
+    previous_output = output_dir.exists() or output_dir.is_symlink()
+    if previous_output:
+        if release_lane(identity) is not ReleaseLane.V2_WORLDWIDE:
+            raise LabelFinalizationError(
+                "existing output may only be replaced by a V2 continuation"
+            )
+        _validate_replaceable_v2_output(output_dir, identity)
     output_dir.parent.mkdir(parents=True, exist_ok=True)
     staging = Path(
         tempfile.mkdtemp(prefix=f".{output_dir.name}.", dir=output_dir.parent)
@@ -478,24 +671,34 @@ def finalize_labeled_dataset(
         stats["analytics"] = analytics.to_dict()
         timing_path = store.root / "timing.json"
         timing = json.loads(timing_path.read_text()) if timing_path.is_file() else {}
-        _render_plots(table, staging / "assets")
+        scope_label = _scope_label(table)
+        publication_revision = _publication_revision(identity)
+        _render_plots(table, staging / "assets", scope_label=scope_label)
         render_analytics_assets(analytics, staging / "assets")
-        artifact_sha256 = {
-            name: _sha256(staging / name)
-            for name in (
-                "sentences.parquet",
-                "assets/label_distribution.png",
-                "assets/positive_languages.png",
-                *(_ANALYTICS_ASSETS),
+        if lane is ReleaseLane.V2_WORLDWIDE:
+            stats["h3_sentence_distribution"] = render_h3_sentence_distribution(
+                table,
+                staging / "assets" / H3_MAP_ASSET_NAME,
+                resolution=int(identity.get("h3_resolution") or 0),
+                scope_label=scope_label,
             )
-        }
+        artifact_names = (
+            "sentences.parquet",
+            "assets/label_distribution.png",
+            "assets/positive_languages.png",
+            *(_ANALYTICS_ASSETS),
+        )
+        if lane is ReleaseLane.V2_WORLDWIDE:
+            artifact_names += (f"assets/{H3_MAP_ASSET_NAME}",)
+        artifact_sha256 = {name: _sha256(staging / name) for name in artifact_names}
         manifest = _manifest(
             dataset_repo_id=dataset_repo_id,
             parquet_sha256=_sha256(parquet_path),
             artifact_sha256=artifact_sha256,
             statistics=stats,
-            identity=store.identity.to_dict(),
+            identity=identity,
             timing=timing,
+            publication_revision=publication_revision,
         )
         (staging / "manifest.json").write_text(
             json.dumps(manifest, indent=2, sort_keys=True) + "\n"
@@ -505,13 +708,31 @@ def finalize_labeled_dataset(
                 dataset_repo_id=dataset_repo_id,
                 row_count=table.num_rows,
                 stats=stats,
-                identity=store.identity.to_dict(),
+                identity=identity,
                 timing=timing,
+                scope_label=scope_label,
+                publication_revision=publication_revision,
             )
         )
         for name in ("manifest.json", "README.md"):
             os.chmod(staging / name, 0o600)
-        os.replace(staging, output_dir)
+        backup: Path | None = None
+        if previous_output:
+            descriptor, backup_name = tempfile.mkstemp(
+                prefix=f".{output_dir.name}.backup-", dir=output_dir.parent
+            )
+            os.close(descriptor)
+            backup = Path(backup_name)
+            backup.unlink()
+            os.replace(output_dir, backup)
+        try:
+            os.replace(staging, output_dir)
+        except BaseException:
+            if backup is not None and backup.exists() and not output_dir.exists():
+                os.replace(backup, output_dir)
+            raise
+        if backup is not None:
+            shutil.rmtree(backup)
     except BaseException:
         shutil.rmtree(staging, ignore_errors=True)
         raise
@@ -522,7 +743,19 @@ def validate_labeled_publication(directory: Path) -> ValidatedLabeledPublication
     """Validate the closed publication layout and all factual identities."""
 
     directory = Path(directory)
-    expected = {Path(name) for name in _FILES}
+    try:
+        manifest = json.loads((directory / "manifest.json").read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise LabelFinalizationError("labeled publication manifest is invalid") from exc
+    identity = manifest.get("run_identity")
+    if not isinstance(identity, dict):
+        raise LabelFinalizationError("labeled publication identity is missing")
+    lane = release_lane(identity)
+    if manifest.get("release_lane") != lane.value:
+        raise LabelFinalizationError("labeled publication release lane mismatch")
+    if manifest.get("release_prefix") != release_prefix(lane):
+        raise LabelFinalizationError("labeled publication release prefix mismatch")
+    expected = {Path(name) for name in _release_files(identity)}
     actual = {
         path.relative_to(directory)
         for path in directory.rglob("*")
@@ -530,7 +763,6 @@ def validate_labeled_publication(directory: Path) -> ValidatedLabeledPublication
     }
     if actual != expected:
         raise LabelFinalizationError("labeled publication file layout mismatch")
-    manifest = json.loads((directory / "manifest.json").read_text())
     parquet = directory / "sentences.parquet"
     if manifest.get("parquet_sha256") != _sha256(parquet):
         raise LabelFinalizationError("labeled Parquet SHA-256 mismatch")
@@ -550,12 +782,15 @@ def validate_labeled_publication(directory: Path) -> ValidatedLabeledPublication
             raise LabelFinalizationError(
                 f"server_config is missing required field: {key}"
             )
-    for name in (
+    artifact_names = (
         "sentences.parquet",
         "assets/label_distribution.png",
         "assets/positive_languages.png",
         *(_ANALYTICS_ASSETS),
-    ):
+    )
+    if lane is ReleaseLane.V2_WORLDWIDE:
+        artifact_names += (f"assets/{H3_MAP_ASSET_NAME}",)
+    for name in artifact_names:
         if artifact_sha256.get(name) != _sha256(directory / name):
             raise LabelFinalizationError("artifact SHA-256 mismatch")
     table = pq.read_table(parquet)
@@ -563,19 +798,38 @@ def validate_labeled_publication(directory: Path) -> ValidatedLabeledPublication
     if stats.get("row_count") != table.num_rows:
         raise LabelFinalizationError("labeled publication row count mismatch")
     _validate_split_timing(manifest.get("timing", {}))
+    expected_revision = _publication_revision(identity)
+    if manifest.get("publication_revision", expected_revision) != expected_revision:
+        raise LabelFinalizationError(
+            "labeled publication revision does not match identity"
+        )
     for field in ("landuse_relevance", "polygon_relevance"):
         if stats.get(field) != _distribution(table[field].to_pylist()):
             raise LabelFinalizationError("labeled publication statistics mismatch")
     expected_analytics = build_label_analytics(_analytics_table(table)).to_dict()
     if stats.get("analytics") != expected_analytics:
         raise LabelFinalizationError("labeled publication analytics mismatch")
+    if lane is ReleaseLane.V2_WORLDWIDE:
+        expected_h3 = h3_sentence_distribution(
+            table, resolution=int(identity.get("h3_resolution") or 0)
+        )
+        if stats.get("h3_sentence_distribution") != {
+            "resolution": int(identity.get("h3_resolution") or 0),
+            "cell_count": len(expected_h3[0]),
+            "sentence_count": sum(expected_h3[0].values()),
+            "missing_coordinate_count": expected_h3[1],
+            "cells": expected_h3[0],
+        }:
+            raise LabelFinalizationError("labeled publication H3 statistics mismatch")
     persisted_card = (directory / "README.md").read_text()
     rendered_card = _render_card(
         dataset_repo_id=str(manifest["dataset_repo_id"]),
         row_count=table.num_rows,
         stats=stats,
-        identity=manifest["run_identity"],
+        identity=identity,
         timing=manifest["timing"],
+        scope_label=_scope_label(table),
+        publication_revision=expected_revision,
     )
     if rendered_card != persisted_card:
         raise LabelFinalizationError("labeled dataset card has drifted from data")
@@ -583,7 +837,7 @@ def validate_labeled_publication(directory: Path) -> ValidatedLabeledPublication
         directory=directory,
         row_count=table.num_rows,
         parquet_sha256=_sha256(parquet),
-        files=tuple(directory / name for name in _FILES),
+        files=tuple(directory / name for name in _release_files(identity)),
     )
 
 

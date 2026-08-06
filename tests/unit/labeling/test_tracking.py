@@ -57,7 +57,6 @@ def _output(tmp_path: Path) -> Path:
         "joint_label_heatmap.png",
         "polygon_coverage_funnel.png",
         "reason_code_distribution.png",
-        "slice_yield.html",
     ):
         (assets / name).write_bytes(b"asset")
     return output
@@ -68,7 +67,6 @@ class _FakeTrackio(types.ModuleType):
         super().__init__("trackio")
         self.init_calls: list[dict] = []
         self.log_calls: list[tuple[dict, int]] = []
-        self.save_calls: list[Path] = []
         self.finish_calls = 0
 
     def init(self, **kwargs):
@@ -83,14 +81,6 @@ class _FakeTrackio(types.ModuleType):
     @staticmethod
     def Image(path, *, caption):
         return {"image": str(path), "caption": caption}
-
-    @staticmethod
-    def Markdown(text):
-        return {"markdown": text}
-
-    def save(self, path):
-        self.save_calls.append(Path(path))
-        return "files/slice_yield.html"
 
     @staticmethod
     def Table(*, columns, data, log_mode):
@@ -171,8 +161,7 @@ def test_static_run_logs_one_step_with_kpis_tables_images_and_html(
     assert "joint_label_heatmap" in metrics
     assert "polygon_coverage_funnel" in metrics
     assert "reason_code_distribution" in metrics
-    assert "slice_yield" in metrics
-    assert fake.save_calls == [output / "assets" / "slice_yield.html"]
+    assert "slice_yield" not in metrics
     assert fake.finish_calls == 1
 
 

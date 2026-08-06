@@ -112,6 +112,9 @@ def _run_submit(
             "16",
             "8192",
             "16",
+            "200000",
+            "sentence-relevance-v2",
+            "3",
         ],
         env=env,
         text=True,
@@ -245,7 +248,8 @@ def test_job_wrapper_translates_submit_arguments_to_payload_contract() -> None:
     expected = (
         '"${PAYLOAD}" "${REPO_ROOT}" "$4" "$5" "$6" "$7" "$8" "$9" '
         '"${10}" "${11}" "${12}" "${13}" "${14}" "${LLAMA_PARALLEL}" '
-        '"${LLAMA_PER_SLOT_CONTEXT}" "${REQUEST_CONCURRENCY}"'
+        '"${LLAMA_PER_SLOT_CONTEXT}" "${REQUEST_CONCURRENCY}" '
+        '"${SAMPLING_TARGET}" "${SAMPLING_SEED}" "${SAMPLING_H3_RESOLUTION}"'
     )
     assert expected in normalized
     assert '"${PAYLOAD}" "$@"' not in text
@@ -254,7 +258,7 @@ def test_job_wrapper_translates_submit_arguments_to_payload_contract() -> None:
 def test_submitter_propagates_llama_parallel_positional() -> None:
     text = _text("submit_afghanistan_labeling.sh")
     assert 'LLAMA_PARALLEL="${15}"' in text
-    assert "exactly seventeen arguments" in text
+    assert "exactly twenty arguments" in text
     assert "1|2|4|8|16|32" in text
 
 

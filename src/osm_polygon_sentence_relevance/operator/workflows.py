@@ -136,6 +136,9 @@ def label_submission(
         str(requirements.llama_parallel),
         str(requirements.llama_per_slot_context),
         str(requirements.request_concurrency),
+        str(requirements.sampling_target or 0),
+        requirements.sampling_seed,
+        str(requirements.sampling_h3_resolution),
     )
     if walltime_seconds == DEFAULT_LABEL_WALLTIME_SECONDS and policy_type is None:
         return SubmissionRequest(

@@ -128,6 +128,10 @@ _OVERLAPPING_IDENTITY_FIELDS: tuple[str, ...] = (
     "llama_per_slot_context",
     "llama_total_context",
     "request_concurrency",
+    "sampling_target",
+    "sampling_seed",
+    "sampling_h3_resolution",
+    "sampling_version",
 )
 
 

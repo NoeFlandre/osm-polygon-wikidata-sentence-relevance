@@ -25,6 +25,10 @@ EXPECTED_EXPORTS = {
     "DEFAULT_LLAMA_PARALLEL",
     "DEFAULT_LLAMA_PER_SLOT_CONTEXT",
     "DEFAULT_ROW_LIMIT",
+    "DEFAULT_SAMPLING_TARGET",
+    "DEFAULT_SAMPLING_SEED",
+    "DEFAULT_SAMPLING_H3_RESOLUTION",
+    "SAMPLING_VERSION",
     "DEFAULT_LABEL_MODEL_REPO_ID",
     "DEFAULT_LABEL_MODEL_REVISION",
     "DEFAULT_LABEL_MODEL_FILE",
@@ -38,6 +42,7 @@ EXPECTED_EXPORTS = {
 def test_internal_configuration_modules_exist() -> None:
     assert (INTERNAL / "__init__.py").is_file()
     assert (INTERNAL / "validation.py").is_file()
+    assert (INTERNAL / "requirements.py").is_file()
     assert (INTERNAL / "models.py").is_file()
 
 

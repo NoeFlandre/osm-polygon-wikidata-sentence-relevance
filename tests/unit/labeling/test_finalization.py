@@ -4,6 +4,7 @@ import hashlib
 import json
 import sys
 import types
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -20,6 +21,9 @@ from osm_polygon_sentence_relevance.labeling.contracts import (
 )
 from osm_polygon_sentence_relevance.labeling.finalization import (
     LabelFinalizationError,
+    _render_card,
+    _scope_label,
+    _validate_replaceable_v2_output,
     finalize_labeled_dataset,
     validate_labeled_publication,
 )
@@ -63,9 +67,15 @@ def _input(path: Path) -> None:
     )
 
 
-def _store(path: Path, input_path: Path, *, complete: bool = True) -> CheckpointStore:
+def _store(
+    path: Path,
+    input_path: Path,
+    *,
+    complete: bool = True,
+    identity: RunIdentity | None = None,
+) -> CheckpointStore:
     digest = hashlib.sha256(input_path.read_bytes()).hexdigest()
-    store = CheckpointStore(path, _identity(digest))
+    store = CheckpointStore(path, identity or _identity(digest))
     records = [
         LabelRecord(
             "s1",
@@ -141,7 +151,6 @@ def test_finalization_generates_factual_card_manifest_and_plots(tmp_path: Path) 
         "assets/joint_label_heatmap.png",
         "assets/polygon_coverage_funnel.png",
         "assets/reason_code_distribution.png",
-        "assets/slice_yield.html",
         "sentences.parquet",
     }
     card = (output / "README.md").read_text()
@@ -191,7 +200,7 @@ def test_finalization_generates_factual_card_manifest_and_plots(tmp_path: Path) 
     )
 
 
-def test_refuses_partial_or_non_afghanistan_finalization(tmp_path: Path) -> None:
+def test_refuses_partial_and_accepts_multiple_regions(tmp_path: Path) -> None:
     input_path = tmp_path / "input.parquet"
     _input(input_path)
     with pytest.raises(LabelFinalizationError, match="exactly one"):
@@ -205,11 +214,225 @@ def test_refuses_partial_or_non_afghanistan_finalization(tmp_path: Path) -> None
         1, "region", pa.array(["afghanistan", "other", "afghanistan"])
     )
     pq.write_table(table, input_path)
-    with pytest.raises(LabelFinalizationError, match="Afghanistan"):
+    with pytest.raises(LabelFinalizationError, match="V1 Afghanistan"):
         finalize_labeled_dataset(
             input_path=input_path,
             store=_store(tmp_path / "complete", input_path),
             output_dir=tmp_path / "out2",
+            dataset_repo_id="owner/dataset",
+        )
+
+
+def test_scope_label_and_v2_card_handle_global_and_empty_inputs() -> None:
+    assert _scope_label(pa.table({"sentence_id": ["s1"]})) == "Dataset"
+    assert _scope_label(pa.table({"region": ["afghanistan-latest"]})) == "Afghanistan"
+    assert _scope_label(pa.table({"region": ["afghanistan", "france"]})) == "Global"
+
+    identity = _identity().to_dict()
+    identity.update(
+        {
+            "sampling_target": 200_000,
+            "sampling_seed": "sentence-relevance-v2",
+            "h3_resolution": 3,
+            "sampling_version": "labeling-v2-h3-language-osm-primary",
+        }
+    )
+    empty_counts = {"yes": 0, "no": 0, "uncertain": 0}
+    analytics = {
+        "total_labeled_sentences": 0,
+        "unique_polygons": 0,
+        "unique_languages": 0,
+        "strong_positive_yield": 0.0,
+        "joint_counts": {
+            f"{land}|{polygon}": 0 for land in empty_counts for polygon in empty_counts
+        },
+        "joint_percentages": {
+            f"{land}|{polygon}": 0.0
+            for land in empty_counts
+            for polygon in empty_counts
+        },
+        "coverage_funnel": {
+            "all_polygons": 0,
+            "polygon_relevant_polygons": 0,
+            "landuse_relevant_polygons": 0,
+            "both_yes_polygons": 0,
+        },
+        "slices": [],
+    }
+    card = _render_card(
+        dataset_repo_id="owner/dataset",
+        row_count=0,
+        stats={
+            "landuse_relevance": empty_counts,
+            "polygon_relevance": empty_counts,
+            "analytics": analytics,
+        },
+        identity=identity,
+        timing={
+            "initial_inference_seconds": 0.0,
+            "repair_inference_seconds": 0.0,
+            "inference_seconds": 0.0,
+        },
+        scope_label="Global",
+        publication_revision="v2",
+    )
+    assert "deterministic stratified sample" in card
+    assert "0.00%" in card
+
+
+def test_v2_finalization_replaces_only_a_previous_v2_target_output(
+    tmp_path: Path,
+) -> None:
+    input_path = tmp_path / "input.parquet"
+    _input(input_path)
+    table = pq.read_table(input_path).set_column(
+        1, "region", pa.array(["afghanistan", "france", "japan"])
+    )
+    pq.write_table(table, input_path)
+    digest = hashlib.sha256(input_path.read_bytes()).hexdigest()
+    initial_identity = replace(
+        _identity(digest),
+        sampling_target=0,
+        sampling_seed="sentence-relevance-v2",
+        h3_resolution=3,
+        sampling_version="labeling-v2-h3-language-osm-primary",
+    )
+    output = tmp_path / "publication"
+    finalize_labeled_dataset(
+        input_path=input_path,
+        store=_store(tmp_path / "work", input_path, identity=initial_identity),
+        output_dir=output,
+        dataset_repo_id="owner/dataset",
+    )
+
+    expanded_identity = replace(initial_identity, sampling_target=3)
+    result = finalize_labeled_dataset(
+        input_path=input_path,
+        store=CheckpointStore(tmp_path / "work", expanded_identity),
+        output_dir=output,
+        dataset_repo_id="owner/dataset",
+    )
+
+    assert result.row_count == 3
+    manifest = json.loads((output / "manifest.json").read_text())
+    assert manifest["run_identity"]["sampling_target"] == 3
+    assert manifest["publication_revision"] == "main"
+    assert manifest["release_lane"] == "v2-worldwide"
+    assert manifest["release_prefix"] == "v2-worldwide"
+    assert "assets/h3_sentence_distribution.png" in manifest["artifact_sha256"]
+    assert (
+        manifest["statistics"]["h3_sentence_distribution"]["missing_coordinate_count"]
+        == 3
+    )
+    card = (output / "README.md").read_text()
+    assert "## Geographic distribution" in card
+    assert "resolve/main/v2-worldwide/assets/h3_sentence_distribution.png" in card
+
+
+def test_v2_replacement_guard_rejects_untrusted_previous_outputs(
+    tmp_path: Path,
+) -> None:
+    current = _identity().to_dict()
+    current.update(
+        {
+            "sampling_target": 400,
+            "sampling_seed": "sentence-relevance-v2",
+            "h3_resolution": 3,
+            "sampling_version": "labeling-v2-h3-language-osm-primary",
+        }
+    )
+
+    invalid_manifest = tmp_path / "invalid"
+    invalid_manifest.mkdir()
+    (invalid_manifest / "manifest.json").write_text("{")
+    with pytest.raises(LabelFinalizationError, match="manifest is invalid"):
+        _validate_replaceable_v2_output(invalid_manifest, current)
+
+    missing_identity = tmp_path / "missing-identity"
+    missing_identity.mkdir()
+    (missing_identity / "manifest.json").write_text("{}")
+    with pytest.raises(LabelFinalizationError, match="identity is missing"):
+        _validate_replaceable_v2_output(missing_identity, current)
+
+    v1_identity = _identity().to_dict()
+    non_v2 = tmp_path / "v1"
+    non_v2.mkdir()
+    (non_v2 / "manifest.json").write_text(json.dumps({"run_identity": v1_identity}))
+    with pytest.raises(LabelFinalizationError, match="not a V2"):
+        _validate_replaceable_v2_output(non_v2, current)
+
+    mismatch_identity = dict(current)
+    mismatch_identity["sampling_target"] = 200
+    mismatch_identity["source_commit"] = "f" * 40
+    mismatch = tmp_path / "mismatch"
+    mismatch.mkdir()
+    (mismatch / "manifest.json").write_text(
+        json.dumps({"run_identity": mismatch_identity})
+    )
+    with pytest.raises(LabelFinalizationError, match="does not match"):
+        _validate_replaceable_v2_output(mismatch, current)
+
+    same_target = tmp_path / "same-target"
+    same_target.mkdir()
+    previous = dict(current)
+    previous["sampling_target"] = 400
+    (same_target / "manifest.json").write_text(json.dumps({"run_identity": previous}))
+    with pytest.raises(LabelFinalizationError, match="not expandable"):
+        _validate_replaceable_v2_output(same_target, current)
+
+    incomplete = tmp_path / "incomplete"
+    incomplete.mkdir()
+    previous["sampling_target"] = 200
+    (incomplete / "manifest.json").write_text(json.dumps({"run_identity": previous}))
+    with pytest.raises(LabelFinalizationError, match="failed validation"):
+        _validate_replaceable_v2_output(incomplete, current)
+
+    target = tmp_path / "target"
+    target.mkdir()
+    symlink = tmp_path / "symlink"
+    symlink.symlink_to(target, target_is_directory=True)
+    with pytest.raises(LabelFinalizationError, match="regular V2"):
+        _validate_replaceable_v2_output(symlink, current)
+
+
+def test_v1_finalization_never_replaces_an_existing_output(tmp_path: Path) -> None:
+    input_path = tmp_path / "input.parquet"
+    _input(input_path)
+    output = tmp_path / "publication"
+    output.mkdir()
+    with pytest.raises(LabelFinalizationError, match="only be replaced by a V2"):
+        finalize_labeled_dataset(
+            input_path=input_path,
+            store=_store(tmp_path / "work", input_path),
+            output_dir=output,
+            dataset_repo_id="owner/dataset",
+        )
+
+
+def test_finalization_rejects_a_dangling_output_symlink(tmp_path: Path) -> None:
+    input_path = tmp_path / "input.parquet"
+    _input(input_path)
+    output = tmp_path / "publication"
+    output.symlink_to(tmp_path / "missing-publication", target_is_directory=True)
+    with pytest.raises(LabelFinalizationError, match="existing output"):
+        finalize_labeled_dataset(
+            input_path=input_path,
+            store=_store(tmp_path / "work", input_path),
+            output_dir=output,
+            dataset_repo_id="owner/dataset",
+        )
+
+
+def test_finalization_rejects_input_hash_drift(tmp_path: Path) -> None:
+    input_path = tmp_path / "input.parquet"
+    _input(input_path)
+    store = _store(tmp_path / "work", input_path)
+    input_path.write_bytes(input_path.read_bytes() + b"drift")
+    with pytest.raises(LabelFinalizationError, match="SHA-256"):
+        finalize_labeled_dataset(
+            input_path=input_path,
+            store=store,
+            output_dir=tmp_path / "publication",
             dataset_repo_id="owner/dataset",
         )
 
@@ -340,7 +563,6 @@ def test_publication_is_one_commit_and_includes_all_artifacts(tmp_path: Path) ->
         "assets/joint_label_heatmap.png",
         "assets/polygon_coverage_funnel.png",
         "assets/reason_code_distribution.png",
-        "assets/slice_yield.html",
     }
 
 
@@ -423,7 +645,6 @@ def test_publication_default_hub_integration_verifies_exact_commit(
                 "assets/joint_label_heatmap.png",
                 "assets/polygon_coverage_funnel.png",
                 "assets/reason_code_distribution.png",
-                "assets/slice_yield.html",
                 ".gitattributes",
             ],
         }

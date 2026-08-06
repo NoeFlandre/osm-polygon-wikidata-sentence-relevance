@@ -12,6 +12,7 @@ import pyarrow.parquet as pq
 
 from .analytics import LabelAnalytics, build_label_analytics
 from .finalization import ValidatedLabeledPublication, validate_labeled_publication
+from .releases import release_lane, trackio_space_id
 
 
 class TrackioError(RuntimeError):
@@ -93,10 +94,9 @@ def _payload(
     trackio: Any,
     directory: Path,
     analytics: LabelAnalytics,
-    saved_slice_path: str,
 ) -> dict[str, Any]:
     assets = directory / "assets"
-    return {
+    payload = {
         "total_labeled_sentences": analytics.total_labeled_sentences,
         "unique_polygons": analytics.unique_polygons,
         "unique_languages": analytics.unique_languages,
@@ -110,10 +110,6 @@ def _payload(
         "reason_code_distribution": trackio.Image(
             assets / "reason_code_distribution.png",
             caption="Normalized reason-code distributions",
-        ),
-        "slice_yield": trackio.Markdown(
-            "Interactive selector saved as `slice_yield.html` in the Trackio "
-            f"project files ({saved_slice_path})."
         ),
         "joint_label_table": _table(
             trackio,
@@ -134,6 +130,12 @@ def _payload(
             _slice_rows(analytics),
         ),
     }
+    h3_map = assets / "h3_sentence_distribution.png"
+    if h3_map.is_file():
+        payload["h3_sentence_distribution"] = trackio.Image(
+            h3_map, caption="Labeled sentences by H3 cell"
+        )
+    return payload
 
 
 def log_static_labeling_run(
@@ -171,6 +173,8 @@ def log_static_labeling_run(
     if not actual_run_name.strip():
         raise TrackioError("Trackio run name must be non-blank")
     identity = manifest.get("run_identity", {})
+    lane = release_lane(identity)
+    resolved_space_id = space_id or trackio_space_id(lane)
     config = {
         "row_count": validated.row_count,
         "parquet_sha256": validated.parquet_sha256,
@@ -183,18 +187,16 @@ def log_static_labeling_run(
     init_kwargs: dict[str, Any] = {
         "project": project,
         "name": actual_run_name,
-        "config": config,
+        "config": {**config, "release_lane": lane.value},
         "embed": False,
         "auto_log_gpu": False,
     }
-    if space_id is not None:
-        init_kwargs["space_id"] = space_id
+    init_kwargs["space_id"] = resolved_space_id
     started = False
     try:
         trackio.init(**init_kwargs)
         started = True
-        saved_slice_path = trackio.save(directory / "assets" / "slice_yield.html")
-        trackio.log(_payload(trackio, directory, analytics, saved_slice_path), step=0)
+        trackio.log(_payload(trackio, directory, analytics), step=0)
     except Exception as exc:
         raise TrackioError("Trackio static run failed") from exc
     finally:
@@ -213,7 +215,7 @@ def log_static_labeling_run(
             "unique_languages": analytics.unique_languages,
             "strong_positive_yield": analytics.strong_positive_yield,
         },
-        space_id=space_id,
+        space_id=resolved_space_id,
     )
 
 

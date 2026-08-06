@@ -4,14 +4,10 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from hashlib import sha256
-from json import dumps
 from pathlib import Path
 from typing import cast
 
-from osm_polygon_sentence_relevance.contracts.constants import (
-    PIPELINE_VERSION,
-)
+from osm_polygon_sentence_relevance.contracts.constants import PIPELINE_VERSION
 from osm_polygon_sentence_relevance.operator._config.defaults import (
     DATA_ROOT,
     DEFAULT_BATCH_SIZE,
@@ -22,171 +18,31 @@ from osm_polygon_sentence_relevance.operator._config.defaults import (
     DEFAULT_LLAMA_PARALLEL,
     DEFAULT_LLAMA_PER_SLOT_CONTEXT,
     DEFAULT_ROW_LIMIT,
+    DEFAULT_SAMPLING_H3_RESOLUTION,
+    DEFAULT_SAMPLING_SEED,
+    DEFAULT_SAMPLING_TARGET,
     DEFAULT_SPLIT_MODEL,
     DEFAULT_TOKENIZER_REPO_ID,
     DEFAULT_TOKENIZER_REVISION,
     INPUT_DATASET_ID,
     OUTPUT_DATASET_ID,
     PROMPT_VERSION,
+    SAMPLING_VERSION,
 )
 from osm_polygon_sentence_relevance.operator._config.enums import Scope, Stage
+from osm_polygon_sentence_relevance.operator._config.identity import RunIdentity
+from osm_polygon_sentence_relevance.operator._config.requirements import (
+    Grid5000Requirements,
+)
 from osm_polygon_sentence_relevance.operator._config.validation import (
     canonicalize_scope,
     canonicalize_stage,
-    normalize_runtime_requirements,
     require_run_fields_for_scope,
     validate_hex,
     validate_model_file,
     validate_nonblank_no_ws,
     validate_repo_id,
 )
-
-
-@dataclass(frozen=True, slots=True)
-class Grid5000Requirements:
-    """Validated runtime settings that affect resumable checkpoints."""
-
-    batch_size: int
-    row_limit: int
-    llama_parallel: int
-    llama_per_slot_context: int
-    llama_total_context: int | None = None
-    request_concurrency: int | None = None
-
-    def __post_init__(self) -> None:
-        (
-            normalized_batch_size,
-            normalized_row_limit,
-            normalized_parallel,
-            normalized_per_slot,
-            normalized_total,
-            normalized_concurrency,
-        ) = normalize_runtime_requirements(
-            batch_size=self.batch_size,
-            row_limit=self.row_limit,
-            llama_parallel=self.llama_parallel,
-            llama_per_slot_context=self.llama_per_slot_context,
-            llama_total_context=self.llama_total_context,
-            request_concurrency=self.request_concurrency,
-        )
-        object.__setattr__(self, "batch_size", normalized_batch_size)
-        object.__setattr__(self, "row_limit", normalized_row_limit)
-        object.__setattr__(self, "llama_parallel", normalized_parallel)
-        object.__setattr__(self, "llama_per_slot_context", normalized_per_slot)
-        object.__setattr__(self, "llama_total_context", normalized_total)
-        object.__setattr__(self, "request_concurrency", normalized_concurrency)
-
-    @classmethod
-    def build(
-        cls,
-        *,
-        batch_size: int | str = DEFAULT_BATCH_SIZE,
-        row_limit: int | str = DEFAULT_ROW_LIMIT,
-        llama_parallel: int | str = DEFAULT_LLAMA_PARALLEL,
-        llama_per_slot_context: int | str = DEFAULT_LLAMA_PER_SLOT_CONTEXT,
-        llama_total_context: int | str | None = None,
-        request_concurrency: int | str | None = None,
-    ) -> Grid5000Requirements:
-        return cls(
-            batch_size=cast(int, batch_size),
-            row_limit=cast(int, row_limit),
-            llama_parallel=cast(int, llama_parallel),
-            llama_per_slot_context=cast(int, llama_per_slot_context),
-            llama_total_context=cast(int | None, llama_total_context),
-            request_concurrency=cast(int | None, request_concurrency),
-        )
-
-
-@dataclass(frozen=True, slots=True)
-class RunIdentity:
-    """Deterministic identity for a complete operator run."""
-
-    scope: Scope
-    stage: Stage
-    source_commit: str
-    input_dataset_id: str
-    output_dataset_id: str
-    pipeline_version: str
-    batch_size: int
-    row_limit: int | None
-    llama_parallel: int | None
-    llama_per_slot_context: int | None
-    llama_total_context: int | None
-    request_concurrency: int | None
-    region: str | None = None
-    input_dataset_revision: str | None = None
-    split_model: str | None = None
-    model_repo_id: str | None = None
-    model_revision: str | None = None
-    model_file: str | None = None
-    model_file_sha256: str | None = None
-    tokenizer_repo_id: str | None = None
-    tokenizer_revision: str | None = None
-    prompt_version: str | None = None
-    _canonical_json: str = field(default="", init=False, repr=False)
-    run_id: str = field(default="", init=False)
-
-    def __post_init__(self) -> None:
-        payload = self.to_dict()
-        canonical = dumps(
-            payload,
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=False,
-        )
-        digest = sha256(canonical.encode("utf-8")).hexdigest()[:20]
-        object.__setattr__(self, "_canonical_json", canonical)
-        object.__setattr__(self, "run_id", digest)
-
-    @property
-    def canonical_json(self) -> str:
-        """Canonical JSON used to derive run identity."""
-
-        return self._canonical_json
-
-    def to_dict(self) -> dict[str, str | int]:
-        """Return the stable subset of result-affecting fields."""
-
-        payload: dict[str, str | int] = {
-            "scope": str(self.scope),
-            "stage": str(self.stage),
-            "source_commit": self.source_commit,
-            "input_dataset_id": self.input_dataset_id,
-            "output_dataset_id": self.output_dataset_id,
-            "pipeline_version": self.pipeline_version,
-            "batch_size": self.batch_size,
-        }
-        if self.region is not None:
-            payload["region"] = self.region
-        if self.input_dataset_revision is not None:
-            payload["input_dataset_revision"] = self.input_dataset_revision
-        if self.split_model is not None:
-            payload["split_model"] = self.split_model
-        if self.model_repo_id is not None:
-            payload["model_repo_id"] = self.model_repo_id
-        if self.model_revision is not None:
-            payload["model_revision"] = self.model_revision
-        if self.model_file is not None:
-            payload["model_file"] = self.model_file
-        if self.model_file_sha256 is not None:
-            payload["model_file_sha256"] = self.model_file_sha256
-        if self.tokenizer_repo_id is not None:
-            payload["tokenizer_repo_id"] = self.tokenizer_repo_id
-        if self.tokenizer_revision is not None:
-            payload["tokenizer_revision"] = self.tokenizer_revision
-        if self.prompt_version is not None:
-            payload["prompt_version"] = self.prompt_version
-        if self.row_limit is not None:
-            payload["row_limit"] = self.row_limit
-        if self.llama_parallel is not None:
-            payload["llama_parallel"] = self.llama_parallel
-        if self.llama_per_slot_context is not None:
-            payload["llama_per_slot_context"] = self.llama_per_slot_context
-        if self.llama_total_context is not None:
-            payload["llama_total_context"] = self.llama_total_context
-        if self.request_concurrency is not None:
-            payload["request_concurrency"] = self.request_concurrency
-        return payload
 
 
 @dataclass(frozen=True, slots=True)
@@ -226,6 +82,10 @@ class OperatorConfig:
         llama_per_slot_context: int | str = DEFAULT_LLAMA_PER_SLOT_CONTEXT,
         llama_total_context: int | str | None = None,
         request_concurrency: int | str | None = None,
+        sampling_target: int | str | None = None,
+        sampling_seed: str = DEFAULT_SAMPLING_SEED,
+        sampling_h3_resolution: int = DEFAULT_SAMPLING_H3_RESOLUTION,
+        sampling_version: str = SAMPLING_VERSION,
         region: str | None = None,
         input_revision: str | None = None,
         input_dataset_id: str = INPUT_DATASET_ID,
@@ -290,6 +150,11 @@ class OperatorConfig:
             expected=OUTPUT_DATASET_ID,
         )
 
+        effective_sampling_target = (
+            DEFAULT_SAMPLING_TARGET
+            if canonical_scope is Scope.ALL and sampling_target is None
+            else sampling_target
+        )
         requirements = Grid5000Requirements.build(
             batch_size=batch_size,
             row_limit=row_limit,
@@ -297,6 +162,10 @@ class OperatorConfig:
             llama_per_slot_context=llama_per_slot_context,
             llama_total_context=llama_total_context,
             request_concurrency=request_concurrency,
+            sampling_target=effective_sampling_target,
+            sampling_seed=sampling_seed,
+            sampling_h3_resolution=sampling_h3_resolution,
+            sampling_version=sampling_version,
         )
         return cls(
             scope=canonical_scope,
@@ -339,6 +208,19 @@ class OperatorConfig:
 
         identity_dict = cast("Mapping[str, str | int]", identity)
         stage = canonicalize_stage(cast(str, identity_dict["stage"]))
+        sampling_fields_present = any(
+            key in identity_dict
+            for key in ("sampling_seed", "sampling_h3_resolution", "sampling_version")
+        )
+        persisted_sampling_target: int | None = cast(
+            "int | None", identity_dict.get("sampling_target")
+        )
+        if persisted_sampling_target is None and sampling_fields_present:
+            # A stable checkpoint identity intentionally omits the mutable
+            # target. Zero reconstructs the explicit V2 full-input mode when
+            # no target fact is available; the operator resume path injects a
+            # positive target from state facts before calling this method.
+            persisted_sampling_target = 0
         # Split identities never persisted label-only fields; we must NOT
         # silently fall back to current defaults for those, because doing
         # so would change the canonical JSON and break the run ID.
@@ -368,6 +250,16 @@ class OperatorConfig:
                 llama_per_slot_context=identity_dict["llama_per_slot_context"],
                 llama_total_context=identity_dict["llama_total_context"],
                 request_concurrency=identity_dict["request_concurrency"],
+                sampling_target=persisted_sampling_target,
+                sampling_seed=cast(
+                    str,
+                    _opt("sampling_seed", DEFAULT_SAMPLING_SEED),
+                ),
+                sampling_h3_resolution=cast(
+                    int,
+                    _opt("sampling_h3_resolution", DEFAULT_SAMPLING_H3_RESOLUTION),
+                ),
+                sampling_version=cast(str, _opt("sampling_version", SAMPLING_VERSION)),
                 region=cast("str | None", identity_dict.get("region")),
                 input_revision=cast(
                     "str | None", identity_dict.get("input_dataset_revision")
@@ -404,6 +296,12 @@ class OperatorConfig:
             llama_per_slot_context=identity_dict["llama_per_slot_context"],
             llama_total_context=identity_dict["llama_total_context"],
             request_concurrency=identity_dict["request_concurrency"],
+            sampling_target=persisted_sampling_target,
+            sampling_seed=cast(str, _opt("sampling_seed", DEFAULT_SAMPLING_SEED)),
+            sampling_h3_resolution=cast(
+                int, _opt("sampling_h3_resolution", DEFAULT_SAMPLING_H3_RESOLUTION)
+            ),
+            sampling_version=cast(str, _opt("sampling_version", SAMPLING_VERSION)),
             region=cast("str | None", identity_dict.get("region")),
             input_revision=cast(
                 "str | None", identity_dict.get("input_dataset_revision")
@@ -464,6 +362,15 @@ class OperatorConfig:
         request_concurrency = (
             self.requirements.request_concurrency if is_label else None
         )
+        sampling_target = self.requirements.sampling_target if is_label else None
+        sampling_enabled = is_label and sampling_target is not None
+        sampling_seed = self.requirements.sampling_seed if sampling_enabled else None
+        sampling_h3_resolution = (
+            self.requirements.sampling_h3_resolution if sampling_enabled else None
+        )
+        sampling_version = (
+            self.requirements.sampling_version if sampling_enabled else None
+        )
 
         object.__setattr__(
             self,
@@ -491,5 +398,9 @@ class OperatorConfig:
                 tokenizer_repo_id=tokenizer_repo_id,
                 tokenizer_revision=tokenizer_revision,
                 prompt_version=prompt_version,
+                sampling_target=sampling_target,
+                sampling_seed=sampling_seed,
+                sampling_h3_resolution=sampling_h3_resolution,
+                sampling_version=sampling_version,
             ),
         )

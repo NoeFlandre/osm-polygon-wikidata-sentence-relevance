@@ -1,13 +1,28 @@
-"""Atomic Hugging Face publication for complete labeled datasets."""
+"""Atomic Hugging Face publication for complete labeled datasets.
+
+Both releases are committed to the dataset's single ``main`` revision. V1
+keeps its historical root paths; V2 is mapped below ``v2-worldwide/``. This
+prevents a worldwide continuation from replacing the Afghanistan files while
+avoiding a second public release branch.
+"""
 
 from __future__ import annotations
 
+import json
+import shutil
+import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from .finalization import validate_labeled_publication
+from .releases import (
+    V2_REMOTE_PREFIX,
+    ReleaseLane,
+    release_lane,
+    remote_release_path,
+)
 
 
 class LabelPublicationError(RuntimeError):
@@ -23,7 +38,7 @@ class LabelPublicationResult:
 
 
 # The closed release layout the publisher maintains on the Hub.
-_LABELED_RELEASE_FILES: tuple[str, ...] = (
+_BASE_RELEASE_FILES: tuple[str, ...] = (
     "sentences.parquet",
     "manifest.json",
     "README.md",
@@ -32,8 +47,10 @@ _LABELED_RELEASE_FILES: tuple[str, ...] = (
     "assets/joint_label_heatmap.png",
     "assets/polygon_coverage_funnel.png",
     "assets/reason_code_distribution.png",
-    "assets/slice_yield.html",
 )
+_V2_RELEASE_FILES: tuple[str, ...] = tuple(
+    remote_release_path(ReleaseLane.V2_WORLDWIDE, path) for path in _BASE_RELEASE_FILES
+) + ("v2-worldwide/assets/h3_sentence_distribution.png",)
 # ``.gitattributes`` must always be preserved verbatim; it is never
 # part of the add/replace/delete set so it survives across releases.
 _GITATTRIBUTES_NAME = ".gitattributes"
@@ -44,22 +61,47 @@ _OBSOLETE_DELETE_ALLOWLIST: frozenset[str] = frozenset(
     {
         "assets/geographic_coverage.png",
         "assets/language_distribution.png",
+        "assets/slice_yield.html",
+        "v2-worldwide/assets/slice_yield.html",
     }
 )
 
 
-def _require_main_revision(revision: str) -> None:
+def _expected_revision(directory: Path) -> str:
+    """Return the only public Hugging Face revision used by this dataset."""
+
+    try:
+        manifest = json.loads((directory / "manifest.json").read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise LabelPublicationError("cannot read label publication manifest") from exc
+    identity = manifest.get("run_identity")
+    if not isinstance(identity, dict):
+        raise LabelPublicationError("label publication identity is missing")
+    expected = "main"
+    recorded = manifest.get("publication_revision")
+    if recorded is not None and recorded != expected:
+        raise LabelPublicationError(
+            "publication revision is inconsistent with identity"
+        )
+    return expected
+
+
+def _require_release_revision(revision: str, expected: str) -> None:
     if revision != "main":
-        raise LabelPublicationError("label publication only targets the main branch")
+        raise LabelPublicationError("all label releases must use the main revision")
+    if revision != expected:
+        raise LabelPublicationError("label publication revision is not main")
 
 
 def _classify_remote_path(path: str) -> str:
-    """Return ``expected``, ``obsolete``, ``gitattributes``, or ``unexpected``."""
+    """Classify release, checkpoint, and unexpected remote paths."""
 
     if path == _GITATTRIBUTES_NAME:
         return "gitattributes"
-    if path in _LABELED_RELEASE_FILES:
-        return "expected"
+    if path in _BASE_RELEASE_FILES or path in _V2_RELEASE_FILES:
+        return "preserve"
+    if path.startswith(".pipeline/checkpoints/"):
+        return "preserve"
     if path in _OBSOLETE_DELETE_ALLOWLIST:
         return "obsolete"
     return "unexpected"
@@ -81,13 +123,15 @@ def _default_operation_factory() -> Callable[..., Any]:
     return factory
 
 
-def _default_list_remote_files(hub_api: Any, dataset_id: str) -> list[str]:
+def _default_list_remote_files(
+    hub_api: Any, dataset_id: str, revision: str
+) -> list[str]:
     try:
         return list(
             hub_api.list_repo_files(
                 repo_id=dataset_id,
                 repo_type="dataset",
-                revision="main",
+                revision=revision,
             )
         )
     except Exception as exc:
@@ -102,7 +146,9 @@ def _default_hub_api() -> Any:
     return HfApi()
 
 
-def _default_readback_downloader(repo_id: str, revision: str) -> Path:
+def _default_readback_downloader(
+    repo_id: str, revision: str, *, allow_patterns: list[str] | None = None
+) -> Path:
     try:
         from huggingface_hub import snapshot_download
     except ImportError as exc:  # pragma: no cover - optional dependency
@@ -114,16 +160,35 @@ def _default_readback_downloader(repo_id: str, revision: str) -> Path:
             repo_id=repo_id,
             repo_type="dataset",
             revision=revision,
-            allow_patterns=list(_LABELED_RELEASE_FILES) + [_GITATTRIBUTES_NAME],
+            allow_patterns=allow_patterns
+            or [*_BASE_RELEASE_FILES, _GITATTRIBUTES_NAME],
         )
     )
+
+
+def _release_snapshot(root: Path, lane: ReleaseLane) -> Path:
+    """Materialize one release from a same-main Hub snapshot for validation."""
+
+    if (root / "manifest.json").is_file():
+        return root
+    source = root / V2_REMOTE_PREFIX if lane is ReleaseLane.V2_WORLDWIDE else root
+    if not (source / "manifest.json").is_file():
+        raise LabelPublicationError("Hub readback is missing the selected release")
+    target = Path(tempfile.mkdtemp(prefix="label-readback-"))
+    for path in source.rglob("*"):
+        if path.is_file():
+            relative = path.relative_to(source)
+            destination = target / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(path, destination)
+    return target
 
 
 def publish_labeled_dataset(
     directory: Path,
     dataset_id: str,
     *,
-    target_revision: str = "main",
+    target_revision: str | None = None,
     hub_api: Any | None = None,
     operation_factory: Callable[..., Any] | None = None,
     readback_downloader: Callable[[str, str], Path] | None = None,
@@ -131,19 +196,39 @@ def publish_labeled_dataset(
 ) -> LabelPublicationResult:
     """Validate, atomically publish, and verify the exact Hub commit."""
 
-    if not dataset_id.strip() or not target_revision.strip():
+    if not dataset_id.strip() or (
+        target_revision is not None and not target_revision.strip()
+    ):
         raise LabelPublicationError("dataset ID and target revision must be non-blank")
-    _require_main_revision(target_revision)
     validated = validate_labeled_publication(directory)
+    expected_revision = _expected_revision(directory)
+    target_revision = target_revision or expected_revision
+    _require_release_revision(target_revision, expected_revision)
+    try:
+        manifest = json.loads((Path(directory) / "manifest.json").read_text())
+        lane = release_lane(manifest["run_identity"])
+    except (OSError, json.JSONDecodeError, KeyError, TypeError) as exc:
+        raise LabelPublicationError("label publication lane is missing") from exc
 
     if hub_api is None:
         hub_api = _default_hub_api()
     if operation_factory is None:
         operation_factory = _default_operation_factory()
     if readback_downloader is None:
-        readback_downloader = _default_readback_downloader
+        patterns = (
+            list(_V2_RELEASE_FILES)
+            if lane is ReleaseLane.V2_WORLDWIDE
+            else list(_BASE_RELEASE_FILES)
+        )
+        patterns.append(_GITATTRIBUTES_NAME)
+
+        def readback_downloader(repo: str, revision: str) -> Path:
+            return _default_readback_downloader(repo, revision, allow_patterns=patterns)
+
     if list_remote_files is None:
-        list_remote_files = _default_list_remote_files
+
+        def list_remote_files(api: Any, dataset: str) -> list[str]:
+            return _default_list_remote_files(api, dataset, target_revision)
 
     remote_files = list_remote_files(hub_api, dataset_id)
     unexpected = sorted(
@@ -160,7 +245,7 @@ def publish_labeled_dataset(
         operations.append(
             {
                 "op": "add",
-                "path_in_repo": str(rel),
+                "path_in_repo": remote_release_path(lane, str(rel)),
                 "path_or_fileobj": str(path),
             }
         )
@@ -196,9 +281,9 @@ def publish_labeled_dataset(
             repo_type="dataset",
             operations=constructed_ops,
             commit_message=(
-                f"Publish {validated.row_count} Afghanistan relevance labels"
+                f"Publish {validated.row_count} {lane.value} relevance labels"
             ),
-            revision=target_revision,
+            revision="main",
         )
     except Exception as exc:
         raise LabelPublicationError("Hugging Face label publication failed") from exc
@@ -209,7 +294,10 @@ def publish_labeled_dataset(
         raise LabelPublicationError("Hugging Face returned an invalid commit response")
 
     try:
-        readback = validate_labeled_publication(readback_downloader(dataset_id, oid))
+        readback_root = readback_downloader(dataset_id, oid)
+        readback = validate_labeled_publication(
+            _release_snapshot(Path(readback_root), lane)
+        )
     except Exception as exc:
         raise LabelPublicationError("Hub readback validation failed") from exc
 

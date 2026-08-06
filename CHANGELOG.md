@@ -15,6 +15,16 @@ to Afghanistan.
 
 ## [Unreleased]
 
+- Added a separate worldwide V2 label-sampling contract with a configurable
+  target, deterministic H3/language/OSM-primary-tag strata, and nested
+  proportional continuation for larger targets. V2 files are namespaced below
+  `v2-worldwide/` on the dataset's existing `main` revision; the published
+  Afghanistan V1 artifact is unchanged.
+- Added a durable asynchronous checkpoint mirror for Grid'5000 labeling. Each
+  completed local batch can be staged to a run-specific
+  `.pipeline/checkpoints/<run-id>/` path on Hugging Face `main`; failed uploads
+  remain queued for the next resume and never replace a final release lane.
+
 ### Added
 
 - A Mac-side `osm-polygon-grid5000` operator with deterministic run identity,

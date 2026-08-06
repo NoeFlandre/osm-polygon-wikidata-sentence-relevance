@@ -238,7 +238,14 @@ def test_label_serializes_context_and_concurrency() -> None:
         model_file=PurePosixPath("/r/model.gguf"),
         tokenizer_dir=PurePosixPath("/r/tokenizer"),
     )
-    assert request.command[-2:] == ("8192", "8")
+    assert request.command[-6:] == (
+        "8",
+        "8192",
+        "8",
+        "0",
+        "sentence-relevance-v2",
+        "3",
+    )
 
 
 def test_label_micro_allocation_uses_existing_helper_and_wrapper_contract() -> None:

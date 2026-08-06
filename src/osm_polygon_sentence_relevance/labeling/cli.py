@@ -15,11 +15,13 @@ import pyarrow.parquet as pq
 
 from .canary import select_canary_rows
 from .checkpoint import CheckpointStore
+from .checkpoint_mirror import CheckpointMirror
 from .contracts import RunIdentity
 from .engine import LabelEngine
-from .finalization import TRACKIO_SPACE_ID, finalize_labeled_dataset
+from .finalization import finalize_labeled_dataset
 from .prompt import PROMPT_VERSION, build_messages
 from .publication import publish_labeled_dataset
+from .releases import ReleaseLane, release_lane, trackio_space_id
 from .repair import BoundedRepair
 from .runner import LabelingRunner, StopController
 from .runtime import (
@@ -29,7 +31,15 @@ from .runtime import (
     build_runtime_plan,
     resolve_engine_factory,
 )
+from .sampling import (
+    DEFAULT_H3_RESOLUTION,
+    DEFAULT_SAMPLE_SEED,
+    DEFAULT_SAMPLE_TARGET,
+    SAMPLING_VERSION,
+    select_label_rows,
+)
 from .tracking import log_static_labeling_run
+from .tracking_progress import TrackioBatchLogger
 from .validation import parse_label_response
 
 MODEL_REPO_ID = "unsloth/Qwen3.6-27B-MTP-GGUF"
@@ -77,7 +87,7 @@ def _add_server_config_args(parser: argparse.ArgumentParser) -> None:
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Label Afghanistan polygon sentences")
+    parser = argparse.ArgumentParser(description="Label polygon sentences")
     sub = parser.add_subparsers(dest="command", required=True)
     label = sub.add_parser("label", help="Run or resume LLM labeling")
     label.add_argument("--input-parquet", required=True)
@@ -106,8 +116,41 @@ def _parser() -> argparse.ArgumentParser:
         "--row-limit",
         type=int,
         default=0,
-        help="Deterministic canary size; zero labels the complete input",
+        help="Deterministic canary size; zero uses the stratified sample",
     )
+    label.add_argument("--sampling-target", type=int, default=DEFAULT_SAMPLE_TARGET)
+    label.add_argument("--sampling-seed", default=DEFAULT_SAMPLE_SEED)
+    label.add_argument("--h3-resolution", type=int, default=DEFAULT_H3_RESOLUTION)
+    label.add_argument(
+        "--checkpoint-dataset-id",
+        default=None,
+        help="Optional dataset repository for asynchronous checkpoint staging",
+    )
+    label.add_argument(
+        "--checkpoint-namespace",
+        "--checkpoint-branch",
+        dest="checkpoint_branch",
+        default=None,
+        help=(
+            "Run-specific checkpoint namespace on the dataset main tree; "
+            "the legacy --checkpoint-branch spelling is accepted"
+        ),
+    )
+    label.add_argument(
+        "--checkpoint-drain-seconds",
+        type=float,
+        default=30.0,
+        help="Maximum final wait for queued checkpoint uploads",
+    )
+    label.add_argument(
+        "--release-lane",
+        choices=tuple(lane.value for lane in ReleaseLane),
+        default=None,
+        help="Public release lane used for batch tracking",
+    )
+    label.add_argument("--trackio-project", default=None)
+    label.add_argument("--trackio-run-name", default=None)
+    label.add_argument("--trackio-space-id", default=None)
 
     probe = sub.add_parser("probe", help="Validate one live inference engine")
     probe.add_argument("--input-parquet", required=True)
@@ -134,6 +177,15 @@ def _parser() -> argparse.ArgumentParser:
         finalize.add_argument(f"--{name}", required=True)
     finalize.add_argument("--batch-size", type=int, required=True)
     finalize.add_argument("--row-limit", type=int, default=0)
+    finalize.add_argument("--sampling-target", type=int, default=DEFAULT_SAMPLE_TARGET)
+    finalize.add_argument("--sampling-seed", default=DEFAULT_SAMPLE_SEED)
+    finalize.add_argument("--h3-resolution", type=int, default=DEFAULT_H3_RESOLUTION)
+    finalize.add_argument(
+        "--release-lane",
+        choices=tuple(lane.value for lane in ReleaseLane),
+        default=None,
+        help="Public release lane recorded in the final manifest",
+    )
     _add_server_config_args(finalize)
 
     publish = sub.add_parser("publish", help="Validate and publish final artifacts")
@@ -147,10 +199,10 @@ def _parser() -> argparse.ArgumentParser:
     track.add_argument("--run-name", default=None)
     track.add_argument(
         "--space-id",
-        default=TRACKIO_SPACE_ID,
+        default=None,
         help=(
-            "Hugging Face Space ID for the Trackio static run "
-            f"(default: {TRACKIO_SPACE_ID})"
+            "Hugging Face Space ID for the Trackio static run; inferred from "
+            "the release lane when omitted"
         ),
     )
     return parser
@@ -193,6 +245,10 @@ def _identity(
         if args.request_concurrency is not None
         else plan.parallel
     )
+    release_lane = getattr(args, "release_lane", None)
+    sampling_enabled = release_lane == ReleaseLane.V2_WORLDWIDE.value or (
+        args.sampling_target > 0
+    )
     return RunIdentity(
         input_sha256=input_sha,
         input_dataset_revision=_hex(args.input_dataset_revision, 40, "input revision"),
@@ -210,6 +266,11 @@ def _identity(
         llama_per_slot_context=plan.per_slot_context,
         llama_total_context=plan.total_context,
         request_concurrency=request_concurrency,
+        sampling_target=args.sampling_target if sampling_enabled else None,
+        sampling_seed=args.sampling_seed if sampling_enabled else None,
+        h3_resolution=args.h3_resolution if sampling_enabled else None,
+        sampling_version=SAMPLING_VERSION if sampling_enabled else None,
+        release_lane=release_lane,
     )
 
 
@@ -234,19 +295,87 @@ _PROMPT_COLUMNS = {
 }
 
 
-def _load_afghanistan(path: Path) -> pa.Table:
+def _load_input(path: Path) -> pa.Table:
     table = pq.read_table(path)
     if missing := _PROMPT_COLUMNS.difference(table.column_names):
         raise ValueError(
             f"input is missing required labeling columns: {sorted(missing)}"
         )
-    if set(table["region"].to_pylist()) != {"afghanistan"}:
-        raise ValueError("labeling accepts only the Afghanistan proof-of-concept")
     return table
 
 
+def _checkpoint_mirror(
+    args: argparse.Namespace, store: CheckpointStore
+) -> CheckpointMirror | None:
+    dataset_id = args.checkpoint_dataset_id
+    branch = args.checkpoint_branch
+    if (dataset_id is None) != (branch is None):
+        raise ValueError(
+            "checkpoint dataset ID and checkpoint namespace must be supplied together"
+        )
+    if args.checkpoint_drain_seconds < 0:
+        raise ValueError("checkpoint drain seconds must be non-negative")
+    if dataset_id is None:
+        return None
+    return CheckpointMirror(
+        store=store,
+        dataset_id=dataset_id,
+        branch=branch,
+    )
+
+
+def _batch_tracker(
+    args: argparse.Namespace, store: CheckpointStore
+) -> TrackioBatchLogger | None:
+    """Build the optional asynchronous batch logger for a labeled run."""
+
+    if args.trackio_project is None and args.trackio_space_id is None:
+        return None
+    if not args.trackio_project or not args.trackio_run_name:
+        raise ValueError(
+            "Trackio project and run name are required when batch tracking is enabled"
+        )
+    lane = (
+        ReleaseLane(args.release_lane)
+        if args.release_lane is not None
+        else (
+            ReleaseLane.V2_WORLDWIDE
+            if store.identity.sampling_version is not None
+            else ReleaseLane.V1_AFGHANISTAN
+        )
+    )
+    if (
+        lane is ReleaseLane.V1_AFGHANISTAN
+        and store.identity.sampling_version is not None
+    ):
+        raise ValueError("V1 batch tracking cannot use stratified sampling")
+    if lane is ReleaseLane.V2_WORLDWIDE and store.identity.sampling_version is None:
+        raise ValueError("worldwide batch tracking requires stratified sampling")
+    return TrackioBatchLogger(
+        work_dir=store.root,
+        project=args.trackio_project,
+        run_name=args.trackio_run_name,
+        lane=lane,
+        space_id=args.trackio_space_id,
+    )
+
+
+def _trackio_space_for_output(output_dir: Path) -> str:
+    """Infer a lane-specific Trackio Space, with the historical V1 fallback."""
+
+    manifest_path = Path(output_dir) / "manifest.json"
+    try:
+        manifest = json.loads(manifest_path.read_text())
+        identity = manifest.get("run_identity", {})
+        if isinstance(identity, dict):
+            return trackio_space_id(release_lane(identity))
+    except (OSError, json.JSONDecodeError, ValueError):
+        pass
+    return trackio_space_id(ReleaseLane.V1_AFGHANISTAN)
+
+
 def _probe(args: argparse.Namespace, engine: LabelEngine) -> int:
-    table = _load_afghanistan(Path(args.input_parquet))
+    table = _load_input(Path(args.input_parquet))
     if args.sample_size < 1 or args.sample_size > table.num_rows:
         raise ValueError("sample size must be within the input row count")
     selected = (
@@ -301,7 +430,7 @@ def main(
                 Path(args.output_dir),
                 project=args.project,
                 run_name=args.run_name,
-                space_id=args.space_id,
+                space_id=args.space_id or _trackio_space_for_output(args.output_dir),
             )
             print(
                 json.dumps(
@@ -336,21 +465,38 @@ def main(
                 )
             )
             return 0
-        table = select_canary_rows(
-            _load_afghanistan(input_path),
-            args.row_limit,
+        table = select_label_rows(
+            _load_input(input_path),
+            row_limit=args.row_limit,
+            sampling_target=args.sampling_target,
+            sampling_seed=args.sampling_seed,
+            h3_resolution=args.h3_resolution,
         )
         stop = StopController()
         stop.install()
         repair_log_path = Path(args.work_dir) / "repair.log"
-        result = LabelingRunner(
-            engine=engine_factory(args),
-            store=store,
-            batch_size=args.batch_size,
-            stop_requested=stop,
-            repair=BoundedRepair(max_attempts=3),
-            repair_log_path=repair_log_path,
-        ).run(table)
+        mirror = _checkpoint_mirror(args, store)
+        tracker = _batch_tracker(args, store)
+        try:
+            if mirror is not None:
+                mirror.start()
+            if tracker is not None:
+                tracker.start()
+            result = LabelingRunner(
+                engine=engine_factory(args),
+                store=store,
+                batch_size=args.batch_size,
+                stop_requested=stop,
+                repair=BoundedRepair(max_attempts=3),
+                repair_log_path=repair_log_path,
+                checkpoint_mirror=(mirror.enqueue if mirror is not None else None),
+                batch_tracker=(tracker.enqueue if tracker is not None else None),
+            ).run(table)
+        finally:
+            if mirror is not None:
+                mirror.close(wait=True, timeout=args.checkpoint_drain_seconds)
+            if tracker is not None:
+                tracker.close(wait=True, timeout=args.checkpoint_drain_seconds)
         print(
             json.dumps(
                 {

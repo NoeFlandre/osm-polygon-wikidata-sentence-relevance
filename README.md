@@ -21,11 +21,18 @@ Install the locked environment on the Mac, connect the external project disk,
 and run:
 
 ```bash
-uv sync --locked --extra hub --extra segmentation
+uv sync --locked --extra operator --extra hub --extra segmentation
 uv run osm-polygon-grid5000 run \
   --scope region \
   --region afghanistan-latest \
   --stage all
+```
+
+This command preserves the V1 Afghanistan workflow. To start the worldwide
+V2 stratified label workflow, use:
+
+```bash
+uv run osm-polygon-grid5000 run --scope all --stage label
 ```
 
 The operator resolves the input dataset to an immutable revision, selects a
@@ -66,6 +73,18 @@ polygons, and 115 languages, published on Hugging Face at
 [`NoeFlandre/osm-polygon-wikidata-sentence-relevance`](https://huggingface.co/datasets/NoeFlandre/osm-polygon-wikidata-sentence-relevance).
 The Python package remains version `0.1.0`; broader regional processing will be
 handled by later releases.
+
+## V2 worldwide stratified labeling
+
+V2 is a separate worldwide release stored below `v2-worldwide/` in the same
+Hugging Face dataset `main` revision. It defaults to 200,000 sentences selected
+by a deterministic proportional prefix across global H3 resolution 3 cells,
+language, and OSM primary tag. Increase `--sampling-target` on `run` or
+`resume RUN_ID` to extend the same sample without reshuffling earlier rows; the
+run identity and checkpoints stay stable. The generated V2 card includes an H3
+hexagon map of labeled-sentence coverage and links to a separate worldwide
+Trackio dashboard. V1 root files and their Afghanistan dashboard are never
+overwritten by V2.
 
 ## Current status
 
@@ -122,6 +141,10 @@ atomic, resumable, identity-bound, and timed. Grid'5000 canaries select
 deterministic representative rows, validate real structured inference before
 labeling, and never publish; only a complete validated run can generate its
 factual dataset card and publish to the existing Hub dataset.
+Each Grid'5000 batch is also queued for asynchronous upload to a run-specific
+`.pipeline/checkpoints/<run-id>/` path on the dataset's `main` tree. This is a
+path namespace, not a second public branch. Failed uploads remain durable and
+retry on resume.
 Production inference uses the Grid'5000 CUDA workflow documented in
 [`docs/guides/grid5000.md`](docs/guides/grid5000.md).
 
@@ -143,12 +166,14 @@ uv run osm-polygon-label-sentences track \
   --project afghanistan-labeling
 ```
 
-By default this syncs to the public
-[Afghanistan Trackio dashboard](https://huggingface.co/spaces/NoeFlandre/afghanistan-labeling-trackio).
-Use `--space-id OWNER/SPACE` to choose another Hugging Face Space.
+The default Space follows the release lane in `manifest.json`: V1 uses the public
+[Afghanistan Trackio dashboard](https://huggingface.co/spaces/NoeFlandre/afghanistan-labeling-trackio),
+while V2 uses the separate
+[worldwide dashboard](https://huggingface.co/spaces/NoeFlandre/worldwide-stratified-labeling-trackio).
+Use `--space-id OWNER/SPACE` to override the destination.
 The command validates the manifest against the Parquet before initializing
 Trackio, then records one step (`step=0`) containing the KPI cards, tables,
-PNG plots, and interactive slice HTML.
+and PNG plots. The slice table is available in the Trackio run.
 
 For a visual introduction, see the [Afghanistan dataset presentation](https://noeflandre.github.io/osm-polygon-wikidata-sentence-relevance/presentations/afghanistan-dataset-overview/index.html).
 For the implementation, see the [codebase overview](https://noeflandre.github.io/osm-polygon-wikidata-sentence-relevance/presentations/codebase-overview/index.html).

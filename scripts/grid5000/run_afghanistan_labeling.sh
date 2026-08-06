@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
-# Run/resume Afghanistan labeling inside an allocated CUDA OAR job.
+# Run/resume one deterministic label sample inside an allocated CUDA OAR job.
+#
+# The historical filename is retained for V1 compatibility. The payload is
+# lane-neutral: a zero sampling target is the preserved Afghanistan V1 lane;
+# a positive target is the worldwide V2 lane and uses its dedicated Trackio
+# Space and ``v2-worldwide`` publication namespace.
 #
 # The payload launches the real llama-server binary directly with the
 # validated parallelism and total context. There is no vLLM attempt, no
@@ -10,8 +15,8 @@
 set -euo pipefail
 umask 077
 
-if [ "$#" -ne 15 ]; then
-    echo "run_afghanistan_labeling: exactly fifteen arguments are required" >&2
+if [ "$#" -ne 18 ]; then
+    echo "run_afghanistan_labeling: exactly eighteen arguments are required" >&2
     exit 2
 fi
 
@@ -30,14 +35,20 @@ ROW_LIMIT="${12}"; readonly ROW_LIMIT
 LLAMA_PARALLEL="${13}"; readonly LLAMA_PARALLEL
 LLAMA_PER_SLOT_CONTEXT="${14}"; readonly LLAMA_PER_SLOT_CONTEXT
 REQUEST_CONCURRENCY="${15}"; readonly REQUEST_CONCURRENCY
+SAMPLING_TARGET="${16}"; readonly SAMPLING_TARGET
+SAMPLING_SEED="${17}"; readonly SAMPLING_SEED
+SAMPLING_H3_RESOLUTION="${18}"; readonly SAMPLING_H3_RESOLUTION
 
 : "${OAR_JOB_ID:?run_afghanistan_labeling requires an OAR allocation}"
 case "${OAR_JOB_ID}" in (*[!0-9]*|'') echo "run_afghanistan_labeling: invalid OAR job ID" >&2; exit 2;; esac
 command -v nvidia-smi >/dev/null || { echo "run_afghanistan_labeling: CUDA tooling unavailable" >&2; exit 1; }
 nvidia-smi -L >/dev/null || { echo "run_afghanistan_labeling: no visible CUDA GPU" >&2; exit 1; }
 if ! [[ "${BATCH_SIZE}" =~ ^[1-9][0-9]*$ ]] || \
-   ! [[ "${ROW_LIMIT}" =~ ^(0|[1-9][0-9]*)$ ]]; then
-    echo "run_afghanistan_labeling: batch size and row limit are invalid" >&2
+   ! [[ "${ROW_LIMIT}" =~ ^(0|[1-9][0-9]*)$ ]] || \
+   ! [[ "${SAMPLING_TARGET}" =~ ^(0|[1-9][0-9]*)$ ]] || \
+   ! [[ "${SAMPLING_SEED}" != *[[:space:]]* ]] || [ -z "${SAMPLING_SEED}" ] || \
+   ! [[ "${SAMPLING_H3_RESOLUTION}" =~ ^(0|[1-9]|1[0-5])$ ]]; then
+    echo "run_afghanistan_labeling: batch, row-limit, or sampling arguments are invalid" >&2
     exit 2
 fi
 case "${LLAMA_PARALLEL}" in
@@ -57,6 +68,25 @@ case "${MODEL_FILE}" in (*Qwen3.6-27B-Q4_K_M.gguf) ;; (*) echo "run_afghanistan_
 test -f "${INPUT_PARQUET}" || { echo "run_afghanistan_labeling: input Parquet missing" >&2; exit 2; }
 test -f "${MODEL_FILE}" || { echo "run_afghanistan_labeling: model file missing" >&2; exit 2; }
 test -d "${TOKENIZER_DIR}" || { echo "run_afghanistan_labeling: tokenizer directory missing" >&2; exit 2; }
+RUN_ID="$(basename -- "$(dirname -- "${WORK_DIR}")")"; readonly RUN_ID
+if ! [[ "${RUN_ID}" =~ ^[0-9a-f]{20}$ ]]; then
+    echo "run_afghanistan_labeling: work directory must be nested under a 20-hex run directory" >&2
+    exit 2
+fi
+CHECKPOINT_BRANCH="checkpoints/${RUN_ID}"; readonly CHECKPOINT_BRANCH
+RELEASE_LANE="v1-afghanistan"
+if [ "${SAMPLING_TARGET}" -gt 0 ]; then
+    RELEASE_LANE="v2-worldwide"
+fi
+readonly RELEASE_LANE
+TRACKIO_ARGS=()
+if [ "${RELEASE_LANE}" = "v2-worldwide" ]; then
+    TRACKIO_ARGS=(
+        --trackio-project "worldwide-stratified-labeling"
+        --trackio-run-name "run-${RUN_ID}"
+        --trackio-space-id "NoeFlandre/worldwide-stratified-labeling-trackio"
+    )
+fi
 
 LABEL_CLI="${REPO_ROOT}/.venv/bin/osm-polygon-label-sentences"
 test -x "${LABEL_CLI}" || { echo "run_afghanistan_labeling: labeling CLI missing" >&2; exit 2; }
@@ -136,6 +166,14 @@ LABEL_RESULT="${WORK_DIR}.label-result.json"
     --llama-total-context "${LLAMA_TOTAL_CONTEXT}" \
     --request-concurrency "${REQUEST_CONCURRENCY}" \
     --row-limit "${ROW_LIMIT}" \
+    --sampling-target "${SAMPLING_TARGET}" \
+    --sampling-seed "${SAMPLING_SEED}" \
+    --h3-resolution "${SAMPLING_H3_RESOLUTION}" \
+    --checkpoint-dataset-id "${DATASET_ID}" \
+    --checkpoint-namespace "${CHECKPOINT_BRANCH}" \
+    --checkpoint-drain-seconds "30" \
+    --release-lane "${RELEASE_LANE}" \
+    "${TRACKIO_ARGS[@]}" \
     --endpoint "http://127.0.0.1:${PORT}/v1/chat/completions" \
     >"${LABEL_RESULT}"
 
@@ -152,10 +190,14 @@ fi
     --source-commit "${SOURCE_COMMIT}" --engine "${ENGINE}" \
     --engine-version "${ENGINE_VERSION}" --batch-size "${BATCH_SIZE}" \
     --row-limit "${ROW_LIMIT}" \
+    --sampling-target "${SAMPLING_TARGET}" \
+    --sampling-seed "${SAMPLING_SEED}" \
+    --h3-resolution "${SAMPLING_H3_RESOLUTION}" \
     --llama-parallel "${LLAMA_PARALLEL}" \
     --llama-per-slot-context "${LLAMA_PER_SLOT_CONTEXT}" \
     --llama-total-context "${LLAMA_TOTAL_CONTEXT}" \
-    --request-concurrency "${REQUEST_CONCURRENCY}"
+    --request-concurrency "${REQUEST_CONCURRENCY}" \
+    --release-lane "${RELEASE_LANE}"
 
 if [ "${ROW_LIMIT}" -eq 0 ]; then
     "${LABEL_CLI}" publish --output-dir "${OUTPUT_DIR}" --dataset-id "${DATASET_ID}"

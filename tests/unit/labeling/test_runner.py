@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pyarrow as pa
@@ -8,6 +9,7 @@ import pyarrow as pa
 from osm_polygon_sentence_relevance.labeling.checkpoint import CheckpointStore
 from osm_polygon_sentence_relevance.labeling.contracts import RunIdentity
 from osm_polygon_sentence_relevance.labeling.runner import LabelingRunner
+from osm_polygon_sentence_relevance.labeling.sampling import select_stratified_rows
 
 
 def _identity() -> RunIdentity:
@@ -46,9 +48,44 @@ def _table(count: int = 5) -> pa.Table:
                 "language": "en",
                 "page_title": "Place",
                 "section_path": ["Economy"],
+                "lat": 34.0 + i,
+                "lon": 69.0 + i,
             }
         )
     return pa.Table.from_pylist(rows)
+
+
+def test_expanded_v2_target_reuses_checkpoints_and_labels_only_new_rows(
+    tmp_path: Path,
+) -> None:
+    initial_identity = replace(
+        _identity(),
+        sampling_target=3,
+        sampling_seed="sentence-relevance-v2",
+        h3_resolution=3,
+        sampling_version="labeling-v2-h3-language-osm-primary",
+    )
+    initial_table = select_stratified_rows(_table(), target=3)
+    first_engine = FakeEngine()
+    first = LabelingRunner(
+        engine=first_engine,
+        store=CheckpointStore(tmp_path, initial_identity),
+        batch_size=2,
+    ).run(initial_table)
+    assert first.completed == 3
+
+    expanded_identity = replace(initial_identity, sampling_target=5)
+    expanded_table = select_stratified_rows(_table(), target=5)
+    resumed_engine = FakeEngine()
+    second = LabelingRunner(
+        engine=resumed_engine,
+        store=CheckpointStore(tmp_path, expanded_identity),
+        batch_size=2,
+    ).run(expanded_table)
+
+    assert second.completed == 5
+    assert [len(call) for call in resumed_engine.calls] == [2]
+    assert len(CheckpointStore(tmp_path, expanded_identity).load_all()) == 5
 
 
 class FakeEngine:
@@ -122,8 +159,45 @@ def test_progress_and_final_timing_are_written(tmp_path: Path) -> None:
     assert result.elapsed_seconds == timing["total_wall_seconds"]
 
 
+def test_batch_tracker_receives_numeric_throughput_metrics(tmp_path: Path) -> None:
+    metrics: list[dict[str, object]] = []
+    times = iter([10.0, 10.0, 12.0, 12.0, 12.0])
+    runner = LabelingRunner(
+        engine=FakeEngine(),
+        store=CheckpointStore(tmp_path, _identity()),
+        batch_size=2,
+        clock=lambda: next(times),
+        batch_tracker=metrics.append,
+    )
+
+    runner.run(_table(2))
+
+    assert len(metrics) == 1
+    assert metrics[0]["completed_rows"] == 2
+    assert metrics[0]["rows_per_second"] == 1.0
+    assert metrics[0]["eta_seconds"] == 0.0
+
+
 def test_output_order_is_input_order_even_after_resume(tmp_path: Path) -> None:
     store = CheckpointStore(tmp_path, _identity())
     runner = LabelingRunner(engine=FakeEngine(), store=store, batch_size=2)
     runner.run(_table())
     assert [r.sentence_id for r in store.load_all()] == [f"s{i}" for i in range(5)]
+
+
+def test_checkpoint_mirror_is_called_after_each_atomic_batch(tmp_path: Path) -> None:
+    store = CheckpointStore(tmp_path, _identity())
+    calls: list[tuple[int, int]] = []
+
+    def enqueue(index: int) -> None:
+        calls.append((index, len(store.load_all())))
+
+    result = LabelingRunner(
+        engine=FakeEngine(),
+        store=store,
+        batch_size=2,
+        checkpoint_mirror=enqueue,
+    ).run(_table())
+
+    assert result.completed == 5
+    assert calls == [(0, 2), (1, 4), (2, 5)]

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Scheduler-owned wrapper for one resumable Afghanistan labeling allocation.
+# Scheduler-owned wrapper for one resumable sentence-labeling allocation.
 #
 # The wrapper translates the front-end arguments into the bounded payload
 # contract. The parallelism argument is propagated as the final positional
@@ -14,8 +14,8 @@ if ! [[ "${OAR_JOB_ID}" =~ ^[0-9]+$ ]]; then
     echo "run_afghanistan_labeling_job: OAR_JOB_ID must be numeric" >&2
     exit 2
 fi
-if [ "$#" -ne 17 ]; then
-    echo "run_afghanistan_labeling_job: exactly seventeen arguments are required" >&2
+if [ "$#" -ne 20 ]; then
+    echo "run_afghanistan_labeling_job: exactly twenty arguments are required" >&2
     exit 2
 fi
 
@@ -25,6 +25,9 @@ EXPECTED_SOURCE_COMMIT="${11}"; readonly EXPECTED_SOURCE_COMMIT
 LLAMA_PARALLEL="${15}"; readonly LLAMA_PARALLEL
 LLAMA_PER_SLOT_CONTEXT="${16}"; readonly LLAMA_PER_SLOT_CONTEXT
 REQUEST_CONCURRENCY="${17}"; readonly REQUEST_CONCURRENCY
+SAMPLING_TARGET="${18}"; readonly SAMPLING_TARGET
+SAMPLING_SEED="${19}"; readonly SAMPLING_SEED
+SAMPLING_H3_RESOLUTION="${20}"; readonly SAMPLING_H3_RESOLUTION
 RUN_ROOT="$(cd "${REPO_ROOT}/.." && pwd -P)"; readonly RUN_ROOT
 
 # ``$2`` is the HF cache and ``$5`` is the persistent work directory; the
@@ -75,6 +78,12 @@ if ! [[ "${LLAMA_PER_SLOT_CONTEXT}" =~ ^[1-9][0-9]*$ ]] || \
     echo "run_afghanistan_labeling_job: invalid context or concurrency" >&2
     exit 2
 fi
+if ! [[ "${SAMPLING_TARGET}" =~ ^(0|[1-9][0-9]*)$ ]] || \
+   [ -z "${SAMPLING_SEED}" ] || [[ "${SAMPLING_SEED}" == *[[:space:]]* ]] || \
+   ! [[ "${SAMPLING_H3_RESOLUTION}" =~ ^(0|[1-9]|1[0-5])$ ]]; then
+    echo "run_afghanistan_labeling_job: invalid sampling configuration" >&2
+    exit 2
+fi
 
 PYTHON="${REPO_ROOT}/.venv/bin/python"
 PAYLOAD="${REPO_ROOT}/scripts/grid5000/run_afghanistan_labeling.sh"
@@ -106,6 +115,7 @@ deadline_helper_run "${DEADLINE_DURATION}" "${DEADLINE_GRACE}" "${PAYLOAD}" \
     "${REPO_ROOT}" "$4" "$5" "$6" "$7" "$8" "$9" \
     "${10}" "${11}" "${12}" "${13}" "${14}" "${LLAMA_PARALLEL}" \
     "${LLAMA_PER_SLOT_CONTEXT}" "${REQUEST_CONCURRENCY}" \
+    "${SAMPLING_TARGET}" "${SAMPLING_SEED}" "${SAMPLING_H3_RESOLUTION}" \
     >"${JOB_LOG_DIR}/labeling.stdout.log" \
     2>"${JOB_LOG_DIR}/labeling.stderr.log"
 labeling_rc=$?

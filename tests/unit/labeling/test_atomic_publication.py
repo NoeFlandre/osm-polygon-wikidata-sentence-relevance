@@ -9,7 +9,7 @@ The publisher must:
      sentences.parquet, manifest.json, README.md,
      assets/label_distribution.png, assets/positive_languages.png,
      assets/joint_label_heatmap.png, assets/polygon_coverage_funnel.png,
-     assets/reason_code_distribution.png, assets/slice_yield.html
+     assets/reason_code_distribution.png
    - deletes only explicitly allowlisted obsolete paths
      (assets/geographic_coverage.png, assets/language_distribution.png)
    - preserves .gitattributes
@@ -17,7 +17,7 @@ The publisher must:
 5. after the commit, snapshot_download the immutable commit tree and
    verify exactly .gitattributes plus the labeled-release files;
 6. independently validate every artifact (row count, every SHA);
-7. verify the target revision is ``main``;
+7. verify every release is committed to the dataset's single ``main`` tree;
 8. do not create a branch or repository;
 9. do not accept a token argument.
 
@@ -100,6 +100,7 @@ class _RecordingHub:
 
     files: list[str] = field(default_factory=list)
     create_commit_calls: list[dict[str, Any]] = field(default_factory=list)
+    create_branch_calls: list[dict[str, Any]] = field(default_factory=list)
     snapshot_download_calls: list[dict[str, Any]] = field(default_factory=list)
     downloads_dir: Path | None = None
     fail_create_commit: Exception | None = None
@@ -116,6 +117,9 @@ class _RecordingHub:
         self.create_commit_calls.append(kwargs)
         return _FakeCommitInfo()
 
+    def create_branch(self, **kwargs: Any) -> None:
+        self.create_branch_calls.append(kwargs)
+
     def snapshot_download(self, **kwargs: Any) -> str:
         if self.fail_snapshot_download is not None:
             raise self.fail_snapshot_download
@@ -128,7 +132,7 @@ class _RecordingHub:
         return str(target)
 
 
-def _identity(input_sha256: str = "a" * 64) -> RunIdentity:
+def _identity(input_sha256: str = "a" * 64, *, v2: bool = False) -> RunIdentity:
     return RunIdentity(
         input_sha256=input_sha256,
         input_dataset_revision="b" * 40,
@@ -145,15 +149,21 @@ def _identity(input_sha256: str = "a" * 64) -> RunIdentity:
         llama_per_slot_context=4096,
         llama_total_context=65536,
         request_concurrency=16,
+        sampling_target=0 if v2 else None,
+        sampling_seed="sentence-relevance-v2" if v2 else None,
+        h3_resolution=3 if v2 else None,
+        sampling_version=("labeling-v2-h3-language-osm-primary" if v2 else None),
     )
 
 
-def _write_input(path: Path) -> None:
+def _write_input(path: Path, *, worldwide: bool = False) -> None:
     pq.write_table(
         pa.table(
             {
                 "sentence_id": ["s1", "s2"],
-                "region": ["afghanistan", "afghanistan"],
+                "region": ["afghanistan", "france"]
+                if worldwide
+                else ["afghanistan", "afghanistan"],
                 "language": ["en", "fa"],
                 "sentence_text_raw": ["farming", "history"],
             }
@@ -162,11 +172,11 @@ def _write_input(path: Path) -> None:
     )
 
 
-def _build_publication(tmp_path: Path) -> Path:
+def _build_publication(tmp_path: Path, *, v2: bool = False) -> Path:
     input_path = tmp_path / "input.parquet"
-    _write_input(input_path)
+    _write_input(input_path, worldwide=v2)
     digest = hashlib.sha256(input_path.read_bytes()).hexdigest()
-    store = CheckpointStore(tmp_path / "work", _identity(digest))
+    store = CheckpointStore(tmp_path / "work", _identity(digest, v2=v2))
     store.write_batch(
         0,
         [
@@ -245,7 +255,6 @@ def test_clean_replacement_atomically_replaces(tmp_path: Path) -> None:
         "assets/joint_label_heatmap.png",
         "assets/polygon_coverage_funnel.png",
         "assets/reason_code_distribution.png",
-        "assets/slice_yield.html",
     }
     add_paths = {op["path_in_repo"] for op in operations if op["op"] == "add"}
     delete_paths = {op["path_in_repo"] for op in operations if op["op"] == "delete"}
@@ -516,6 +525,54 @@ def test_non_main_target_revision_is_rejected(tmp_path: Path) -> None:
         )
 
 
+def test_v2_publication_is_isolated_from_v1_main(tmp_path: Path) -> None:
+    output = _build_publication(tmp_path, v2=True)
+    card = (output / "README.md").read_text()
+    assert "afghanistan-labeling-hero.png" not in card
+    assert "/resolve/main/v2-worldwide/assets/positive_languages.png" in card
+    hub = _RecordingHub(files=[".gitattributes"], downloads_dir=tmp_path / "downloads")
+
+    publish_labeled_dataset(
+        output,
+        "owner/dataset",
+        hub_api=hub,
+        operation_factory=_fake_op_factory(),
+        readback_downloader=_fake_readback_downloader(output),
+    )
+
+    assert hub.create_commit_calls[0]["revision"] == "main"
+    assert hub.create_branch_calls == []
+    paths = {
+        operation["path_in_repo"]
+        for operation in hub.create_commit_calls[0]["operations"]
+    }
+    assert "v2-worldwide/sentences.parquet" in paths
+    assert "sentences.parquet" not in paths
+    assert "v2-worldwide/assets/slice_yield.html" not in paths
+
+
+def test_publisher_deletes_legacy_slice_html_from_main_tree(tmp_path: Path) -> None:
+    output = _build_publication(tmp_path)
+    hub = _RecordingHub(
+        files=[".gitattributes", "assets/slice_yield.html"],
+        downloads_dir=tmp_path / "downloads",
+    )
+    publish_labeled_dataset(
+        output,
+        "owner/dataset",
+        hub_api=hub,
+        operation_factory=_fake_op_factory(),
+        readback_downloader=_fake_readback_downloader(output),
+        target_revision="main",
+    )
+    deletes = {
+        operation["path_in_repo"]
+        for operation in hub.create_commit_calls[0]["operations"]
+        if operation["op"] == "delete"
+    }
+    assert "assets/slice_yield.html" in deletes
+
+
 # ---------------------------------------------------------------------------
 # 9. ``.gitattributes`` is preserved across the commit.
 # ---------------------------------------------------------------------------
@@ -563,7 +620,7 @@ def test_gitattributes_is_preserved(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 10. No token, branch, or repository creation is supported.
+# 10. No token or repository creation is supported; V1 never creates a branch.
 # ---------------------------------------------------------------------------
 
 
@@ -582,7 +639,7 @@ def test_publisher_does_not_accept_token(tmp_path: Path) -> None:
         )
 
 
-def test_publisher_does_not_create_branch(tmp_path: Path) -> None:
+def test_v1_publisher_does_not_create_branch(tmp_path: Path) -> None:
     output = _build_publication(tmp_path)
     downloads = tmp_path / "downloads"
     hub = _RecordingHub(

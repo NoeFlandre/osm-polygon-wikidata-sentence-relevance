@@ -105,7 +105,7 @@ class CheckpointStore:
         _atomic_bytes(parquet, sink.getvalue().to_pybytes())
         payload = {
             "schema_version": 1,
-            "identity": self.identity.to_dict(),
+            "identity": self.identity.checkpoint_dict(),
             "row_count": len(records),
             "parquet_sha256": _sha256(parquet),
         }
@@ -146,7 +146,7 @@ class CheckpointStore:
                 metadata: Any = json.loads(metadata_path.read_text())
             except (OSError, json.JSONDecodeError) as exc:
                 raise CheckpointError("checkpoint metadata is invalid") from exc
-            if metadata.get("identity") != self.identity.to_dict():
+            if metadata.get("identity") != self.identity.checkpoint_dict():
                 raise CheckpointError("checkpoint identity mismatch")
             if metadata.get("parquet_sha256") != _sha256(parquet):
                 raise CheckpointError("checkpoint Parquet SHA-256 mismatch")
@@ -188,13 +188,15 @@ class CheckpointStore:
         rate = completed / elapsed_seconds if elapsed_seconds > 0 else 0.0
         eta = (total - completed) / rate if rate > 0 else None
         payload = {
-            "identity": self.identity.to_dict(),
+            "identity": self.identity.checkpoint_dict(),
             "completed": completed,
             "remaining": total - completed,
             "elapsed_seconds": elapsed_seconds,
             "rows_per_second": rate,
             "eta_seconds": eta,
         }
+        if self.identity.sampling_target is not None:
+            payload["sampling_target"] = self.identity.sampling_target
         _atomic_bytes(
             self.root / "progress.json",
             (

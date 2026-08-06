@@ -20,6 +20,9 @@ import typer
 from osm_polygon_sentence_relevance.operator import recorded_job, relay
 from osm_polygon_sentence_relevance.operator.config import (
     DATA_ROOT,
+    DEFAULT_SAMPLING_H3_RESOLUTION,
+    DEFAULT_SAMPLING_SEED,
+    DEFAULT_SAMPLING_TARGET,
     INPUT_DATASET_ID,
     OUTPUT_DATASET_ID,
     OperatorConfig,
@@ -609,7 +612,7 @@ def _classify_or_continue(
         ssh,
         label_work_root=str(layout.label_work),
         label_output_root=str(layout.label_output),
-        expected_identity=config.run_identity.to_dict(),
+        expected_identity=config.run_identity.checkpoint_dict(),
         exit_file=str(layout.logs / str(job_id) / "labeling.exit_code"),
     )
     classification = recorded_job.classify_terminal(status, inspection)
@@ -732,7 +735,7 @@ def _classify_or_continue(
             ssh_d,
             label_work_root=str(layout_d.label_work),
             label_output_root=str(layout_d.label_output),
-            expected_identity=config.run_identity.to_dict(),
+            expected_identity=config.run_identity.checkpoint_dict(),
             exit_file=str(layout_d.logs / str(new_job_id) / "labeling.exit_code"),
         )
         classification_d = recorded_job.classify_terminal(status_d, inspection_d)
@@ -784,7 +787,7 @@ def _relay_for_continuation(
         source_checkpoint_root=source_root,
         destination_root=DATA_ROOT / "runs",
         run_id=config.run_id,
-        expected_run_identity=config.run_identity.to_dict(),
+        expected_run_identity=config.run_identity.checkpoint_dict(),
     )
     destination_ssh = SshClient(target=destination_site, command_timeout=600)
     destination_layout = RemoteLayout(
@@ -1050,13 +1053,38 @@ def _resume_run(run_id: str, args: SimpleNamespace) -> int:
     if not state_path.is_file():
         raise RuntimeError(f"run state does not exist: {state_path}")
     payload = json.loads(state_path.read_text(encoding="utf-8"))
-    config = OperatorConfig.from_persisted(payload["run_identity"])
+    persisted_identity = payload["run_identity"]
+    if not isinstance(persisted_identity, dict):
+        raise RuntimeError("persisted run identity is not an object")
+    persisted_facts = payload.get("facts", {})
+    if not isinstance(persisted_facts, dict):
+        raise RuntimeError("persisted run facts are not an object")
+    recorded_target = persisted_facts.get("sampling_target")
+    requested_target = getattr(args, "sampling_target", None)
+    if requested_target is not None:
+        persisted_identity = {
+            **persisted_identity,
+            "sampling_target": requested_target,
+        }
+    elif (
+        "sampling_version" in persisted_identity
+        and "sampling_target" not in persisted_identity
+        and isinstance(recorded_target, int)
+        and not isinstance(recorded_target, bool)
+        and recorded_target > 0
+    ):
+        persisted_identity = {
+            **persisted_identity,
+            "sampling_target": recorded_target,
+        }
+    config = OperatorConfig.from_persisted(persisted_identity)
     if config.run_id != run_id:
         raise RuntimeError(
             "persisted run identity does not reproduce the requested run ID"
         )
     store = StateStore(DATA_ROOT)
     store.load_or_create(config.run_identity)
+    _sync_sampling_target(store, config)
     global _ACTIVE_RUN_ID
     _ACTIVE_RUN_ID = run_id
     durable = store.load()
@@ -1135,6 +1163,65 @@ def _resume_run(run_id: str, args: SimpleNamespace) -> int:
     return 0
 
 
+def _sync_sampling_target(store: StateStore, config: OperatorConfig) -> None:
+    """Persist a V2 target and reject attempts to shrink an existing run."""
+
+    target = config.requirements.sampling_target
+    if target is None or config.run_identity.sampling_version is None:
+        return
+    current = store.load()
+    recorded = current.facts.get("sampling_target")
+    expanded = False
+    if recorded is not None:
+        if isinstance(recorded, bool) or not isinstance(recorded, int) or recorded < 1:
+            raise RuntimeError("persisted sampling target is invalid")
+        if target < recorded:
+            raise RuntimeError(
+                "sampling target cannot decrease after checkpoints exist; "
+                f"use at least {recorded}"
+            )
+        expanded = target > recorded
+    if recorded != target:
+        if expanded and current.phase is RunPhase.COMPLETE:
+            store.transition(
+                expected=RunPhase.COMPLETE,
+                target=RunPhase.REMOTE_PREPARED,
+                facts={
+                    "sampling_target": target,
+                    "continued_from_sampling_target": recorded,
+                },
+            )
+            return
+        store.transition(
+            expected=current.phase,
+            target=current.phase,
+            facts={"sampling_target": target},
+        )
+
+
+def _sampling_target_for_run(args: SimpleNamespace) -> int | None:
+    """Resolve the release-safe sampling default for a production command.
+
+    The historical regional command remains an unsampled V1 workflow. The
+    worldwide ``all`` label command opts into the V2 stratified selector by
+    default. An explicit positive target on a regional run is rejected rather
+    than silently publishing a worldwide lane with regional data.
+    """
+
+    requested = getattr(args, "sampling_target", None)
+    if args.stage == Stage.LABEL.value:
+        if args.scope == Scope.ALL.value:
+            target = DEFAULT_SAMPLING_TARGET if requested is None else requested
+            if target is None or target <= 0:
+                raise ValueError(
+                    "worldwide labeling requires a positive sampling target"
+                )
+            return target
+        if requested not in (None, 0):
+            raise ValueError("stratified sampling requires --scope all")
+    return requested
+
+
 def _run(args: SimpleNamespace) -> int:
     if not DATA_ROOT.exists():
         raise RuntimeError(f"external data root is unavailable: {DATA_ROOT}")
@@ -1144,6 +1231,7 @@ def _run(args: SimpleNamespace) -> int:
     _milestone("Resolving immutable input revision")
     input_revision = _resolve_input_revision(args.input_revision, args.stage)
     _milestone(f"Input revision: {input_revision[:12]}")
+    sampling_target = _sampling_target_for_run(args)
     config = OperatorConfig.build(
         scope=args.scope,
         region=args.region,
@@ -1155,9 +1243,15 @@ def _run(args: SimpleNamespace) -> int:
         llama_parallel=args.llama_parallel,
         llama_per_slot_context=args.llama_per_slot_context,
         request_concurrency=args.request_concurrency,
+        sampling_target=sampling_target,
+        sampling_seed=getattr(args, "sampling_seed", DEFAULT_SAMPLING_SEED),
+        sampling_h3_resolution=getattr(
+            args, "sampling_h3_resolution", DEFAULT_SAMPLING_H3_RESOLUTION
+        ),
     )
     store = StateStore(DATA_ROOT)
     store.load_or_create(config.run_identity)
+    _sync_sampling_target(store, config)
     global _ACTIVE_RUN_ID
     _ACTIVE_RUN_ID = config.run_id
     _milestone(f"Durable run ID: {config.run_id}")
@@ -1487,6 +1581,13 @@ def run_command(
     site: Annotated[list[str] | None, typer.Option("--site")] = None,
     batch_size: Annotated[int, typer.Option("--batch-size")] = 128,
     row_limit: Annotated[int, typer.Option("--row-limit")] = 0,
+    sampling_target: Annotated[int | None, typer.Option("--sampling-target")] = None,
+    sampling_seed: Annotated[
+        str, typer.Option("--sampling-seed")
+    ] = DEFAULT_SAMPLING_SEED,
+    sampling_h3_resolution: Annotated[
+        int, typer.Option("--sampling-h3-resolution")
+    ] = DEFAULT_SAMPLING_H3_RESOLUTION,
     llama_parallel: Annotated[int, typer.Option("--llama-parallel")] = 8,
     llama_per_slot_context: Annotated[
         int, typer.Option("--llama-per-slot-context")
@@ -1510,6 +1611,9 @@ def run_command(
         site=[*DEFAULT_SITES, *(site or [])],
         batch_size=batch_size,
         row_limit=row_limit,
+        sampling_target=sampling_target,
+        sampling_seed=sampling_seed,
+        sampling_h3_resolution=sampling_h3_resolution,
         llama_parallel=llama_parallel,
         llama_per_slot_context=llama_per_slot_context,
         request_concurrency=request_concurrency,
@@ -1536,8 +1640,9 @@ def resume_command(
     site: Annotated[list[str] | None, typer.Option("--site")] = None,
     gpu_memory_mb: Annotated[int, typer.Option("--gpu-memory-mb")] = 40_000,
     poll_seconds: Annotated[float, typer.Option("--poll-seconds")] = 30.0,
+    sampling_target: Annotated[int | None, typer.Option("--sampling-target")] = None,
 ) -> int:
-    """Resume or classify a historical run by its durable run ID."""
+    """Resume a run, optionally extending its V2 sampling target."""
 
     return _dispatch(
         _resume_handler,
@@ -1547,6 +1652,7 @@ def resume_command(
             site=[*DEFAULT_SITES, *(site or [])],
             gpu_memory_mb=gpu_memory_mb,
             poll_seconds=poll_seconds,
+            sampling_target=sampling_target,
         ),
     )
 

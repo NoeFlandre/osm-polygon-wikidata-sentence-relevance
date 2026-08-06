@@ -156,6 +156,8 @@ class LabelingRunner:
         repair: BoundedRepair | None = None,
         repair_log_path: Path | None = None,
         repair_max_attempts: int = 1,
+        checkpoint_mirror: Callable[[int], None] | None = None,
+        batch_tracker: Callable[[dict[str, object]], None] | None = None,
     ) -> None:
         if isinstance(batch_size, bool) or batch_size < 1:
             raise ValueError("batch_size must be a positive integer")
@@ -168,6 +170,8 @@ class LabelingRunner:
         self.clock = clock
         self.repair = repair or BoundedRepair(max_attempts=repair_max_attempts)
         self.repair_log_path = repair_log_path
+        self.checkpoint_mirror = checkpoint_mirror
+        self.batch_tracker = batch_tracker
 
     def _log_repair_event(self, entry: dict[str, object]) -> None:
         if self.repair_log_path is None:
@@ -316,6 +320,29 @@ class LabelingRunner:
             self.store.write_progress(
                 completed=len(completed), total=table.num_rows, elapsed_seconds=elapsed
             )
+            if self.checkpoint_mirror is not None:
+                self.checkpoint_mirror(batch_index - 1)
+            if self.batch_tracker is not None:
+                completed_rows = len(completed)
+                rate = completed_rows / elapsed if elapsed > 0 else 0.0
+                self.batch_tracker(
+                    {
+                        "batch_index": batch_index - 1,
+                        "batch_rows": len(records),
+                        "completed_rows": completed_rows,
+                        "total_rows": table.num_rows,
+                        "remaining_rows": table.num_rows - completed_rows,
+                        "elapsed_seconds": elapsed,
+                        "rows_per_second": rate,
+                        "eta_seconds": (
+                            (table.num_rows - completed_rows) / rate
+                            if rate > 0
+                            else None
+                        ),
+                        "initial_inference_seconds": initial_inference_seconds,
+                        "repair_inference_seconds": repair_time_holder[0],
+                    }
+                )
         total_elapsed = max(0.0, self.clock() - started)
         repair_inference_seconds = repair_time_holder[0]
         timing = build_timing_payload(

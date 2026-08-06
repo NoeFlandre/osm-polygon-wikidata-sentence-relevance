@@ -44,7 +44,7 @@ def test_prepare_builds_clean_pinned_checkout() -> None:
     assert "rev-parse origin/main" not in command
     assert 'UV_BIN="$(command -v uv || true)"' in command
     assert 'UV_BIN="$HOME/.local/bin/uv"' in command
-    assert '"$UV_BIN" sync --locked --no-dev --extra hub' in command
+    assert '"$UV_BIN" sync --locked --no-dev --extra hub --extra operator' in command
     assert "--extra segmentation" not in command
     assert '--project "$repo"' in command
     assert '"$UV_BIN" sync --locked --no-dev --extra hub -C' not in command

@@ -50,6 +50,7 @@ segmentation = [
 ]
 hub = [
     "huggingface_hub>=0.20.0",
+    "h3>=4.0,<5",
     # Profile-rendering dependencies. matplotlib is pinned to a modern
     # 3.8+ baseline for the Agg backend used in tests; numpy is
     # matplotlib's deterministic-seed backbone; pillow handles the
@@ -66,6 +67,7 @@ docs = [
 ]
 operator = [
     "click>=8.4,<9",
+    "h3>=4.0,<5",
     "rich>=15,<16",
     "tqdm>=4.68,<5",
     "typer>=0.26,<0.27",

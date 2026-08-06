@@ -69,6 +69,9 @@ from osm_polygon_sentence_relevance.operator.relay_transport import (
 #: Filenames that survive a graceful deadline interruption, at the
 #: CheckpointStore root (i.e. directly under ``label_work``).
 ALLOWED_TOP_FILES: frozenset[str] = frozenset({"progress.json", "timing.json"})
+MIRROR_DIR = ".checkpoint-mirror"
+MIRROR_SUBDIRS: frozenset[str] = frozenset({"pending", "uploaded"})
+_MIRROR_FILE = re.compile(r"batch-\d{6}\.json$")
 #: Strict paired batch file naming used by :class:`CheckpointStore`.
 _BATCH_ENTRY = re.compile(r"batch-(\d{6})\.(parquet|json)$")
 
@@ -113,6 +116,7 @@ class RelayInventory:
     metadata_paths: dict[str, Path]
     completed: int
     total: int
+    mirror_paths: tuple[Path, ...] = ()
 
     @property
     def ordered_indexes(self) -> tuple[int, ...]:
@@ -123,6 +127,38 @@ class RelayInventory:
                 raise RelayError(f"unexpected checkpoint name: {path.name}")
             result.append(int(match.group(1)))
         return tuple(sorted(result))
+
+
+def _copy_mirror_tree(source: Path, destination: Path) -> list[Path]:
+    """Copy the optional checkpoint outbox with strict names and modes."""
+
+    if source.is_symlink() or not source.is_dir():
+        raise RelayError("checkpoint mirror root is not a real directory")
+    destination.mkdir(mode=RELAY_DIR_MODE, exist_ok=True)
+    copied: list[Path] = []
+    for entry in _list_local_dir(source):
+        if entry.name == "status.json":
+            if entry.kind != "file":
+                raise RelayError("checkpoint mirror status is not a regular file")
+            target = destination / entry.name
+            shutil.copyfile(source / entry.name, target)
+            os.chmod(target, FILE_MODE)
+            copied.append(target)
+            continue
+        if entry.name not in MIRROR_SUBDIRS or entry.kind != "dir":
+            raise RelayError(f"unexpected checkpoint mirror entry: {entry.name}")
+        target_dir = destination / entry.name
+        target_dir.mkdir(mode=RELAY_DIR_MODE, exist_ok=True)
+        for marker in _list_local_dir(source / entry.name):
+            if marker.kind != "file" or _MIRROR_FILE.fullmatch(marker.name) is None:
+                raise RelayError(
+                    f"unexpected checkpoint mirror marker: {entry.name}/{marker.name}"
+                )
+            target = target_dir / marker.name
+            shutil.copyfile(source / entry.name / marker.name, target)
+            os.chmod(target, FILE_MODE)
+            copied.append(target)
+    return copied
 
 
 def _list_local_dir(directory: Path) -> list[RemoteEntry]:
@@ -202,6 +238,10 @@ def _required_int(mapping: Mapping[str, object], key: str) -> int:
 
 
 def _run_identity_from_mapping(mapping: Mapping[str, object]) -> RunIdentity:
+    sampling_target = mapping.get("sampling_target")
+    sampling_h3_resolution = mapping.get(
+        "sampling_h3_resolution", mapping.get("h3_resolution")
+    )
     return RunIdentity(
         input_sha256=_required_string(mapping, "input_sha256"),
         input_dataset_revision=_required_string(mapping, "input_dataset_revision"),
@@ -219,6 +259,30 @@ def _run_identity_from_mapping(mapping: Mapping[str, object]) -> RunIdentity:
         llama_per_slot_context=_required_int(mapping, "llama_per_slot_context"),
         llama_total_context=_required_int(mapping, "llama_total_context"),
         request_concurrency=_required_int(mapping, "request_concurrency"),
+        sampling_target=(
+            None
+            if sampling_target is None
+            else _required_int(mapping, "sampling_target")
+        ),
+        sampling_seed=(
+            None
+            if mapping.get("sampling_seed") is None
+            else _required_string(mapping, "sampling_seed")
+        ),
+        h3_resolution=(
+            None
+            if sampling_h3_resolution is None
+            else (
+                _required_int(mapping, "sampling_h3_resolution")
+                if "sampling_h3_resolution" in mapping
+                else _required_int(mapping, "h3_resolution")
+            )
+        ),
+        sampling_version=(
+            None
+            if mapping.get("sampling_version") is None
+            else _required_string(mapping, "sampling_version")
+        ),
     )
 
 
@@ -279,12 +343,20 @@ def _stage_relay_local(
     timing_path: Path | None = None
     parquet_paths: list[Path] = []
     metadata_paths: dict[str, Path] = {}
+    mirror_paths: list[Path] = []
 
     try:
         for entry in entries:
             if entry.kind == "symlink":
                 raise RelayError(f"refusing relay symlink: {entry.name}")
             if entry.kind == "dir":
+                if entry.name == MIRROR_DIR:
+                    mirror_paths.extend(
+                        _copy_mirror_tree(
+                            source_dir / entry.name, generation / entry.name
+                        )
+                    )
+                    continue
                 if entry.name != "checkpoints":
                     raise RelayError(f"unexpected relay subdirectory: {entry.name}")
                 continue
@@ -446,6 +518,7 @@ def _stage_relay_local(
             },
             completed=completed,
             total=total,
+            mirror_paths=tuple(sorted(mirror_paths)),
         )
     except BaseException:
         shutil.rmtree(generation, ignore_errors=True)
@@ -465,6 +538,10 @@ _OVERLAPPING_IDENTITY_FIELDS: tuple[str, ...] = (
     "llama_per_slot_context",
     "llama_total_context",
     "request_concurrency",
+    "sampling_target",
+    "sampling_seed",
+    "sampling_h3_resolution",
+    "sampling_version",
 )
 
 
@@ -473,10 +550,45 @@ def _enforce_overlapping_identity(
     expected: Mapping[str, object],
 ) -> None:
     for field_name in _OVERLAPPING_IDENTITY_FIELDS:
-        if canonical.get(field_name) != expected.get(field_name):
+        canonical_value = canonical.get(field_name)
+        if field_name == "sampling_h3_resolution" and canonical_value is None:
+            canonical_value = canonical.get("h3_resolution")
+        if canonical_value != expected.get(field_name):
             raise RelayError(
                 f"checkpoint identity does not match run identity: {field_name}"
             )
+
+
+def _fetch_mirror_tree(
+    source: RemoteTransfer, remote_root: str, destination: Path
+) -> list[Path]:
+    """Fetch the optional checkpoint outbox with the same strict layout."""
+
+    destination.mkdir(mode=RELAY_DIR_MODE, exist_ok=True)
+    copied: list[Path] = []
+    for entry in list_remote_dir(source.ssh_target, remote_root):
+        if entry.name == "status.json":
+            if entry.kind != "file":
+                raise RelayError("checkpoint mirror status is not a regular file")
+            target = destination / entry.name
+            source.fetch(f"{remote_root.rstrip('/')}/{entry.name}", target)
+            copied.append(target)
+            continue
+        if entry.name not in MIRROR_SUBDIRS or entry.kind != "dir":
+            raise RelayError(f"unexpected remote checkpoint mirror entry: {entry.name}")
+        target_dir = destination / entry.name
+        target_dir.mkdir(mode=RELAY_DIR_MODE, exist_ok=True)
+        marker_root = f"{remote_root.rstrip('/')}/{entry.name}"
+        for marker in list_remote_dir(source.ssh_target, marker_root):
+            if marker.kind != "file" or _MIRROR_FILE.fullmatch(marker.name) is None:
+                raise RelayError(
+                    f"unexpected remote checkpoint mirror marker: "
+                    f"{entry.name}/{marker.name}"
+                )
+            target = target_dir / marker.name
+            source.fetch(f"{marker_root}/{marker.name}", target)
+            copied.append(target)
+    return copied
 
 
 def retrieve_to_seagate(
@@ -514,6 +626,13 @@ def retrieve_to_seagate(
                 raise RelayError(f"refusing remote symlink: {entry.name}")
             if entry.kind == "dir":
                 # Only checkpoints/ is allowed at depth 1.
+                if entry.name == MIRROR_DIR:
+                    _fetch_mirror_tree(
+                        source,
+                        f"{source_checkpoint_root.rstrip('/')}/{entry.name}",
+                        staging / entry.name,
+                    )
+                    continue
                 if entry.name != "checkpoints":
                     raise RelayError(f"unexpected remote subdirectory: {entry.name}")
                 continue
@@ -612,6 +731,7 @@ def stage_to_destination(
         local_paths.append(inventory.timing)
     local_paths.extend(inventory.parquet_paths)
     local_paths.extend(inventory.metadata_paths.values())
+    local_paths.extend(inventory.mirror_paths)
 
     for local_path in local_paths:
         relative = local_path.relative_to(inventory.root)

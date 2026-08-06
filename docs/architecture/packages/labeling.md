@@ -3,7 +3,8 @@
 ## Responsibility
 
 Assigns land-use or land-cover and polygon-relevance labels with a pinned local
-LLM runtime.
+LLM runtime. V2 selection can bound a run with deterministic H3, language, and
+OSM-primary-tag strata; the earlier Afghanistan V1 artifact remains separate.
 
 ## Public entry points
 
@@ -14,6 +15,10 @@ validation, and publication APIs.
 
 Prompting, inference, repair, checkpointing, runtime validation, finalization,
 and publication are isolated under `labeling/`.
+
+`checkpoint_mirror.py` is an optional operational boundary: it queues each
+validated local batch for one background Hugging Face staging upload without
+making the runner depend on network availability.
 
 ## Invariants
 

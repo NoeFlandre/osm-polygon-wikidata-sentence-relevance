@@ -50,10 +50,19 @@ def test_payload_uses_q4_k_m_and_pinned_local_files() -> None:
 
 def test_payload_supports_nonpublishing_representative_canary() -> None:
     text = SCRIPT.read_text()
-    assert "exactly fifteen arguments" in text
+    assert "exactly eighteen arguments" in text
     assert 'ROW_LIMIT="${12}"' in text
     assert '--row-limit "${ROW_LIMIT}"' in text
     assert 'LLAMA_PARALLEL="${13}"' in text
     assert '--llama-parallel "${LLAMA_PARALLEL}"' in text
     assert "LLAMA_TOTAL_CONTEXT=$((LLAMA_PARALLEL * LLAMA_PER_SLOT_CONTEXT))" in text
     assert "Canary complete; publication intentionally skipped" in text
+
+
+def test_payload_wires_run_scoped_async_checkpoint_mirror() -> None:
+    text = SCRIPT.read_text()
+    assert "RUN_ID" in text
+    assert "checkpoints/${RUN_ID}" in text
+    assert '--checkpoint-dataset-id "${DATASET_ID}"' in text
+    assert '--checkpoint-namespace "${CHECKPOINT_BRANCH}"' in text
+    assert "--checkpoint-drain-seconds" in text
