@@ -28,7 +28,7 @@ import hashlib
 import json
 import tempfile
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -216,6 +216,312 @@ def _check_accounting_identity(
         )
 
 
+def _collect_publication_relpaths(export_dir: Path) -> set[str]:
+    """Return publication-relative paths, rejecting unsafe entries."""
+    actual_relpaths: set[str] = set()
+    for entry in sorted(export_dir.iterdir()):
+        rel = entry.relative_to(export_dir).as_posix()
+        if entry.is_dir():
+            if rel == _ASSETS_DIR_NAME:
+                for asset_entry in sorted(entry.iterdir()):
+                    asset_rel = f"{rel}/{asset_entry.relative_to(entry).as_posix()}"
+                    actual_relpaths.add(asset_rel)
+            else:
+                raise ExportError(
+                    f"Publication directory contains unexpected subdirectory: {rel!r}"
+                )
+        elif entry.is_file():
+            actual_relpaths.add(rel)
+        elif entry.is_symlink():
+            raise ExportError(f"Publication directory contains a symlink: {rel!r}")
+    return actual_relpaths
+
+
+def _validate_publication_layout(
+    export_dir: Path,
+) -> tuple[Path, Path, Path, Path]:
+    """Validate and return the canonical publication paths."""
+    parquet_path = export_dir / _PARQUET_NAME
+    manifest_path = export_dir / _MANIFEST_NAME
+    card_path = export_dir / _CARD_NAME
+    assets_dir = export_dir / _ASSETS_DIR_NAME
+
+    for required in (parquet_path, manifest_path, card_path, assets_dir):
+        if not required.exists():
+            raise ExportError(f"Missing required artefact: {required}")
+
+    if not parquet_path.is_file():
+        raise ExportError(f"Parquet path is not a file: {parquet_path}")
+    if not manifest_path.is_file():
+        raise ExportError(f"Manifest path is not a file: {manifest_path}")
+    if not card_path.is_file():
+        raise ExportError(f"Card path is not a file: {card_path}")
+    if not assets_dir.is_dir():
+        raise ExportError(f"Assets path is not a directory: {assets_dir}")
+
+    actual_relpaths = _collect_publication_relpaths(export_dir)
+    expected_relpaths = set(_REQUIRED_PUBLICATION_FILES)
+    if actual_relpaths != expected_relpaths:
+        missing = sorted(expected_relpaths - actual_relpaths)
+        extra = sorted(actual_relpaths - expected_relpaths)
+        problems: list[str] = []
+        if missing:
+            problems.append(f"missing={missing}")
+        if extra:
+            problems.append(f"extra={extra}")
+        raise ExportError(
+            "Publication directory does not match the canonical "
+            "five-file contract: " + "; ".join(problems)
+        )
+
+    return parquet_path, manifest_path, card_path, assets_dir
+
+
+def _load_publication_manifest(manifest_path: Path) -> dict[str, Any]:
+    """Load and validate the required publication manifest envelope."""
+    try:
+        manifest_text = manifest_path.read_text(encoding="utf-8")
+        manifest = json.loads(manifest_text)
+    except (OSError, json.JSONDecodeError) as err:
+        raise ExportError(f"Manifest is not readable: {err}") from err
+    if not isinstance(manifest, dict):
+        raise ExportError("Manifest must be a JSON object")
+
+    version = manifest.get("manifest_version")
+    if version != 2:
+        raise ExportError(
+            f"Manifest version {version!r} is not supported by the "
+            "publication validator; expected 2"
+        )
+
+    missing_keys = sorted(set(_REQUIRED_MANIFEST_KEYS) - set(manifest.keys()))
+    if missing_keys:
+        raise ExportError(f"Manifest is missing required keys: {missing_keys}")
+    return manifest
+
+
+def _validate_parquet_schema(parquet_path: Path) -> None:
+    """Require the canonical schema and Hugging Face-compatible fields."""
+    try:
+        parquet_file = pq.ParquetFile(parquet_path)
+    except Exception as err:
+        raise ExportError(f"Parquet file is unreadable: {err}") from err
+    if not parquet_file.schema_arrow.equals(OUTPUT_SENTENCE_SCHEMA):
+        raise ExportError(
+            "Parquet schema does not match OUTPUT_SENTENCE_SCHEMA; "
+            "the publication cannot proceed"
+        )
+    if schema_has_map_types(OUTPUT_SENTENCE_SCHEMA):
+        raise ExportError(
+            "OUTPUT_SENTENCE_SCHEMA contains a map<string, ...> field; "
+            "the Hugging Face Viewer cannot ingest this"
+        )
+
+
+def _resolve_segmentation_metadata(
+    manifest: Mapping[str, Any],
+    segmentation_model: str | None,
+    segmentation_revision: str | None,
+    source_commit: str | None,
+) -> tuple[str, str, str]:
+    """Resolve profile provenance from explicit overrides or the manifest."""
+    return (
+        segmentation_model
+        if segmentation_model is not None
+        else _require_manifest_string(manifest, "segmentation_model"),
+        segmentation_revision
+        if segmentation_revision is not None
+        else _require_manifest_string(manifest, "segmentation_revision"),
+        source_commit
+        if source_commit is not None
+        else _require_manifest_string(manifest, "source_commit"),
+    )
+
+
+def _build_validated_profile(
+    *,
+    parquet_path: Path,
+    manifest: Mapping[str, Any],
+    manifest_sha: str,
+    segmentation_model: str,
+    segmentation_revision: str,
+    source_commit: str,
+    scratch_dir: str | Path | None,
+) -> DatasetProfile:
+    """Rebuild the profile and enforce residual-boundary publication rules."""
+    if scratch_dir is None:
+        scratch_ctx: tempfile.TemporaryDirectory[str] | None = (
+            tempfile.TemporaryDirectory(prefix="pub-validate-")
+        )
+        scratch = Path(scratch_ctx.name)
+    else:
+        scratch_ctx = None
+        scratch = Path(scratch_dir)
+        scratch.mkdir(parents=True, exist_ok=True)
+    try:
+        try:
+            profile = build_dataset_profile(
+                parquet_path=parquet_path,
+                parquet_sha256=manifest_sha,
+                segmentation_model=segmentation_model,
+                segmentation_revision=segmentation_revision,
+                source_commit=source_commit,
+                scratch_dir=scratch,
+                input_dataset_id=manifest.get("input_dataset_id"),
+            )
+        except ProfileError as err:
+            raise ExportError(f"Could not rebuild profile from Parquet: {err}") from err
+    finally:
+        if scratch_ctx is not None:
+            scratch_ctx.cleanup()
+
+    if profile.residual_boundary_violations:
+        raise ExportError(
+            "Publication contains "
+            f"{profile.residual_boundary_violations} high-confidence residual "
+            "sentence boundary violation(s)"
+        )
+    if manifest["residual_boundary_violations"] != 0:
+        raise ExportError(
+            "Manifest residual_boundary_violations must be zero for publication"
+        )
+    return profile
+
+
+def _attach_manifest_assets(
+    profile: DatasetProfile, manifest: Mapping[str, Any]
+) -> DatasetProfile:
+    """Attach manifest asset metadata before deterministic card rendering."""
+    asset_map: dict[str, AssetInfo] = {}
+    for entry in manifest.get("assets", []):
+        if not isinstance(entry, dict):
+            continue
+        name = entry.get("name")
+        sha = entry.get("sha256")
+        size = entry.get("bytes")
+        if isinstance(name, str) and isinstance(sha, str) and isinstance(size, int):
+            asset_map[name] = AssetInfo(name=name, sha256=sha, bytes_=size)
+    return replace(profile, assets=asset_map) if asset_map else profile
+
+
+def _validate_profile_against_manifest(
+    profile: DatasetProfile, manifest: Mapping[str, Any]
+) -> None:
+    """Cross-check all profile-derived accounting fields in the manifest."""
+    for name, breakdown in (
+        ("counts_by_source", manifest["counts_by_source"]),
+        ("counts_by_language", manifest["counts_by_language"]),
+        ("counts_by_region", manifest["counts_by_region"]),
+    ):
+        _check_accounting_identity(name, breakdown, profile.row_count)
+
+    for key, expected in (
+        ("counts_by_language", profile.language_counts),
+        ("counts_by_source", profile.source_counts),
+        ("counts_by_region", profile.region_counts),
+    ):
+        if dict(manifest[key]) != dict(expected):
+            raise ExportError(f"Manifest {key} disagrees with the profile")
+
+    for key, expected in (
+        ("input_occurrence_count", profile.input_occurrence_count),
+        ("duplicates_removed", profile.duplicates_removed),
+        ("cross_source_duplicate_groups", profile.cross_source_duplicate_groups),
+    ):
+        if manifest[key] != expected:
+            raise ExportError(f"Manifest {key} disagrees with the profile")
+
+
+def _load_manifest_asset_map(
+    manifest: Mapping[str, Any],
+) -> dict[str, Mapping[str, object]]:
+    """Return validated manifest asset entries keyed by filename."""
+    manifest_assets = manifest["assets"]
+    if not isinstance(manifest_assets, list):
+        raise ExportError("Manifest 'assets' must be a JSON array")
+
+    manifest_asset_map: dict[str, Mapping[str, object]] = {}
+    for entry in manifest_assets:
+        if not isinstance(entry, dict):
+            raise ExportError("Manifest asset entries must be JSON objects")
+        name = entry.get("name")
+        sha = entry.get("sha256")
+        if not isinstance(name, str) or not isinstance(sha, str):
+            raise ExportError("Manifest asset entries must have a 'name' and 'sha256'")
+        if not name or not sha:
+            raise ExportError(
+                "Manifest asset entries must have non-empty 'name' and 'sha256'"
+            )
+        manifest_asset_map[name] = entry
+    return manifest_asset_map
+
+
+def _validate_manifest_assets(
+    export_dir: Path, manifest: Mapping[str, Any]
+) -> dict[str, AssetInfo]:
+    """Cross-check manifest-declared assets against on-disk bytes."""
+    inventory = load_asset_inventory(export_dir)
+    manifest_asset_map = _load_manifest_asset_map(manifest)
+    if set(inventory) != set(manifest_asset_map):
+        raise ExportError(
+            "Asset set in manifest does not match the on-disk assets; "
+            f"manifest={sorted(manifest_asset_map)}, "
+            f"on-disk={sorted(inventory)}"
+        )
+
+    for name, info in inventory.items():
+        manifest_entry = manifest_asset_map[name]
+        if info.sha256 != str(manifest_entry.get("sha256")):
+            raise ExportError(
+                f"Asset {name!r} has manifest sha "
+                f"{manifest_entry.get('sha256')!r} but on-disk sha is "
+                f"{info.sha256!r}"
+            )
+        manifest_bytes = manifest_entry.get("bytes")
+        if not isinstance(manifest_bytes, int) or manifest_bytes < 0:
+            raise ExportError(f"Manifest asset {name!r} has invalid 'bytes' value")
+        if manifest_bytes != info.bytes_:
+            raise ExportError(
+                f"Asset {name!r} has manifest bytes {manifest_bytes} "
+                f"but on-disk bytes {info.bytes_}"
+            )
+    return inventory
+
+
+def _validate_card_and_example_row(
+    *,
+    card_path: Path,
+    parquet_path: Path,
+    manifest: Mapping[str, Any],
+    profile: DatasetProfile,
+) -> None:
+    """Validate deterministic card text and the canonical example row."""
+    try:
+        card_text = card_path.read_text(encoding="utf-8")
+    except OSError as err:
+        raise ExportError(f"Card is not readable: {err}") from err
+    expected_card = render_dataset_card_from_profile(
+        profile, asset_base_url=_derive_asset_base_url(manifest)
+    )
+    if card_text != expected_card:
+        raise ExportError(
+            "Card on disk does not match the deterministic profile render; "
+            "it is stale or manually edited"
+        )
+
+    manifest_example_row = manifest["example_row"]
+    actual_example_row = first_parquet_row(parquet_path)
+    for col in OUTPUT_SENTENCE_SCHEMA.names:
+        manifest_value = manifest_example_row.get(col)
+        actual_value = actual_example_row.get(col)
+        if manifest_value != actual_value:
+            raise ExportError(
+                f"Manifest example row disagrees with Parquet for "
+                f"column {col!r} (manifest={manifest_value!r}, "
+                f"parquet={actual_value!r})"
+            )
+
+
 def validate_publication_directory(
     path: str | Path,
     *,
@@ -258,122 +564,17 @@ def validate_publication_directory(
     if not export_dir.is_dir():
         raise ExportError(f"Export path is not a directory: {export_dir}")
 
-    parquet_path = export_dir / _PARQUET_NAME
-    manifest_path = export_dir / _MANIFEST_NAME
-    card_path = export_dir / _CARD_NAME
-    assets_dir = export_dir / _ASSETS_DIR_NAME
-
-    for required in (parquet_path, manifest_path, card_path, assets_dir):
-        if not required.exists():
-            raise ExportError(f"Missing required artefact: {required}")
-
-    # The existence checks above guarantee the path-shape branches
-    # below; ``is_file()``/``is_dir()`` narrow the error to whichever
-    # artefact is the wrong kind.
-    if not parquet_path.is_file():
-        raise ExportError(f"Parquet path is not a file: {parquet_path}")
-    if not manifest_path.is_file():
-        raise ExportError(f"Manifest path is not a file: {manifest_path}")
-    if not card_path.is_file():
-        raise ExportError(f"Card path is not a file: {card_path}")
-    if not assets_dir.is_dir():
-        raise ExportError(f"Assets path is not a directory: {assets_dir}")
-
-    # Enforce the strict five-file publication contract. After this
-    # gate every file in the directory must be one of the contract
-    # artefacts; anything else (orphan files at the root, hidden
-    # directories, sidecar parquets) is a publication regression.
-    actual_relpaths: set[str] = set()
-    for entry in sorted(export_dir.iterdir()):
-        rel = entry.relative_to(export_dir).as_posix()
-        if entry.is_dir():
-            if rel == _ASSETS_DIR_NAME:
-                for asset_entry in sorted(entry.iterdir()):
-                    asset_rel = f"{rel}/{asset_entry.relative_to(entry).as_posix()}"
-                    actual_relpaths.add(asset_rel)
-            else:
-                raise ExportError(
-                    f"Publication directory contains unexpected subdirectory: {rel!r}"
-                )
-        elif entry.is_file():
-            actual_relpaths.add(rel)
-        elif entry.is_symlink():
-            raise ExportError(f"Publication directory contains a symlink: {rel!r}")
-
-    expected_relpaths = set(_REQUIRED_PUBLICATION_FILES)
-    if actual_relpaths != expected_relpaths:
-        missing = sorted(expected_relpaths - actual_relpaths)
-        extra = sorted(actual_relpaths - expected_relpaths)
-        problems: list[str] = []
-        if missing:
-            problems.append(f"missing={missing}")
-        if extra:
-            problems.append(f"extra={extra}")
-        raise ExportError(
-            "Publication directory does not match the canonical "
-            "five-file contract: " + "; ".join(problems)
-        )
-
-    # Loader the manifest strictly.
-    try:
-        manifest_text = manifest_path.read_text(encoding="utf-8")
-        manifest = json.loads(manifest_text)
-    except (OSError, json.JSONDecodeError) as err:
-        raise ExportError(f"Manifest is not readable: {err}") from err
-    if not isinstance(manifest, dict):
-        raise ExportError("Manifest must be a JSON object")
-
-    version = manifest.get("manifest_version")
-    if version != 2:
-        raise ExportError(
-            f"Manifest version {version!r} is not supported by the "
-            "publication validator; expected 2"
-        )
-
-    missing_keys = sorted(set(_REQUIRED_MANIFEST_KEYS) - set(manifest.keys()))
-    if missing_keys:
-        raise ExportError(f"Manifest is missing required keys: {missing_keys}")
-
-    # Parquet schema is identical to OUTPUT_SENTENCE_SCHEMA (we
-    # already enforced this on the export side; the publication
-    # validator re-checks here so a tampered parquet is rejected).
-    try:
-        parquet_file = pq.ParquetFile(parquet_path)
-    except Exception as err:
-        raise ExportError(f"Parquet file is unreadable: {err}") from err
-    parquet_schema = parquet_file.schema_arrow
-    if not parquet_schema.equals(OUTPUT_SENTENCE_SCHEMA):
-        raise ExportError(
-            "Parquet schema does not match OUTPUT_SENTENCE_SCHEMA; "
-            "the publication cannot proceed"
-        )
-
-    # Cross-check no map types anywhere in the canonical schema. This
-    # is a fixed property of OUTPUT_SENTENCE_SCHEMA but the check is
-    # wired into the validator anyway so a future contributor who
-    # adds a map type by mistake is blocked here.
-    if schema_has_map_types(OUTPUT_SENTENCE_SCHEMA):
-        raise ExportError(
-            "OUTPUT_SENTENCE_SCHEMA contains a map<string, ...> field; "
-            "the Hugging Face Viewer cannot ingest this"
-        )
-
-    # Determine segmentation metadata either from the manifest or
-    # from the explicit overrides.
-    seg_model = (
-        segmentation_model
-        if segmentation_model is not None
-        else _require_manifest_string(manifest, "segmentation_model")
+    parquet_path, manifest_path, card_path, assets_dir = _validate_publication_layout(
+        export_dir
     )
-    seg_rev = (
-        segmentation_revision
-        if segmentation_revision is not None
-        else _require_manifest_string(manifest, "segmentation_revision")
-    )
-    src_commit = (
-        source_commit
-        if source_commit is not None
-        else _require_manifest_string(manifest, "source_commit")
+    manifest = _load_publication_manifest(manifest_path)
+
+    _validate_parquet_schema(parquet_path)
+    seg_model, seg_rev, src_commit = _resolve_segmentation_metadata(
+        manifest,
+        segmentation_model,
+        segmentation_revision,
+        source_commit,
     )
 
     actual_sha = sha256_file(parquet_path)
@@ -383,165 +584,25 @@ def validate_publication_directory(
             f"Manifest sha {manifest_sha!r} does not match Parquet sha {actual_sha!r}"
         )
 
-    # Build the profile and use it as the single source of truth.
-    if scratch_dir is None:
-        scratch_ctx = tempfile.TemporaryDirectory(prefix="pub-validate-")
-        scratch = Path(scratch_ctx.name)
-    else:
-        scratch = Path(scratch_dir)
-        scratch.mkdir(parents=True, exist_ok=True)
-    try:
-        try:
-            profile = build_dataset_profile(
-                parquet_path=parquet_path,
-                parquet_sha256=manifest_sha,
-                segmentation_model=seg_model,
-                segmentation_revision=seg_rev,
-                source_commit=src_commit,
-                scratch_dir=scratch,
-                input_dataset_id=manifest.get("input_dataset_id"),
-            )
-        except ProfileError as err:
-            raise ExportError(f"Could not rebuild profile from Parquet: {err}") from err
-    finally:
-        if scratch_dir is None:
-            scratch_ctx.cleanup()
-
-    if profile.residual_boundary_violations:
-        raise ExportError(
-            "Publication contains "
-            f"{profile.residual_boundary_violations} high-confidence residual "
-            "sentence boundary violation(s)"
-        )
-    if manifest["residual_boundary_violations"] != 0:
-        raise ExportError(
-            "Manifest residual_boundary_violations must be zero for publication"
-        )
-
-    # Re-attach the assets to the profile from the manifest so the
-    # card renderer has them (the manifest is the source of truth for
-    # asset metadata, not the parquet).
-    from dataclasses import replace
-
-    asset_map: dict[str, AssetInfo] = {}
-    for entry in manifest.get("assets", []):
-        if not isinstance(entry, dict):
-            continue
-        name = entry.get("name")
-        sha = entry.get("sha256")
-        size = entry.get("bytes")
-        if isinstance(name, str) and isinstance(sha, str) and isinstance(size, int):
-            asset_map[name] = AssetInfo(name=name, sha256=sha, bytes_=size)
-    if asset_map:
-        profile = replace(profile, assets=asset_map)
-
-    # Cross-check the manifest's quantitative fields against the
-    # profile. The profile is derived from the parquet so the
-    # manifest must agree byte-for-byte.
-    _check_accounting_identity(
-        "counts_by_source", manifest["counts_by_source"], profile.row_count
+    profile = _build_validated_profile(
+        parquet_path=parquet_path,
+        manifest=manifest,
+        manifest_sha=manifest_sha,
+        segmentation_model=seg_model,
+        segmentation_revision=seg_rev,
+        source_commit=src_commit,
+        scratch_dir=scratch_dir,
     )
-    _check_accounting_identity(
-        "counts_by_language", manifest["counts_by_language"], profile.row_count
+    profile = _attach_manifest_assets(profile, manifest)
+
+    _validate_profile_against_manifest(profile, manifest)
+    inventory = _validate_manifest_assets(export_dir, manifest)
+    _validate_card_and_example_row(
+        card_path=card_path,
+        parquet_path=parquet_path,
+        manifest=manifest,
+        profile=profile,
     )
-    _check_accounting_identity(
-        "counts_by_region", manifest["counts_by_region"], profile.row_count
-    )
-
-    # Cross-check language breakdown vs profile one-by-one (so a
-    # value-mutation that preserves the sum is still caught).
-    if dict(manifest["counts_by_language"]) != dict(profile.language_counts):
-        raise ExportError("Manifest counts_by_language disagrees with the profile")
-    if dict(manifest["counts_by_source"]) != dict(profile.source_counts):
-        raise ExportError("Manifest counts_by_source disagrees with the profile")
-    if dict(manifest["counts_by_region"]) != dict(profile.region_counts):
-        raise ExportError("Manifest counts_by_region disagrees with the profile")
-    for key, expected in (
-        ("input_occurrence_count", profile.input_occurrence_count),
-        ("duplicates_removed", profile.duplicates_removed),
-        (
-            "cross_source_duplicate_groups",
-            profile.cross_source_duplicate_groups,
-        ),
-    ):
-        if manifest[key] != expected:
-            raise ExportError(f"Manifest {key} disagrees with the profile")
-
-    # Asset cross-check
-    inventory = load_asset_inventory(export_dir)
-    # Defensive manifest parsing: the v2 schema requires ``assets`` to
-    # be a list of {"name", "sha256", "bytes"} objects.  The
-    # surrounding schema guarantees this for a freshly-written
-    # manifest, but a tampered manifest can violate the contract.
-    manifest_assets = manifest["assets"]
-    if not isinstance(manifest_assets, list):
-        raise ExportError("Manifest 'assets' must be a JSON array")
-    manifest_asset_map: dict[str, Mapping[str, object]] = {}
-    for entry in manifest_assets:
-        if not isinstance(entry, dict):
-            raise ExportError("Manifest asset entries must be JSON objects")
-        name = entry.get("name")
-        sha = entry.get("sha256")
-        if not isinstance(name, str) or not isinstance(sha, str):
-            raise ExportError("Manifest asset entries must have a 'name' and 'sha256'")
-        if not name or not sha:
-            raise ExportError(
-                "Manifest asset entries must have non-empty 'name' and 'sha256'"
-            )
-        manifest_asset_map[name] = entry
-
-    if set(inventory) != set(manifest_asset_map):
-        raise ExportError(
-            "Asset set in manifest does not match the on-disk assets; "
-            f"manifest={sorted(manifest_asset_map)}, "
-            f"on-disk={sorted(inventory)}"
-        )
-
-    for name, info in inventory.items():
-        manifest_entry = manifest_asset_map[name]
-        if info.sha256 != str(manifest_entry.get("sha256")):
-            raise ExportError(
-                f"Asset {name!r} has manifest sha "
-                f"{manifest_entry.get('sha256')!r} but on-disk sha is "
-                f"{info.sha256!r}"
-            )
-        manifest_bytes = manifest_entry.get("bytes")
-        if not isinstance(manifest_bytes, int) or manifest_bytes < 0:
-            raise ExportError(f"Manifest asset {name!r} has invalid 'bytes' value")
-        if manifest_bytes != info.bytes_:
-            raise ExportError(
-                f"Asset {name!r} has manifest bytes {manifest_bytes} "
-                f"but on-disk bytes {info.bytes_}"
-            )
-
-    # Rebuild the dataset card from the profile and compare.
-    try:
-        card_text = card_path.read_text(encoding="utf-8")
-    except OSError as err:
-        raise ExportError(f"Card is not readable: {err}") from err
-    expected_card = render_dataset_card_from_profile(
-        profile, asset_base_url=_derive_asset_base_url(manifest)
-    )
-    if card_text != expected_card:
-        raise ExportError(
-            "Card on disk does not match the deterministic profile render; "
-            "it is stale or manually edited"
-        )
-
-    # Cross-check the manifest's example row against the first row
-    # of the parquet.  Use the same column-order normalisation the
-    # renderer uses so byte-identical rows compare equal.
-    manifest_example_row = manifest["example_row"]
-    actual_example_row = first_parquet_row(parquet_path)
-    for col in OUTPUT_SENTENCE_SCHEMA.names:
-        manifest_value = manifest_example_row.get(col)
-        actual_value = actual_example_row.get(col)
-        if manifest_value != actual_value:
-            raise ExportError(
-                f"Manifest example row disagrees with Parquet for "
-                f"column {col!r} (manifest={manifest_value!r}, "
-                f"parquet={actual_value!r})"
-            )
 
     return ValidatedPublication(
         export_dir=export_dir,

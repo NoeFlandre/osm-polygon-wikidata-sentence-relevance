@@ -355,6 +355,31 @@ class TestValidatePublicationExampleRow:
 
 
 class TestValidatorsUtilities:
+    def test_layout_helper_returns_canonical_publication_paths(
+        self, tmp_path: Path
+    ) -> None:
+        export_dir, _profile, _geo, _lang = _build_minimal_export(tmp_path)
+
+        paths = validation_publication._validate_publication_layout(export_dir)
+
+        assert paths == (
+            export_dir / "sentences.parquet",
+            export_dir / "manifest.json",
+            export_dir / "README.md",
+            export_dir / "assets",
+        )
+
+    def test_manifest_helper_loads_and_validates_v2_manifest(
+        self, tmp_path: Path
+    ) -> None:
+        export_dir, _profile, _geo, _lang = _build_minimal_export(tmp_path)
+
+        manifest = validation_publication._load_publication_manifest(
+            export_dir / "manifest.json"
+        )
+
+        assert manifest["manifest_version"] == 2
+
     def test_example_row_matches_first_row(self, tmp_path: Path) -> None:
         """The validator's helper extracts the row that must match the manifest."""
         from osm_polygon_sentence_relevance.output.validation_publication import (
