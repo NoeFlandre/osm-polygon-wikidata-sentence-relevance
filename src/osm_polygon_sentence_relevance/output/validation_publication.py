@@ -44,6 +44,7 @@ from osm_polygon_sentence_relevance.output.dataset_card import (
 from osm_polygon_sentence_relevance.output.profile import (
     AssetInfo,
     DatasetProfile,
+    ExampleRow,
     ProfileError,
     build_dataset_profile,
 )
@@ -560,9 +561,5 @@ __all__ = [
     "compute_asset_sha",
     "first_parquet_row",
     "load_asset_inventory",
+    "ExampleRow",
 ]
-
-
-# Re-export ExampleRow so external consumers can import it from this
-# module without going through ``osm_polygon_sentence_relevance.output.profile``.
-__all__.append("ExampleRow")

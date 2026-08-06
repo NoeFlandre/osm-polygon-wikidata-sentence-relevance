@@ -135,3 +135,19 @@ def test_root_contract_modules_public_api():
     assert hasattr(errors, "ConfigurationError")
     assert hasattr(errors, "SegmentationError")
     assert hasattr(errors, "ExportError")
+
+
+def test_publication_validator_reexports_example_row():
+    """The documented publication-validator type is importable publicly."""
+    publication = importlib.import_module(
+        "osm_polygon_sentence_relevance.output.validation_publication"
+    )
+    profile = importlib.import_module("osm_polygon_sentence_relevance.output.profile")
+
+    assert publication.ExampleRow is profile.ExampleRow
+    namespace: dict[str, object] = {}
+    exec(
+        "from osm_polygon_sentence_relevance.output.validation_publication import *",
+        namespace,
+    )
+    assert namespace["ExampleRow"] is profile.ExampleRow
