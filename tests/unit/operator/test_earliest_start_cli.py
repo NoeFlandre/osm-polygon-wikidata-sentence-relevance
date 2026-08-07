@@ -27,8 +27,13 @@ def _config() -> OperatorConfig:
     )
 
 
-def _queued_store(tmp_path: Any) -> tuple[OperatorConfig, StateStore]:
-    config = _config()
+def _queued_store(
+    tmp_path: Any,
+    *,
+    config: OperatorConfig | None = None,
+    active_stage: str = "label",
+) -> tuple[OperatorConfig, StateStore]:
+    config = config or _config()
     store = StateStore(tmp_path)
     store.load_or_create(config.run_identity)
     phase = RunPhase.CREATED
@@ -43,10 +48,20 @@ def _queued_store(tmp_path: Any) -> tuple[OperatorConfig, StateStore]:
         store.transition(
             expected=phase,
             target=target,
-            facts={"site": "sophia", "job_id": 42, "active_stage": "label"},
+            facts={"site": "sophia", "job_id": 42, "active_stage": active_stage},
         )
         phase = target
     return config, store
+
+
+def _split_config() -> OperatorConfig:
+    return OperatorConfig.build(
+        scope="region",
+        region="afghanistan-latest",
+        stage="split",
+        source_commit="a" * 40,
+        input_revision="b" * 40,
+    )
 
 
 class _Ssh:
@@ -195,6 +210,83 @@ def test_cli_retains_fallback_when_no_runtime_ready_candidate(
         "sophia",
         42,
     )
+
+
+def test_cli_split_replacement_uses_split_submission_without_llama_runtime(
+    tmp_path: Any,
+    monkeypatch: Any,
+) -> None:
+    config, store = _queued_store(
+        tmp_path,
+        config=_split_config(),
+        active_stage="split",
+    )
+    submitted: list[Any] = []
+    prepared: list[str] = []
+
+    class _Oar:
+        def __init__(self, ssh: _Ssh, *, preflight: Any = None) -> None:
+            self.site = ssh.target
+            self.preflight = preflight
+
+        def status(self, job_id: int) -> JobStatus:
+            if job_id == 42:
+                return JobStatus(
+                    42,
+                    JobState.QUEUED,
+                    scheduled_start="2099-07-29 19:00:00",
+                )
+            return JobStatus(job_id, JobState.RUNNING)
+
+        def submit(self, request: Any) -> int:
+            if self.preflight is not None:
+                self.preflight()
+            submitted.append(request)
+            return 101
+
+        def cancel(self, _job_id: int) -> None:
+            return None
+
+    class _SplitStager:
+        def __init__(self, _ssh: _Ssh) -> None:
+            pass
+
+        def prepare(self, _config: Any, _layout: Any) -> SimpleNamespace:
+            prepared.append("split")
+            return SimpleNamespace(reused=True)
+
+        def prepare_label_assets(self, *_args: Any, **_kwargs: Any) -> None:
+            raise AssertionError("split replacement must not stage label assets")
+
+    monkeypatch.setattr(cli, "SshClient", _Ssh)
+    monkeypatch.setattr(cli, "OarClient", _Oar)
+    monkeypatch.setattr(cli, "Stager", _SplitStager)
+    monkeypatch.setattr(cli, "_remote_home", lambda _ssh: PurePosixPath("/home/u"))
+    monkeypatch.setattr(cli, "_usage_policy_preflight", lambda *_a: None)
+    monkeypatch.setattr(cli, "ensure_home_headroom", lambda *_a, **_kw: None)
+    monkeypatch.setattr(cli, "split_submission", lambda *_args: "split-request")
+    monkeypatch.setattr(
+        cli,
+        "probe_site",
+        lambda site, *_a, **_kw: SiteProbe(
+            site,
+            site,
+            True,
+            80_000,
+            (8, 0),
+            100 * 1024**3,
+            0,
+            idle_compatible=True,
+            label_runtime_ready=False,
+        ),
+    )
+    args = SimpleNamespace(site=["nancy"], gpu_memory_mb=40_000)
+    assert cli._optimize_queued_start(args, store, config, "sophia", 42) == (
+        "nancy",
+        101,
+    )
+    assert prepared == ["split"]
+    assert submitted == ["split-request"]
 
 
 def test_cli_recovers_persisted_running_trial(

@@ -110,6 +110,7 @@ from osm_polygon_sentence_relevance.operator.workflows import (
     RemoteLayout,
     label_submission,
     split_finalization_submission,
+    split_submission,
 )
 
 _SUBMISSION_HEADROOM_BYTES: Final[int] = 512 * 1024**2
@@ -740,6 +741,8 @@ def _optimize_queued_start(
 
     fallback_status = client(fallback_site)[2].status(fallback_job_id)
     durable = store.load()
+    active_stage = durable.facts.get("active_stage", config.stage.value)
+    requires_label_runtime = active_stage == Stage.LABEL.value
     replacement_status = durable.facts.get("replacement_status")
     if replacement_status == "adopted":
         old_site = durable.facts.get("fallback_site")
@@ -811,7 +814,7 @@ def _optimize_queued_start(
             _milestone(f"Immediate candidate {target}: unavailable")
         elif not probe.idle_compatible:
             _milestone(f"Immediate candidate {target}: no idle compatible GPU")
-        elif not probe.label_runtime_ready:
+        elif requires_label_runtime and not probe.label_runtime_ready:
             _milestone(f"Immediate candidate {target}: labeling runtime not staged")
         else:
             _milestone(f"Immediate candidate {target}: ready")
@@ -824,6 +827,7 @@ def _optimize_queued_start(
         probes,
         requirements=requirements,
         excluded_sites=excluded_trial_sites,
+        require_label_runtime=requires_label_runtime,
     )
     if existing_trial is None and not candidates:
         _milestone(
@@ -843,10 +847,13 @@ def _optimize_queued_start(
         )
         stager = Stager(ssh)
         stager.prepare(config, layout)
-        label_assets = stager.prepare_label_assets(config, layout, download_input=True)
-        if not label_assets.llama_server_ready:
-            raise RuntimeError("CUDA llama-server is not staged")
-        assets[site] = label_assets
+        if requires_label_runtime:
+            label_assets = stager.prepare_label_assets(
+                config, layout, download_input=True
+            )
+            if not label_assets.llama_server_ready:
+                raise RuntimeError("CUDA llama-server is not staged")
+            assets[site] = label_assets
 
     def submit(candidate: ReplacementCandidate) -> int:
         site = candidate.site.name
@@ -854,10 +861,12 @@ def _optimize_queued_start(
         if current_fallback.state is not JobState.QUEUED:
             raise RuntimeError("fallback is no longer queued")
         _ssh, layout, oar = client(site)
-        label_assets = assets[site]
         stager = Stager(_ssh)
         if hasattr(stager, "clean_generated_python_caches"):
             stager.clean_generated_python_caches(layout)
+        if not requires_label_runtime:
+            return oar.submit(split_submission(config, layout))
+        label_assets = assets[site]
         return oar.submit(
             label_submission(
                 config,

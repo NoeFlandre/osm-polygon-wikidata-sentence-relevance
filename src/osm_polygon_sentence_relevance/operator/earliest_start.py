@@ -109,15 +109,21 @@ def rank_replacement_candidates(
     *,
     requirements: SiteRequirements,
     excluded_sites: frozenset[str] = frozenset(),
+    require_label_runtime: bool = True,
 ) -> tuple[ReplacementCandidate, ...]:
-    """Rank only compatible sites with a currently idle suitable GPU."""
+    """Rank compatible sites with a currently idle suitable GPU.
+
+    Label continuations require a staged llama runtime. Split continuations
+    only need the CUDA sentence-splitting environment, so callers can disable
+    that additional filter for the split component.
+    """
 
     candidates = [
         ReplacementCandidate(probe)
         for probe in probes
         if probe.name not in excluded_sites
         and probe.idle_compatible
-        and probe.label_runtime_ready
+        and (not require_label_runtime or probe.label_runtime_ready)
         and evaluate_site(probe, requirements).compatible
     ]
     return tuple(

@@ -105,6 +105,15 @@ def test_candidates_require_factual_idle_compatible_capacity() -> None:
     assert [candidate.site.name for candidate in ranked] == ["idle"]
 
 
+def test_split_candidates_do_not_require_label_runtime() -> None:
+    ranked = rank_replacement_candidates(
+        (_probe("split-ready", runtime_ready=False),),
+        requirements=SiteRequirements(),
+        require_label_runtime=False,
+    )
+    assert [candidate.site.name for candidate in ranked] == ["split-ready"]
+
+
 def test_candidates_prefer_prepared_run_then_name() -> None:
     ranked = rank_replacement_candidates(
         (
