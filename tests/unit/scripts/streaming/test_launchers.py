@@ -45,10 +45,15 @@ def test_job_uses_allocation_bound_scratch_and_never_bare_python() -> None:
     assert "export HF_HUB_OFFLINE" not in text
 
 
+def test_split_job_uses_short_resumable_walltime_and_deadline() -> None:
+    text = _text("run_streaming_build_job.sh")
+    assert 'deadline_helper_run 45m 10m "${PAYLOAD}"' in text
+
+
 def test_submitter_submits_one_noninteractive_gpu_job() -> None:
     text = _text("submit_streaming_build.sh")
     assert text.count("exec oarsub ") == 1
-    assert "gpu=1,walltime=12:00:00" in text
+    assert "gpu=1,walltime=00:55:00" in text
     assert " -t night" in text
     assert " -I" not in text
     assert "device auto" not in text

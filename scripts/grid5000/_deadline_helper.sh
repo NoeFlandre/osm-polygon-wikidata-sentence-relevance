@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # Graceful pre-walltime checkpointing for OAR Afghanistan labeling.
 #
-# A 12-hour OAR allocation gives the labeling CLI at most 11 hours 40
-# minutes before the wrapper sends SIGINT. The CLI has up to 10 additional
-# minutes to checkpoint before the wrapper escalates to SIGKILL. The
+# A bounded OAR allocation gives the child a shorter internal deadline
+# before the wrapper sends SIGINT. The child has a grace period to checkpoint
+# before the wrapper escalates to SIGKILL. The
 # ``interrupted=true`` branch in the CLI is expected to exit 0 and
 # write a resumable checkpoint, so the helper must then propagate 0.
 #
 # Public surface:
 #   deadline_helper_run <duration> <grace> <child> [args...]
-#   <duration>  -- internal deadline (e.g. ``11h40m``, ``700s``)
+#   <duration>  -- internal deadline (e.g. ``45m``, ``700s``)
 #   <grace>     -- SIGINT→SIGKILL grace window (e.g. ``10m``)
 #   <child>     -- executable to invoke
 #   [args...]   -- forwarded to the child

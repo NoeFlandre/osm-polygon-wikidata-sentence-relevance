@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Scheduler-owned wrapper for one resumable streaming CUDA allocation.
+# Scheduler-owned wrapper for one short, resumable streaming CUDA allocation.
 
 set -euo pipefail
 umask 077
@@ -62,7 +62,7 @@ mkdir -m 0700 -- "${JOB_LOG_DIR}"
     2>"${JOB_LOG_DIR}/gpu_preflight.stderr.log"
 
 set +e
-deadline_helper_run 700m 10m "${PAYLOAD}" \
+deadline_helper_run 45m 10m "${PAYLOAD}" \
     "${REPO_ROOT}" "${HF_HOME}" "${WORK_DIR}" \
     "${OUTPUT_REPO_ID}" "${INPUT_REPO_ID}" "${EXPECTED_SOURCE_COMMIT}" \
     "${INPUT_REVISION}" "${RUN_ID}" "${BATCH_SIZE}" "${MAX_SHARDS}" \

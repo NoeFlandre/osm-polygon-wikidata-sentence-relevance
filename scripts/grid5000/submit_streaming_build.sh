@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Frontend-only adapter. Submits exactly one non-interactive GPU job.
+# Frontend-only adapter. Submits exactly one short, resumable GPU job.
 
 set -euo pipefail
 umask 077
@@ -69,4 +69,4 @@ for value in "$@"; do
 done
 
 exec oarsub -q default -t exotic -t night \
-    -l gpu=1,walltime=12:00:00 "${command_string}"
+    -l gpu=1,walltime=00:55:00 "${command_string}"

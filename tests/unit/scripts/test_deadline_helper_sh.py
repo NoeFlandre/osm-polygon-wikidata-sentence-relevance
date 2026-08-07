@@ -1,7 +1,7 @@
 """Executable shell tests for the graceful pre-walltime deadline helper.
 
 The deadline helper wraps the labeling CLI with ``timeout
---preserve-status --signal=INT --kill-after=10m`` so a 12-hour OAR
+--preserve-status --signal=INT --kill-after=10m`` so a bounded OAR
 allocation exits cleanly before OAR's final TERM/KILL window. These
 tests exercise the helper against controlled subprocesses so we know
 the exact behaviour on Grid'5000 Linux.
@@ -128,7 +128,7 @@ def _with_timeout(
 
 
 def test_helper_accepts_durations_with_and_without_unit() -> None:
-    """``11h40m`` and ``700s`` both parse; ``0`` is rejected."""
+    """``45m`` and ``700s`` both parse; ``0`` is rejected."""
 
     def parse(raw: str) -> int:
         result = subprocess.run(
