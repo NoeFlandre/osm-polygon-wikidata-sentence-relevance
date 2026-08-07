@@ -74,6 +74,9 @@ to Afghanistan.
 
 ### Fixed
 
+- Wikipedia joins now accept semicolon-delimited upstream Wikidata aliases
+  when the linked polygon or document QID is present, while still rejecting
+  unrelated identities.
 - Publication now rescans every normalized sentence and refuses an export with
   any high-confidence residual sentence boundary; the factual count is recorded
   in the manifest and generated dataset card.

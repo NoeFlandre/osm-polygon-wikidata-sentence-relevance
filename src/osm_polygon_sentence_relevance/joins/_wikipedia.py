@@ -25,6 +25,30 @@ from osm_polygon_sentence_relevance.joins._integrity import (
 )
 
 
+def _wikidata_values(value: str | None) -> frozenset[str]:
+    """Return non-empty QIDs from an upstream scalar or semicolon list."""
+
+    if value is None:
+        return frozenset()
+    return frozenset(part.strip() for part in value.split(";") if part.strip())
+
+
+def _wikidata_values_match(left: str | None, right: str | None) -> bool:
+    """Match equal QIDs while allowing one upstream value to list aliases.
+
+    Some ``polygon_articles`` rows contain the canonical QID together with
+    another linked QID separated by ``;``.  A match is valid only when one
+    normalized set is a subset of the other, so unrelated multi-value rows
+    remain integrity failures.
+    """
+
+    left_values = _wikidata_values(left)
+    right_values = _wikidata_values(right)
+    return bool(left_values and right_values) and (
+        left_values <= right_values or right_values <= left_values
+    )
+
+
 def join_wikipedia_sections(
     polygons: pa.Table,
     polygon_articles: pa.Table,
@@ -157,7 +181,7 @@ def join_wikipedia_sections(
     )
     for p_id, a_id, wd, lang, p_id_val, r_id_val in pa_cols:
         expected_poly_wd = poly_wd.get(p_id)
-        if expected_poly_wd != wd:
+        if not _wikidata_values_match(expected_poly_wd, wd):
             raise JoinIntegrityError(
                 "wikipedia",
                 "polygon_articles",
@@ -183,7 +207,7 @@ def join_wikipedia_sections(
             poly_doc_data = doc_by_art.get(a_id)
         if poly_doc_data:
             d_id, doc_wd, doc_lang, doc_page_id, doc_rev_id = poly_doc_data
-            if doc_wd != wd:
+            if not _wikidata_values_match(doc_wd, wd):
                 raise JoinIntegrityError(
                     "wikipedia",
                     "polygon_articles",
@@ -231,7 +255,7 @@ def join_wikipedia_sections(
         doc_data = doc_info.get(did)
         if doc_data:
             doc_aid, doc_wd, doc_lang, doc_site, doc_pid, doc_rid = doc_data
-            if doc_wd != wd:
+            if not _wikidata_values_match(doc_wd, wd):
                 raise JoinIntegrityError(
                     "wikipedia",
                     "wikipedia_sections",

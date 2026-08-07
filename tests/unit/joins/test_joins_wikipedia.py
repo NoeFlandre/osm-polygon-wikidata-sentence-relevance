@@ -123,6 +123,14 @@ class TestWikipediaJoinExpansion:
         sources = result.column("source").to_pylist()
         assert all(s == "wikipedia" for s in sources)
 
+    def test_wikidata_match_rejects_null_values(self):
+        from osm_polygon_sentence_relevance.joins._wikipedia import (
+            _wikidata_values_match,
+        )
+
+        assert _wikidata_values_match(None, "Q889") is False
+        assert _wikidata_values_match("Q889", None) is False
+
     def test_field_mappings(self):
         from osm_polygon_sentence_relevance.joins import join_wikipedia_sections
 
@@ -198,6 +206,82 @@ class TestWikipediaJoinExpansion:
         assert result.num_rows == 1
         assert result.column("document_id").to_pylist() == ["doc-1"]
         assert result.column("article_id").to_pylist() == ["art-1"]
+
+    def test_semicolon_wikidata_links_accept_canonical_document_qid(self):
+        from osm_polygon_sentence_relevance.joins import join_wikipedia_sections
+
+        polygons = _polygons_table(
+            [make_polygon_row(polygon_id="poly-1", wikidata="Q6033432")]
+        )
+        polygon_articles = _pa_table(
+            [
+                make_polygon_article_row(
+                    polygon_id="poly-1",
+                    article_id="art-1",
+                    wikidata="Q8254481;Q6033432",
+                )
+            ]
+        )
+        wp_docs = _wp_docs_table(
+            [
+                make_wikipedia_document_row(
+                    document_id="doc-1", article_id="art-1", wikidata="Q6033432"
+                )
+            ]
+        )
+        wp_sections = _wp_sections_table(
+            [
+                make_section_row(
+                    section_id="sec-1",
+                    document_id="doc-1",
+                    article_id="art-1",
+                    wikidata="Q6033432",
+                )
+            ]
+        )
+
+        result = join_wikipedia_sections(
+            polygons, polygon_articles, wp_docs, wp_sections
+        )
+
+        assert result.num_rows == 1
+        assert result.column("wikidata").to_pylist() == ["Q6033432"]
+
+    def test_semicolon_wikidata_without_canonical_qid_still_raises(self):
+        from osm_polygon_sentence_relevance.joins import join_wikipedia_sections
+
+        polygons = _polygons_table(
+            [make_polygon_row(polygon_id="poly-1", wikidata="Q6033432")]
+        )
+        polygon_articles = _pa_table(
+            [
+                make_polygon_article_row(
+                    polygon_id="poly-1",
+                    article_id="art-1",
+                    wikidata="Q8254481;Q9999999",
+                )
+            ]
+        )
+        wp_docs = _wp_docs_table(
+            [
+                make_wikipedia_document_row(
+                    document_id="doc-1", article_id="art-1", wikidata="Q6033432"
+                )
+            ]
+        )
+        wp_sections = _wp_sections_table(
+            [
+                make_section_row(
+                    section_id="sec-1",
+                    document_id="doc-1",
+                    article_id="art-1",
+                    wikidata="Q6033432",
+                )
+            ]
+        )
+
+        with pytest.raises(JoinIntegrityError, match="wikidata"):
+            join_wikipedia_sections(polygons, polygon_articles, wp_docs, wp_sections)
 
     def test_current_document_projection_keeps_project_for_source_filter(self):
         from osm_polygon_sentence_relevance.joins._projection import (
