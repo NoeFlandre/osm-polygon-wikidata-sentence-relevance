@@ -59,6 +59,15 @@ from osm_polygon_sentence_relevance.operator.preflight import (
 from osm_polygon_sentence_relevance.operator.preflight import (
     usage_policy_preflight as _usage_policy_preflight,
 )
+from osm_polygon_sentence_relevance.operator.recovery import (
+    next_recovery_attempt as _next_recovery_attempt,
+)
+from osm_polygon_sentence_relevance.operator.recovery import (
+    reattach_decision as _reattach_decision,
+)
+from osm_polygon_sentence_relevance.operator.recovery import (
+    transition_terminal as _transition_terminal,
+)
 from osm_polygon_sentence_relevance.operator.remote_completion import (
     assert_remote_exit_zero,
     label_publication_commit,
@@ -85,7 +94,7 @@ from osm_polygon_sentence_relevance.operator.sites import (
 )
 from osm_polygon_sentence_relevance.operator.ssh import SshClient
 from osm_polygon_sentence_relevance.operator.staging import Stager
-from osm_polygon_sentence_relevance.operator.state import RunPhase, RunState, StateStore
+from osm_polygon_sentence_relevance.operator.state import RunPhase, StateStore
 from osm_polygon_sentence_relevance.operator.storage import (
     LABEL_STAGING_HEADROOM_BYTES,
     cleanup_can_restore_compatibility,
@@ -154,68 +163,6 @@ OUTPUT_DATASET_ID = _preflight.OUTPUT_DATASET_ID
 
 def _emit(progress: LiveProgress) -> None:
     _CONSOLE.job_lines(progress.job_id, progress.text)
-
-
-def _transition_terminal(
-    state: StateStore,
-    *,
-    expected: tuple[RunPhase, ...],
-    target: RunPhase,
-    facts: Mapping[str, object],
-) -> None:
-    current = state.load()
-    if current.phase not in expected:
-        raise RuntimeError("operator reached an unexpected durable phase")
-    state.transition(expected=current.phase, target=target, facts=facts)
-
-
-def _reattach_decision(
-    state: RunState,
-) -> tuple[str, int] | None:
-    """Return the stored (site, job_id) if a recorded allocation is tracked.
-
-    Conservative: it only returns a candidate. The reattach path then queries
-    OAR read-only and dispatches to live monitoring or terminal classification
-    without probing other sites or submitting a competing job.
-
-    A ``FAILED`` state with a recorded ``failed_job_id`` and ``site`` is also
-    returned as a candidate so the orchestrator can re-inspect the remote
-    evidence and decide between ``FAILED`` (deterministic) and ``CONTINUE``
-    (walltime-killed with validated partial checkpoints). The narrow
-    recovery contract is enforced inside
-    :func:`_apply_classification`; this function only checks the local facts.
-    """
-
-    if state.phase in {
-        RunPhase.SUBMITTED,
-        RunPhase.QUEUED,
-        RunPhase.RUNNING,
-    }:
-        job_id = state.facts.get("job_id")
-        site = state.facts.get("site")
-        if type(job_id) is not int or job_id <= 0:
-            return None
-        if not isinstance(site, str) or not site:
-            return None
-        return site, job_id
-    if state.phase is RunPhase.FAILED:
-        failed_job_id = state.facts.get("failed_job_id")
-        site = state.facts.get("site")
-        if type(failed_job_id) is not int or failed_job_id <= 0:
-            return None
-        if not isinstance(site, str) or not site:
-            return None
-        # Refuse if the same failed_job_id was already recovered. This guards
-        # against repeated Ctrl-C / resume cycles trying to re-recover.
-        recovered_from = state.facts.get("recovered_from_job_id")
-        if (
-            isinstance(recovered_from, int)
-            and not isinstance(recovered_from, bool)
-            and recovered_from == failed_job_id
-        ):
-            return None
-        return site, failed_job_id
-    return None
 
 
 def _resume_command(run_id: str) -> str:
@@ -494,20 +441,6 @@ def _apply_classification(
         )
         return
     raise RuntimeError(f"unhandled exit class: {classification}")
-
-
-def _next_recovery_attempt(facts: Mapping[str, object]) -> int:
-    """Return the monotonic recovery-attempt counter for the next transition.
-
-    Reads the existing ``recovery_attempt`` fact (if any) and increments it.
-    Non-integer or missing values are treated as zero, which yields a first
-    recovery-attempt value of 1.
-    """
-
-    existing = facts.get("recovery_attempt")
-    if isinstance(existing, bool) or not isinstance(existing, int):
-        return 1
-    return existing + 1
 
 
 def _classify_or_continue(
