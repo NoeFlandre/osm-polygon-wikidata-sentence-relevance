@@ -12,9 +12,9 @@ reattaches by durable run ID.
 
 ## Internal structure
 
-Configuration, state, SSH, scheduling, storage, relay, monitoring, and
-completion are separate modules under `operator/`. The stable public
-`operator/config.py` facade delegates to `_config/`: `defaults.py` owns
+Configuration, state, SSH, scheduling, storage, relay, monitoring, sampling
+policy, and completion are separate modules under `operator/`. The stable
+public `operator/config.py` facade delegates to `_config/`: `defaults.py` owns
 immutable defaults, `enums.py` owns scope and stage values, `validation.py`
 owns parsing and validation, and `models.py` owns the immutable configuration
 and run-identity dataclasses. Dependencies flow from models to those leaf
