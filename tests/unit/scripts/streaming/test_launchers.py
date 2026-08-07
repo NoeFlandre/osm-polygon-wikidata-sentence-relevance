@@ -49,6 +49,9 @@ def test_job_rebuilds_environment_on_compute_node() -> None:
     text = _text("run_streaming_build_job.sh")
     assert "_checkout_guard.sh" in text
     assert "prepare_compute_environment" in text
+    assert 'HF_TOKEN_FILE="${RUN_ROOT}/.hf-token"' in text
+    assert 'export HF_TOKEN="$(cat -- "${HF_TOKEN_FILE}")"' in text
+    assert 'stat -c %a -- "${HF_TOKEN_FILE}"' in text
 
 
 def test_finalization_job_rebuilds_environment_on_compute_node() -> None:

@@ -34,6 +34,10 @@ class RemoteLayout:
         return self.root / "hf_home"
 
     @property
+    def hf_token(self) -> PurePosixPath:
+        return self.root / ".hf-token"
+
+    @property
     def logs(self) -> PurePosixPath:
         return self.root / "logs"
 

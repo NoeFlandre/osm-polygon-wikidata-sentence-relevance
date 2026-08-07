@@ -142,6 +142,14 @@ def _milestone(message: str) -> None:
     _CONSOLE.milestone(message)
 
 
+def _stage_hf_token(stager: object, layout: RemoteLayout) -> None:
+    """Stage the private Hub credential when the real stager is in use."""
+
+    method = getattr(stager, "stage_hf_token", None)
+    if callable(method):
+        method(layout)
+
+
 #: Per-invocation active run ID. Set right after a validated
 #: ``store.load_or_create`` (or its persisted equivalent) and cleared in
 #: the enclosing ``finally``. Never scanned across unrelated runs.
@@ -266,6 +274,7 @@ def _prepare_destination_for_resume(
         )
         stager = Stager(ssh)
         stager.prepare(config, layout)
+        _stage_hf_token(stager, layout)
         assets = stager.prepare_label_assets(config, layout, download_input=True)
         if not assets.llama_server_ready:
 
@@ -424,7 +433,7 @@ def _apply_classification(
         )
         return
     if classification is ExitClass.CONTINUE:
-        facts: dict[str, object] = {"continued_after_job": job_id}
+        facts = {"continued_after_job": job_id}
         if resume_artifact_path is not None:
             facts["resume_relay_path"] = resume_artifact_path
         if is_recovery_from_failed:
@@ -856,6 +865,7 @@ def _optimize_queued_start(
         )
         stager = Stager(ssh)
         stager.prepare(config, layout)
+        _stage_hf_token(stager, layout)
         if requires_label_runtime:
             label_assets = stager.prepare_label_assets(
                 config, layout, download_input=True
@@ -1021,6 +1031,7 @@ def _resume_run(run_id: str, args: SimpleNamespace) -> int:
         )
         stager = Stager(ssh)
         stager.prepare(config, layout)
+        _stage_hf_token(stager, layout)
         if config.prompt_version == V2_LOGIT_PROMPT_VERSION:
             split_job_raw = durable.facts.get("split_output_job_id")
             if type(split_job_raw) is not int:
@@ -1260,6 +1271,8 @@ def _run(args: SimpleNamespace) -> int:
     _milestone("Preparing remote checkout and locked environment")
     controller.prepare(site=selection.selected.name)
     _milestone("Remote checkout and environment are ready")
+    _stage_hf_token(stager, layout)
+    _milestone("Hugging Face credential staged privately for remote checkpoint writes")
 
     durable = store.load()
     split_done = "split_output_job_id" in durable.facts
@@ -1284,6 +1297,7 @@ def _run(args: SimpleNamespace) -> int:
                     preflight=submission_preflight,
                 )
                 stager = Stager(ssh)
+                _stage_hf_token(stager, layout)
             job_id = optimized_job_id
             print(
                 f"Submitted sentence splitting job {job_id} (allocation {allocation})",
@@ -1419,6 +1433,7 @@ def _run(args: SimpleNamespace) -> int:
                         preflight=submission_preflight,
                     )
                     stager = Stager(ssh)
+                    _stage_hf_token(stager, layout)
                     assets = stager.prepare_label_assets(
                         config,
                         layout,

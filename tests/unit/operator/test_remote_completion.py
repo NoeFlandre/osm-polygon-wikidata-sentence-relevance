@@ -100,11 +100,11 @@ def test_publish_split_constructs_exact_quoted_command_and_returns_commit() -> N
     assert len(ssh.commands) == 1
     raw_command = ssh.commands[0]
     tokens = shlex.split(raw_command)
-    assert len(tokens) == 3
-    assert tokens[0] == "/r/repo/.venv/bin/python"
-    assert tokens[1] == "-c"
+    exec_index = tokens.index("exec")
+    assert tokens[exec_index + 1] == "/r/repo/.venv/bin/python"
+    assert tokens[exec_index + 2] == "-c"
 
-    python_code = tokens[2]
+    python_code = tokens[exec_index + 3]
     assert repr(str(hostile_output_dir)) in python_code
     assert repr(hostile_dataset_id) in python_code
     assert (

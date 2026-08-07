@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 
 import pytest
 
+from osm_polygon_sentence_relevance.operator import staging
 from osm_polygon_sentence_relevance.operator.config import OperatorConfig
 from osm_polygon_sentence_relevance.operator.staging import Stager
 from osm_polygon_sentence_relevance.operator.workflows import RemoteLayout
@@ -26,10 +27,21 @@ class RecordingSsh:
     def __init__(self, outputs: list[str]) -> None:
         self.outputs = outputs
         self.commands: list[str] = []
+        self.target = "grenoble"
 
     def run(self, command: str) -> SimpleNamespace:
         self.commands.append(command)
         return SimpleNamespace(stdout=self.outputs.pop(0))
+
+
+class RecordingTransfer:
+    calls: list[tuple[Path, str]] = []
+
+    def __init__(self, *, ssh_target: str) -> None:
+        self.ssh_target = ssh_target
+
+    def push(self, local_path: Path, remote_path: str) -> None:
+        self.calls.append((local_path, remote_path))
 
 
 def test_prepare_builds_clean_pinned_checkout() -> None:
@@ -57,6 +69,135 @@ def test_prepare_builds_clean_pinned_checkout() -> None:
     assert 'rm -rf -- "$egg_info"' in command
     assert command.index('"$UV_BIN" sync') < command.index('rm -rf -- "$egg_info"')
     assert '"status":"active"' in command
+
+
+def test_stage_hf_token_pushes_login_file_without_putting_secret_in_ssh_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    token_path = tmp_path / "token"
+    token_path.write_text("hf_test_secret\n", encoding="utf-8")
+    token_path.chmod(0o600)
+    RecordingTransfer.calls = []
+    monkeypatch.setattr(
+        "osm_polygon_sentence_relevance.operator.staging.RemoteTransfer",
+        RecordingTransfer,
+    )
+    ssh = RecordingSsh(["HF_TOKEN_OK\n"])
+    layout = RemoteLayout(PurePosixPath("/home/user/operator/run"))
+
+    Stager(ssh).stage_hf_token(layout, token_path=token_path)  # type: ignore[arg-type]
+
+    assert RecordingTransfer.calls == [(token_path, str(layout.hf_token))]
+    assert len(ssh.commands) == 1
+    assert "hf_test_secret" not in ssh.commands[0]
+    assert "chmod 0600" in ssh.commands[0]
+
+
+def test_stage_hf_token_cleans_environment_fallback_after_remote_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pushed: list[Path] = []
+
+    class _Transfer:
+        def __init__(self, *, ssh_target: str) -> None:
+            del ssh_target
+
+        def push(self, local_path: Path, _remote_path: str) -> None:
+            pushed.append(local_path)
+
+    monkeypatch.setattr(staging, "RemoteTransfer", _Transfer)
+    monkeypatch.setattr(staging, "_discover_hf_token_path", lambda: None)
+    monkeypatch.setenv("HF_TOKEN", "hf_environment_secret")
+    ssh = RecordingSsh(["invalid\n"])
+
+    with pytest.raises(RuntimeError, match="staging failed"):
+        Stager(ssh).stage_hf_token(  # type: ignore[arg-type]
+            RemoteLayout(PurePosixPath("/home/user/operator/run"))
+        )
+
+    assert len(pushed) == 1
+    assert not pushed[0].exists()
+
+
+@pytest.mark.parametrize(
+    ("content", "message"),
+    [
+        ("", "invalid"),
+        ("has whitespace\n", "invalid"),
+    ],
+)
+def test_local_hf_token_file_rejects_invalid_content(
+    tmp_path: Path, content: str, message: str
+) -> None:
+    token_path = tmp_path / "token"
+    token_path.write_text(content, encoding="utf-8")
+    token_path.chmod(0o600)
+    with pytest.raises(RuntimeError, match=message):
+        staging._local_hf_token_file(token_path)
+
+
+def test_local_hf_token_file_rejects_non_private_file(tmp_path: Path) -> None:
+    token_path = tmp_path / "token"
+    token_path.write_text("hf_token", encoding="utf-8")
+    token_path.chmod(0o644)
+    with pytest.raises(RuntimeError, match="private regular"):
+        staging._local_hf_token_file(token_path)
+
+
+def test_local_hf_token_file_wraps_read_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    token_path = tmp_path / "token"
+    token_path.write_text("hf_token", encoding="utf-8")
+    token_path.chmod(0o600)
+    original = Path.read_text
+
+    def fail_read(
+        path: Path,
+        encoding: str | None = None,
+        errors: str | None = None,
+    ) -> str:
+        if path == token_path:
+            raise OSError("read failed")
+        return original(path, encoding=encoding, errors=errors)
+
+    monkeypatch.setattr(Path, "read_text", fail_read)
+    with pytest.raises(RuntimeError, match="unreadable"):
+        staging._local_hf_token_file(token_path)
+
+
+def test_local_hf_token_file_uses_hf_home_and_environment_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hf_home = tmp_path / "hf"
+    hf_home.mkdir()
+    token_path = hf_home / "token"
+    token_path.write_text("hf_from_file\n", encoding="utf-8")
+    token_path.chmod(0o600)
+    monkeypatch.setenv("HF_HOME", str(hf_home))
+    path, temporary = staging._local_hf_token_file(None)
+    assert path == token_path
+    assert not temporary
+
+    token_path.unlink()
+    monkeypatch.setattr(staging, "_discover_hf_token_path", lambda: None)
+    monkeypatch.setenv("HF_TOKEN", "hf_from_environment")
+    path, temporary = staging._local_hf_token_file(None)
+    try:
+        assert temporary
+        assert path.read_text(encoding="utf-8") == "hf_from_environment"
+        assert path.stat().st_mode & 0o777 == 0o600
+    finally:
+        path.unlink(missing_ok=True)
+
+
+def test_local_hf_token_file_requires_a_login(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(staging, "_discover_hf_token_path", lambda: None)
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    with pytest.raises(RuntimeError, match="no local Hugging Face login"):
+        staging._local_hf_token_file(None)
 
 
 def test_prepare_includes_segmentation_dependencies_only_when_needed() -> None:

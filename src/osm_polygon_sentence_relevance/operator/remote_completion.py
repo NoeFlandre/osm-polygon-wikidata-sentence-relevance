@@ -94,7 +94,14 @@ def publish_split(
         shlex.quote(value)
         for value in (str(layout.repo / ".venv/bin/python"), "-c", code)
     )
-    result = ssh.run(command)
+    token_file = shlex.quote(str(layout.hf_token))
+    result = ssh.run(
+        "set -euo pipefail; "
+        f"[ -f {token_file} ] && [ ! -L {token_file} ] && "
+        f'[ "$(stat -c %a -- {token_file})" = 600 ]; '
+        f'export HF_TOKEN="$(cat -- {token_file})"; '
+        f'[ -n "$HF_TOKEN" ]; exec {command}'
+    )
     commit_id = _result_text(result).strip()
     if len(commit_id) < 7:
         raise RuntimeError("Hugging Face publication did not return a commit")

@@ -68,6 +68,9 @@ def test_wrapper_rebuilds_environment_on_compute_node_and_marks_failure() -> Non
     assert "_checkout_guard.sh" in wrapper
     assert "prepare_compute_environment" in wrapper
     assert "trap mark_failed_on_exit EXIT" in wrapper
+    assert 'HF_TOKEN_FILE="${RUN_ROOT}/.hf-token"' in wrapper
+    assert 'export HF_TOKEN="$(cat -- "${HF_TOKEN_FILE}")"' in wrapper
+    assert 'stat -c %a -- "${HF_TOKEN_FILE}"' in wrapper
 
 
 def test_submitter_uses_shared_policy_helper_and_single_submission() -> None:

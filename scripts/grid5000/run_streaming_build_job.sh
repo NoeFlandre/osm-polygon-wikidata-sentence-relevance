@@ -47,6 +47,17 @@ mark_failed_on_exit() {
     exit "${rc}"
 }
 trap mark_failed_on_exit EXIT
+HF_TOKEN_FILE="${RUN_ROOT}/.hf-token"; readonly HF_TOKEN_FILE
+if [ ! -f "${HF_TOKEN_FILE}" ] || [ -L "${HF_TOKEN_FILE}" ]; then
+    echo "run_streaming_build_job: Hugging Face credential file is missing or unsafe" >&2
+    exit 1
+fi
+if [ "$(stat -c %a -- "${HF_TOKEN_FILE}")" != "600" ]; then
+    echo "run_streaming_build_job: Hugging Face credential file must be mode 0600" >&2
+    exit 1
+fi
+export HF_TOKEN="$(cat -- "${HF_TOKEN_FILE}")"
+[ -n "${HF_TOKEN}" ] || { echo "run_streaming_build_job: Hugging Face credential is empty" >&2; exit 1; }
 
 if [ "$(git -C "${REPO_ROOT}" rev-parse HEAD)" != "${EXPECTED_SOURCE_COMMIT}" ]; then
     echo "run_streaming_build_job: checkout commit mismatch" >&2
