@@ -121,6 +121,7 @@ def test_availability_command_is_remote_query_not_nested_ssh() -> None:
     assert "oarnodes -J" in cmd
     assert "jq" in cmd
     assert "type" in cmd
+    assert "gpu_mem" in cmd
 
 
 def test_parse_oarnodes_records_accepts_single_object_payload() -> None:

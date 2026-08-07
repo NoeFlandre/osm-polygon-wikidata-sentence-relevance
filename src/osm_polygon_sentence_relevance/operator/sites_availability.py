@@ -27,7 +27,7 @@ _OARNODES_QUERY: Final[str] = (
     'and .state == "Alive") | '
     "{state, jobs: (if .jobs == null then 0 "
     'elif (.jobs | type) == "array" then (.jobs | length) else 1 end), '
-    "gpu_compute_capability_major}'"
+    "gpu_mem, gpu_compute_capability_major}'"
 )
 
 
