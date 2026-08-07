@@ -47,16 +47,18 @@ def test_job_uses_allocation_bound_scratch_and_never_bare_python() -> None:
 
 def test_split_job_uses_short_resumable_walltime_and_deadline() -> None:
     text = _text("run_streaming_build_job.sh")
-    assert 'deadline_helper_run 45m 10m "${PAYLOAD}"' in text
+    assert 'deadline_helper_run 20m 10m "${PAYLOAD}"' in text
 
 
 def test_submitter_uses_shared_gpu_resource_helper() -> None:
     text = _text("submit_streaming_build.sh")
     assert 'HELPER="${REPO_ROOT}/scripts/grid5000/_submit_gpu_job.sh"' in text
-    assert 'exec "${HELPER}" "40000" "00:55:00" "night"' in text
+    assert 'exec "${HELPER}" "40000" "00:30:00" "${policy_type}"' in text
     assert "exec oarsub" not in text
-    assert '"00:55:00"' in text
-    assert '"night"' in text
+    assert '"00:30:00"' in text
+    assert "TZ=Europe/Paris date" in text
+    assert "policy_type=night" in text
+    assert "policy_type=day" in text
     assert " -I" not in text
     assert "device auto" not in text
 

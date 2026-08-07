@@ -69,4 +69,24 @@ for value in "$@"; do
     command_string="${command_string} $(shell_quote "${value}")"
 done
 
-exec "${HELPER}" "40000" "00:55:00" "night" "${command_string}"
+# Keep streaming allocations small so OAR can backfill them quickly.  The
+# policy type is derived from the current Europe/Paris window and the full
+# 30-minute walltime, so a weekday job never crosses 09:00 or 19:00.
+read -r policy_weekday policy_hour policy_minute < <(
+    TZ=Europe/Paris date '+%u %H %M'
+)
+if ! [[ "${policy_weekday}" =~ ^[1-7]$ &&
+    "${policy_hour}" =~ ^[0-9]{2}$ &&
+    "${policy_minute}" =~ ^[0-9]{2}$ ]]; then
+    echo "submit_streaming_build: invalid Europe/Paris scheduler clock" >&2
+    exit 1
+fi
+policy_type=night
+now_seconds=$((10#${policy_hour} * 3600 + 10#${policy_minute} * 60))
+if [ "${policy_weekday}" -le 5 ] &&
+   [ "${now_seconds}" -ge $((9 * 3600)) ] &&
+   [ "$((now_seconds + 30 * 60))" -le $((19 * 3600)) ]; then
+    policy_type=day
+fi
+
+exec "${HELPER}" "40000" "00:30:00" "${policy_type}" "${command_string}"
