@@ -855,6 +855,43 @@ def test_run_label_reuses_checkpoints_and_completes(
     assert set(headroom) == {512 * 1024**2}
 
 
+def test_run_all_prepares_remote_phase_before_building_missing_llama_server(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A stage-all run must make VALIDATED resumable before the CUDA build."""
+
+    _install_run_fakes(monkeypatch, tmp_path)
+
+    class MissingLlamaStager(_FakeStager):
+        def prepare_label_assets(
+            self,
+            _config: object,
+            layout: cli.RemoteLayout,
+            *,
+            download_input: bool,
+        ) -> LabelAssets:
+            assets = super().prepare_label_assets(
+                _config, layout, download_input=download_input
+            )
+            return LabelAssets(
+                assets.input_parquet,
+                assets.model_file,
+                assets.tokenizer_dir,
+                False,
+            )
+
+    monkeypatch.setattr(cli, "Stager", MissingLlamaStager)
+
+    args = _run_args(stage="all", sites=["nancy"])
+    args.scope = "all"
+    args.region = None
+
+    assert cli._run(args) == 0
+    state = _FakeStore.instances[-1].value
+    assert state.phase is RunPhase.COMPLETE
+    assert state.facts["llama_build_job_id"] == 92
+
+
 def test_run_rejects_v2_label_stage_before_remote_mutation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

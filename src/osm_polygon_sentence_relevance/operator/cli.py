@@ -1386,6 +1386,12 @@ def _run(args: SimpleNamespace) -> int:
             download_input=config.stage is Stage.LABEL,
         )
         _milestone("Input, model, and tokenizer assets are ready")
+        if config.stage is Stage.ALL and store.load().phase is RunPhase.VALIDATED:
+            store.transition(
+                expected=RunPhase.VALIDATED,
+                target=RunPhase.REMOTE_PREPARED,
+                facts={"label_assets_ready": True},
+            )
         if not assets.llama_server_ready:
             ensure_llama_server(ssh, oar, store, layout, args.poll_seconds)
         if config.stage is Stage.ALL:
@@ -1395,12 +1401,6 @@ def _run(args: SimpleNamespace) -> int:
                 assets.tokenizer_dir,
                 True,
             )
-            if store.load().phase is RunPhase.VALIDATED:
-                store.transition(
-                    expected=RunPhase.VALIDATED,
-                    target=RunPhase.REMOTE_PREPARED,
-                    facts={"label_assets_ready": True},
-                )
         for allocation in range(1, 101):
             job_id = controller.submit(
                 component=Stage.LABEL,
