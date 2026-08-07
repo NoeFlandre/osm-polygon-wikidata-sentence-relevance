@@ -54,8 +54,9 @@ if [ -n "${SHARD_KEY}" ] && [ "${MAX_SHARDS}" -ne 0 ]; then
 fi
 
 WRAPPER="${REPO_ROOT}/scripts/grid5000/run_streaming_build_job.sh"
-if [ ! -x "${WRAPPER}" ] || ! command -v oarsub >/dev/null 2>&1; then
-    echo "submit_streaming_build: wrapper or oarsub is unavailable" >&2
+HELPER="${REPO_ROOT}/scripts/grid5000/_submit_gpu_job.sh"
+if [ ! -x "${WRAPPER}" ] || [ ! -x "${HELPER}" ]; then
+    echo "submit_streaming_build: wrapper or GPU submit helper is unavailable" >&2
     exit 1
 fi
 
@@ -68,5 +69,4 @@ for value in "$@"; do
     command_string="${command_string} $(shell_quote "${value}")"
 done
 
-exec oarsub -q default -t exotic -t night \
-    -l gpu=1,walltime=00:55:00 "${command_string}"
+exec "${HELPER}" "40000" "00:55:00" "night" "${command_string}"

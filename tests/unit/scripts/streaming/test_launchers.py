@@ -50,11 +50,13 @@ def test_split_job_uses_short_resumable_walltime_and_deadline() -> None:
     assert 'deadline_helper_run 45m 10m "${PAYLOAD}"' in text
 
 
-def test_submitter_submits_one_noninteractive_gpu_job() -> None:
+def test_submitter_uses_shared_gpu_resource_helper() -> None:
     text = _text("submit_streaming_build.sh")
-    assert text.count("exec oarsub ") == 1
-    assert "gpu=1,walltime=00:55:00" in text
-    assert " -t night" in text
+    assert 'HELPER="${REPO_ROOT}/scripts/grid5000/_submit_gpu_job.sh"' in text
+    assert 'exec "${HELPER}" "40000" "00:55:00" "night"' in text
+    assert "exec oarsub" not in text
+    assert '"00:55:00"' in text
+    assert '"night"' in text
     assert " -I" not in text
     assert "device auto" not in text
 
