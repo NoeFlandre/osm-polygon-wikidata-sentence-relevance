@@ -112,7 +112,9 @@ class OperatorConfig:
             canonical_scope, canonical_stage, region
         )
 
-        v2 = canonical_scope is Scope.ALL and prompt_version is None
+        v2 = canonical_scope is Scope.ALL and (
+            prompt_version is None or prompt_version == V2_LOGIT_PROMPT_VERSION
+        )
         effective_model_repo_id = model_repo_id or (
             DEFAULT_V2_LABEL_MODEL_REPO_ID if v2 else DEFAULT_LABEL_MODEL_REPO_ID
         )

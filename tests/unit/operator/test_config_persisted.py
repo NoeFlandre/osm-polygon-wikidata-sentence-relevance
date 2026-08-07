@@ -121,6 +121,24 @@ def test_reconstructed_run_id_reproduces_persisted() -> None:
     assert config.run_id == config2.run_id
 
 
+def test_from_persisted_reproduces_v2_all_identity() -> None:
+    """A persisted worldwide V2 identity must remain resumable."""
+
+    config = OperatorConfig.build(
+        scope="all",
+        stage="all",
+        source_commit="2" * 40,
+        input_revision="3" * 40,
+        sampling_target=200_000,
+    )
+    persisted = config.run_identity.to_dict()
+
+    resumed = OperatorConfig.from_persisted(persisted)
+
+    assert resumed.run_id == config.run_id
+    assert resumed.label_model_repo_id == "ggml-org/Qwen3.6-27B-GGUF"
+
+
 def test_from_persisted_split_rejects_label_fields_when_present() -> None:
     """A split identity that erroneously includes label fields must reject."""
 
