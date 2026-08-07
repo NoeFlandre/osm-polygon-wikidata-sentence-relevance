@@ -7,6 +7,7 @@ do not import the submodules directly.
 """
 
 from osm_polygon_sentence_relevance.contracts.schemas.input import (
+    POLYGON_ARTICLES_DOCUMENT_SCHEMA,
     POLYGON_ARTICLES_SCHEMA,
     POLYGONS_SCHEMA,
     SECTIONS_SCHEMA,
@@ -27,6 +28,7 @@ __all__ = [
     # Input-table schemas
     "POLYGONS_SCHEMA",
     "POLYGON_ARTICLES_SCHEMA",
+    "POLYGON_ARTICLES_DOCUMENT_SCHEMA",
     "WIKIPEDIA_DOCUMENTS_SCHEMA",
     "WIKIVOYAGE_DOCUMENTS_SCHEMA",
     "SECTIONS_SCHEMA",

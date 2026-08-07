@@ -15,6 +15,7 @@ from osm_polygon_sentence_relevance.contracts.errors import (
     UnknownTableError,
 )
 from osm_polygon_sentence_relevance.contracts.schemas.input import (
+    POLYGON_ARTICLES_DOCUMENT_SCHEMA,
     POLYGON_ARTICLES_SCHEMA,
     POLYGONS_SCHEMA,
     SECTIONS_SCHEMA,
@@ -74,6 +75,12 @@ def validate_table_schema(table_name: str, actual_schema: pa.Schema) -> None:
         raise UnknownTableError(table_name)
 
     expected = SCHEMA_REGISTRY[table_name]
+    if (
+        table_name == "polygon_articles"
+        and "document_id" in {field.name for field in actual_schema}
+        and "article_id" not in {field.name for field in actual_schema}
+    ):
+        expected = POLYGON_ARTICLES_DOCUMENT_SCHEMA
     actual_names = {f.name for f in actual_schema}
 
     # --- missing columns ---

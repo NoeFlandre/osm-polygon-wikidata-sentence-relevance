@@ -12,6 +12,8 @@ focused submodules; this module re-exports the stable public API.
 
 from __future__ import annotations
 
+import pyarrow.parquet as pq
+
 from osm_polygon_sentence_relevance.ingestion.discovery import RegionShardSet
 from osm_polygon_sentence_relevance.ingestion.loading import load_validated_table
 from osm_polygon_sentence_relevance.joins._composition import (
@@ -26,6 +28,7 @@ from osm_polygon_sentence_relevance.joins._projection import (
     WIKIPEDIA_SECTIONS_COLS,
     WIKIVOYAGE_DOCUMENTS_COLS,
     WIKIVOYAGE_SECTIONS_COLS,
+    polygon_articles_columns,
 )
 from osm_polygon_sentence_relevance.joins._wikipedia import join_wikipedia_sections
 from osm_polygon_sentence_relevance.joins._wikivoyage import join_wikivoyage_sections
@@ -55,8 +58,11 @@ def build_region_section_occurrences(
     by joins, applying pre-projection validation.
     """
     polygons = load_validated_table("polygons", shards.polygons, columns=POLYGONS_COLS)
+    polygon_article_schema = pq.read_schema(shards.polygon_articles)
     polygon_articles = load_validated_table(
-        "polygon_articles", shards.polygon_articles, columns=POLYGON_ARTICLES_COLS
+        "polygon_articles",
+        shards.polygon_articles,
+        columns=polygon_articles_columns(polygon_article_schema.names),
     )
     wp_documents = load_validated_table(
         "wikipedia_documents",

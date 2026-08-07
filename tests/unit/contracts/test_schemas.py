@@ -16,6 +16,7 @@ from osm_polygon_sentence_relevance.errors import (
 )
 from osm_polygon_sentence_relevance.schemas import (
     OUTPUT_SENTENCE_SCHEMA,
+    POLYGON_ARTICLES_DOCUMENT_SCHEMA,
     SCHEMA_REGISTRY,
     SECTIONS_SCHEMA,
     validate_table_schema,
@@ -86,6 +87,12 @@ class TestConformingRows:
         table = pa.table(row, schema=schema)
         # Should not raise.
         validate_table_schema(table_name, table.schema)
+
+    def test_current_document_key_polygon_articles_schema_conforms(self):
+        schema = POLYGON_ARTICLES_DOCUMENT_SCHEMA
+        row = _minimal_row(schema)
+        table = pa.table(row, schema=schema)
+        validate_table_schema("polygon_articles", table.schema)
 
 
 # ===================================================================

@@ -11,6 +11,7 @@ import pytest
 
 from osm_polygon_sentence_relevance.errors import JoinIntegrityError
 from osm_polygon_sentence_relevance.schemas import (
+    POLYGON_ARTICLES_DOCUMENT_SCHEMA,
     POLYGON_ARTICLES_SCHEMA,
     POLYGONS_SCHEMA,
     SECTIONS_SCHEMA,
@@ -31,6 +32,28 @@ def _polygons_table(rows: list[dict[str, list]]) -> pa.Table:
 
 def _pa_table(rows: list[dict[str, list]]) -> pa.Table:
     return rows_to_table(rows, POLYGON_ARTICLES_SCHEMA)
+
+
+def _document_key_pa_table() -> pa.Table:
+    return pa.table(
+        {
+            "polygon_id": ["poly-1", "poly-1"],
+            "document_id": ["doc-1", "wv-doc-1"],
+            "wikidata": ["Q889", "Q889"],
+            "language": ["en", "en"],
+            "source_pbf": [
+                "afghanistan-latest.osm.pbf",
+                "afghanistan-latest.osm.pbf",
+            ],
+            "region": ["afghanistan-latest", "afghanistan-latest"],
+            "osm_type": ["relation", "relation"],
+            "osm_id": [303427, 303427],
+            "page_id": [100, 500],
+            "revision_id": [200, 600],
+            "project": ["wikipedia", "wikivoyage"],
+        },
+        schema=POLYGON_ARTICLES_DOCUMENT_SCHEMA,
+    )
 
 
 def _wp_docs_table(rows: list[dict[str, list]]) -> pa.Table:
@@ -150,6 +173,42 @@ class TestWikipediaJoinExpansion:
         assert row["polygon_name"] == "Poly Name"
         assert row["osm_tags_raw"] == '{"key":"val"}'
         assert row["osm_primary_tag"] == "place=city"
+
+    def test_current_document_key_polygon_articles_are_joined(self):
+        from osm_polygon_sentence_relevance.joins import join_wikipedia_sections
+
+        polygons = _polygons_table([make_polygon_row(polygon_id="poly-1")])
+        wp_docs = _wp_docs_table(
+            [make_wikipedia_document_row(document_id="doc-1", article_id="art-1")]
+        )
+        wp_sections = _wp_sections_table(
+            [
+                make_section_row(
+                    section_id="sec-1",
+                    document_id="doc-1",
+                    article_id="art-1",
+                )
+            ]
+        )
+
+        result = join_wikipedia_sections(
+            polygons, _document_key_pa_table(), wp_docs, wp_sections
+        )
+
+        assert result.num_rows == 1
+        assert result.column("document_id").to_pylist() == ["doc-1"]
+        assert result.column("article_id").to_pylist() == ["art-1"]
+
+    def test_current_document_projection_keeps_project_for_source_filter(self):
+        from osm_polygon_sentence_relevance.joins._projection import (
+            polygon_articles_columns,
+        )
+
+        columns = polygon_articles_columns(POLYGON_ARTICLES_DOCUMENT_SCHEMA.names)
+
+        assert "project" in columns
+        assert "document_id" in columns
+        assert "article_id" not in columns
 
 
 class TestWikipediaOrphanChecks:

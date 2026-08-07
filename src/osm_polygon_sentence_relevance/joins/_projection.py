@@ -6,6 +6,8 @@ pulled from each input table stays obviously in sync with the joins.
 
 from __future__ import annotations
 
+from collections.abc import Collection
+
 POLYGONS_COLS = (
     "polygon_id",
     "wikidata",
@@ -25,6 +27,26 @@ POLYGON_ARTICLES_COLS = (
     "page_id",
     "revision_id",
 )
+
+POLYGON_ARTICLES_DOCUMENT_COLS = (
+    "polygon_id",
+    "document_id",
+    "project",
+    "wikidata",
+    "language",
+    "page_id",
+    "revision_id",
+)
+
+
+def polygon_articles_columns(column_names: Collection[str]) -> tuple[str, ...]:
+    """Choose the projection for the legacy or document-key input layout."""
+
+    names = set(column_names)
+    if "document_id" in names and "article_id" not in names:
+        return POLYGON_ARTICLES_DOCUMENT_COLS
+    return POLYGON_ARTICLES_COLS
+
 
 WIKIPEDIA_DOCUMENTS_COLS = (
     "document_id",

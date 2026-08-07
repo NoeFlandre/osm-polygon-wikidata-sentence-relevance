@@ -1,7 +1,8 @@
 """Wikipedia-specific section-to-polygon join.
 
 Join direction:
-  polygon_articles.article_id → wp_documents.article_id
+  polygon_articles.article_id → wp_documents.article_id (legacy input)
+  polygon_articles.document_id → wp_documents.document_id (current input)
   wp_documents.document_id → wp_sections.document_id
   polygon_articles.polygon_id → polygons.polygon_id
 
@@ -34,12 +35,29 @@ def join_wikipedia_sections(
 
     Returns an unsorted table conforming to JOINED_SECTIONS_SCHEMA columns.
     """
+    # Current upstream snapshots store both Wikipedia and Wikivoyage links in
+    # polygon_articles.  The Wikipedia join must consume only its own rows;
+    # Wikivoyage is joined independently by Wikidata in its dedicated module.
+    if "project" in polygon_articles.column_names:
+        polygon_articles = polygon_articles.filter(
+            pa.array(
+                project == "wikipedia"
+                for project in polygon_articles.column("project").to_pylist()
+            )
+        )
+
     # --- Integrity checks ---
     _check_non_empty(polygons, "polygon_id", "wikipedia", "polygons")
     _check_unique(polygons, "polygon_id", "wikipedia", "polygons")
 
+    article_key = (
+        "document_id"
+        if "document_id" in polygon_articles.column_names
+        and "article_id" not in polygon_articles.column_names
+        else "article_id"
+    )
     _check_non_empty(polygon_articles, "polygon_id", "wikipedia", "polygon_articles")
-    _check_non_empty(polygon_articles, "article_id", "wikipedia", "polygon_articles")
+    _check_non_empty(polygon_articles, article_key, "wikipedia", "polygon_articles")
 
     _check_non_empty(wp_documents, "document_id", "wikipedia", "wikipedia_documents")
     _check_unique(wp_documents, "document_id", "wikipedia", "wikipedia_documents")
@@ -56,7 +74,7 @@ def join_wikipedia_sections(
     _check_unique_pairs(
         polygon_articles,
         "polygon_id",
-        "article_id",
+        article_key,
         "wikipedia",
         "polygon_articles",
     )
@@ -71,15 +89,26 @@ def join_wikipedia_sections(
         "polygon_articles",
         "polygons",
     )
-    _check_no_orphans(
-        polygon_articles,
-        "article_id",
-        wp_documents,
-        "article_id",
-        "wikipedia",
-        "polygon_articles",
-        "wikipedia_documents",
-    )
+    if article_key == "document_id":
+        _check_no_orphans(
+            polygon_articles,
+            "document_id",
+            wp_documents,
+            "document_id",
+            "wikipedia",
+            "polygon_articles",
+            "wikipedia_documents",
+        )
+    else:
+        _check_no_orphans(
+            polygon_articles,
+            "article_id",
+            wp_documents,
+            "article_id",
+            "wikipedia",
+            "polygon_articles",
+            "wikipedia_documents",
+        )
     _check_no_orphans(
         wp_sections,
         "document_id",
@@ -119,7 +148,7 @@ def join_wikipedia_sections(
 
     pa_cols = zip(
         polygon_articles.column("polygon_id").to_pylist(),
-        polygon_articles.column("article_id").to_pylist(),
+        polygon_articles.column(article_key).to_pylist(),
         polygon_articles.column("wikidata").to_pylist(),
         polygon_articles.column("language").to_pylist(),
         polygon_articles.column("page_id").to_pylist(),
@@ -137,7 +166,21 @@ def join_wikipedia_sections(
                 [wd],
             )
 
-        poly_doc_data = doc_by_art.get(a_id)
+        if article_key == "document_id":
+            document_info = doc_info.get(a_id)
+            poly_doc_data = (
+                (
+                    a_id,
+                    document_info[1],
+                    document_info[2],
+                    document_info[4],
+                    document_info[5],
+                )
+                if document_info is not None
+                else None
+            )
+        else:
+            poly_doc_data = doc_by_art.get(a_id)
         if poly_doc_data:
             d_id, doc_wd, doc_lang, doc_page_id, doc_rev_id = poly_doc_data
             if doc_wd != wd:
@@ -242,6 +285,7 @@ def join_wikipedia_sections(
     doc_by_article = {aid: i for i, aid in enumerate(doc_article_ids)}
 
     doc_ids_list = wp_documents.column("document_id").to_pylist()
+    doc_by_id = {did: i for i, did in enumerate(doc_ids_list)}
     doc_id_to_section_indices: dict[str, list[int]] = {}
     for i, did in enumerate(wp_sections.column("document_id").to_pylist()):
         doc_id_to_section_indices.setdefault(did, []).append(i)
@@ -251,7 +295,7 @@ def join_wikipedia_sections(
 
     # Cache lists for columns to avoid calling table.column(name)[idx] in loops
     pa_polygon_ids = polygon_articles.column("polygon_id").to_pylist()
-    pa_article_ids = polygon_articles.column("article_id").to_pylist()
+    pa_association_ids = polygon_articles.column(article_key).to_pylist()
 
     doc_wikidatas = wp_documents.column("wikidata").to_pylist()
     doc_languages = wp_documents.column("language").to_pylist()
@@ -280,12 +324,17 @@ def join_wikipedia_sections(
 
     for pa_idx in range(polygon_articles.num_rows):
         pa_polygon_id = pa_polygon_ids[pa_idx]
-        pa_article_id = pa_article_ids[pa_idx]
+        pa_association_id = pa_association_ids[pa_idx]
 
-        doc_idx = doc_by_article[pa_article_id]
+        doc_idx = (
+            doc_by_id[pa_association_id]
+            if article_key == "document_id"
+            else doc_by_article[pa_association_id]
+        )
         poly_idx = poly_by_id[pa_polygon_id]
 
         doc_id = doc_ids_list[doc_idx]
+        pa_article_id = doc_article_ids[doc_idx]
         section_indices = doc_id_to_section_indices.get(doc_id, [])
 
         for sec_idx in section_indices:

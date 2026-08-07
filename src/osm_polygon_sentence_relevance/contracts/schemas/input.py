@@ -60,6 +60,25 @@ POLYGON_ARTICLES_SCHEMA = pa.schema(
     ]
 )
 
+# Newer upstream snapshots identify the linked document directly.  Keep this
+# contract alongside the legacy article-key schema so readers can accept both
+# published input layouts without rewriting the source Parquet files.
+POLYGON_ARTICLES_DOCUMENT_SCHEMA = pa.schema(
+    [
+        pa.field("polygon_id", pa.string()),
+        pa.field("document_id", pa.string()),
+        pa.field("project", pa.string()),
+        pa.field("wikidata", pa.string()),
+        pa.field("language", pa.string()),
+        pa.field("source_pbf", pa.string()),
+        pa.field("region", pa.string()),
+        pa.field("osm_type", pa.string()),
+        pa.field("osm_id", pa.int64()),
+        pa.field("page_id", pa.int64()),
+        pa.field("revision_id", pa.int64()),
+    ]
+)
+
 WIKIPEDIA_DOCUMENTS_SCHEMA = pa.schema(
     [
         pa.field("document_id", pa.string()),
@@ -156,6 +175,7 @@ SECTIONS_SCHEMA = pa.schema(
 __all__ = [
     "POLYGONS_SCHEMA",
     "POLYGON_ARTICLES_SCHEMA",
+    "POLYGON_ARTICLES_DOCUMENT_SCHEMA",
     "WIKIPEDIA_DOCUMENTS_SCHEMA",
     "WIKIVOYAGE_DOCUMENTS_SCHEMA",
     "SECTIONS_SCHEMA",

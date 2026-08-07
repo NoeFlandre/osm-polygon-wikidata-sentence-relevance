@@ -9,6 +9,7 @@ imports keep working.
 from osm_polygon_sentence_relevance.contracts.schemas import (
     JOINED_SECTIONS_SCHEMA,
     OUTPUT_SENTENCE_SCHEMA,
+    POLYGON_ARTICLES_DOCUMENT_SCHEMA,
     POLYGON_ARTICLES_SCHEMA,
     POLYGONS_SCHEMA,
     SCHEMA_REGISTRY,
@@ -22,6 +23,7 @@ from osm_polygon_sentence_relevance.contracts.schemas import (
 __all__ = [
     "POLYGONS_SCHEMA",
     "POLYGON_ARTICLES_SCHEMA",
+    "POLYGON_ARTICLES_DOCUMENT_SCHEMA",
     "WIKIPEDIA_DOCUMENTS_SCHEMA",
     "WIKIVOYAGE_DOCUMENTS_SCHEMA",
     "SECTIONS_SCHEMA",
