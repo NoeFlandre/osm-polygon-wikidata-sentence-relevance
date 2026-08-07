@@ -45,9 +45,28 @@ def test_job_uses_allocation_bound_scratch_and_never_bare_python() -> None:
     assert "export HF_HUB_OFFLINE" not in text
 
 
+def test_job_rebuilds_environment_on_compute_node() -> None:
+    text = _text("run_streaming_build_job.sh")
+    assert "_checkout_guard.sh" in text
+    assert "prepare_compute_environment" in text
+
+
+def test_finalization_job_rebuilds_environment_on_compute_node() -> None:
+    text = _text("run_streaming_finalization_job.sh")
+    assert "_checkout_guard.sh" in text
+    assert "prepare_compute_environment" in text
+    assert "trap mark_failed_on_exit EXIT" in text
+
+
 def test_split_job_uses_short_resumable_walltime_and_deadline() -> None:
     text = _text("run_streaming_build_job.sh")
     assert 'deadline_helper_run 20m 10m "${PAYLOAD}"' in text
+
+
+def test_job_marks_failed_managed_root_for_later_cleanup() -> None:
+    text = _text("run_streaming_build_job.sh")
+    assert 'status":"failed"' in text
+    assert "trap mark_failed_on_exit EXIT" in text
 
 
 def test_submitter_uses_shared_gpu_resource_helper() -> None:

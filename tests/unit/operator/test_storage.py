@@ -234,6 +234,14 @@ def test_only_complete_and_failed_are_eligible() -> None:
     assert "complete|failed" in ssh.commands[0]
 
 
+def test_failed_roots_with_checkpoints_are_preserved() -> None:
+    ssh = _ScriptSsh([""])
+    cleanup_managed_runs(ssh, execute=True)  # type: ignore[arg-type]
+    command = ssh.commands[0]
+    assert "checkpoints" in command
+    assert "progress.json" in command
+
+
 def test_active_and_unknown_status_excluded() -> None:
     ssh = _ScriptSsh([""])
     cleanup_managed_runs(ssh, execute=False)  # type: ignore[arg-type]

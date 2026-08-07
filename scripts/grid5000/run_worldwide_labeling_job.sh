@@ -11,6 +11,12 @@ LOG_ROOT="$3"; EXPECTED_SOURCE_COMMIT="${11}"; WORK_DIR="$5"
 readonly LOG_ROOT EXPECTED_SOURCE_COMMIT WORK_DIR
 RUN_ROOT="$(cd "${REPO_ROOT}/.." && pwd -P)"; readonly RUN_ROOT
 . "$(dirname "${BASH_SOURCE[0]}")/_checkout_guard.sh"
+mark_failed_on_exit() {
+    local rc=$?
+    mark_managed_run_failed "${RUN_ROOT}" "${OAR_JOB_ID}" "${rc}"
+    exit "${rc}"
+}
+trap mark_failed_on_exit EXIT
 if [ "$(git -C "${REPO_ROOT}" rev-parse HEAD)" != "${EXPECTED_SOURCE_COMMIT}" ] || \
    ! validate_clean_checkout "${REPO_ROOT}" "${RUN_ROOT}"; then
     echo "run_worldwide_labeling_job: strict checkout guard failed" >&2
@@ -23,8 +29,16 @@ RUN_LOCK="${RUN_ROOT}/worldwide-labeling.run.lock"; readonly RUN_LOCK
 flock -n 9 || { echo "run_worldwide_labeling_job: another allocation owns this run" >&2; exit 75; }
 PAYLOAD="${REPO_ROOT}/scripts/grid5000/run_worldwide_labeling.sh"; readonly PAYLOAD
 [ -x "${PAYLOAD}" ] || { echo "run_worldwide_labeling_job: payload is missing" >&2; exit 1; }
-PYTHON="${REPO_ROOT}/.venv/bin/python"; [ -x "${PYTHON}" ] || { echo "run_worldwide_labeling_job: Python is missing" >&2; exit 1; }
 JOB_LOG_DIR="${LOG_ROOT}/${OAR_JOB_ID}"; mkdir -m 0700 -- "${JOB_LOG_DIR}"
+SCRATCH_BASE="${LOCALSCRATCH:-${OAR_JOB_SCRATCH_DIR:-/tmp/oar-${OAR_JOB_ID}}}"
+case "${SCRATCH_BASE}" in
+    *"${OAR_JOB_ID}"*) ;;
+    *) echo "run_worldwide_labeling_job: scratch path is not allocation-bound" >&2; exit 1 ;;
+esac
+mkdir -p -m 0700 -- "${SCRATCH_BASE}"
+prepare_compute_environment "${REPO_ROOT}" "${SCRATCH_BASE}" "${JOB_LOG_DIR}" \
+    "run_worldwide_labeling_job"
+PYTHON="${REPO_ROOT}/.venv/bin/python"
 set +e
 . "$(dirname "${BASH_SOURCE[0]}")/_deadline_helper.sh"
 DEADLINE_DURATION="${LABEL_DEADLINE_DURATION:-45m}"; DEADLINE_GRACE="${LABEL_DEADLINE_GRACE:-5m}"

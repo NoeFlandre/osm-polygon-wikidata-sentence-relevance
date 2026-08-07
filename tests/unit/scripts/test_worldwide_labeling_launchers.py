@@ -63,6 +63,13 @@ def test_wrapper_keeps_twenty_argument_front_contract_and_resumable_lock() -> No
     assert expected in normalized
 
 
+def test_wrapper_rebuilds_environment_on_compute_node_and_marks_failure() -> None:
+    wrapper = _text("run_worldwide_labeling_job.sh")
+    assert "_checkout_guard.sh" in wrapper
+    assert "prepare_compute_environment" in wrapper
+    assert "trap mark_failed_on_exit EXIT" in wrapper
+
+
 def test_submitter_uses_shared_policy_helper_and_single_submission() -> None:
     submit = _text("submit_worldwide_labeling.sh")
     assert "exactly twenty arguments are required" in submit

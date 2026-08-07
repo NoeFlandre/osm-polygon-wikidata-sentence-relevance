@@ -1153,6 +1153,24 @@ def _run(args: SimpleNamespace) -> int:
             else:
                 _milestone(f"Site {target}: unavailable")
             progress.advance()
+
+    if cleanup_can_restore_compatibility(probes, requirements):
+        _milestone(
+            "Reclaiming only terminal pipeline-managed storage before site selection"
+        )
+        for probe in probes:
+            if probe.reachable:
+                cleanup_managed_runs(SshClient(target=probe.target), execute=True)
+        probes = []
+        with _CONSOLE.progress(
+            description="Re-probing Grid'5000 sites after cleanup",
+            total=len(targets),
+        ) as progress:
+            for target in targets:
+                _milestone(f"Re-probing Grid'5000 site: {target}")
+                probe = probe_site(target, config.run_id, requirements)
+                probes.append(probe)
+                progress.advance()
     try:
         selection = select_site(probes, requirements)
     except NoCompatibleSiteError:

@@ -27,6 +27,20 @@ EXPECTED_SHARD="${10}"; readonly EXPECTED_SHARD
 WALLTIME="${11}"; readonly WALLTIME
 NODE_TYPE="${12}"; readonly NODE_TYPE
 
+RUN_ROOT="$(cd "${REPO_ROOT}/.." && pwd -P)"; readonly RUN_ROOT
+case "${RUN_ROOT}" in
+    "${HOME}/osm-polygon-operator/"*) ;;
+    *) echo "run_streaming_finalization_job: managed run root is outside the operator directory" >&2; exit 1 ;;
+esac
+# shellcheck source=_checkout_guard.sh
+source "$(dirname "${BASH_SOURCE[0]}")/_checkout_guard.sh"
+mark_failed_on_exit() {
+    local rc=$?
+    mark_managed_run_failed "${RUN_ROOT}" "${OAR_JOB_ID}" "${rc}"
+    exit "${rc}"
+}
+trap mark_failed_on_exit EXIT
+
 JOB_LOG_DIR="${LOG_ROOT}/${OAR_JOB_ID}"
 mkdir -m 0700 -- "${JOB_LOG_DIR}" 2>/dev/null || true
 WRAPPER_LOG="${JOB_LOG_DIR}/finalize.exit_code"
@@ -54,10 +68,9 @@ if [ -n "$(git -C "${REPO_ROOT}" status --porcelain)" ]; then
     exit 1
 fi
 
-PYTHON="${REPO_ROOT}/.venv/bin/python"
 PAYLOAD="${REPO_ROOT}/scripts/grid5000/run_streaming_finalization.sh"
-if [ ! -x "${PYTHON}" ] || [ ! -x "${PAYLOAD}" ]; then
-    echo "run_streaming_finalization_job: required executable is missing" >&2
+if [ ! -x "${PAYLOAD}" ]; then
+    echo "run_streaming_finalization_job: payload is missing" >&2
     exit 1
 fi
 
@@ -70,6 +83,9 @@ mkdir -p -m 0700 -- "${SCRATCH_BASE}"
 WORK_DIR="${SCRATCH_BASE}/osm_finalize_${RUN_ID}"
 mkdir -m 0700 -- "${WORK_DIR}"
 
+prepare_compute_environment "${REPO_ROOT}" "${SCRATCH_BASE}" "${JOB_LOG_DIR}" \
+    "run_streaming_finalization_job"
+PYTHON="${REPO_ROOT}/.venv/bin/python"
 set +e
 "${PAYLOAD}" "${REPO_ROOT}" "${HF_HOME}" "${WORK_DIR}" \
     "${OUTPUT_REPO_ID}" "${INPUT_REPO_ID}" "${EXPECTED_SOURCE_COMMIT}" \

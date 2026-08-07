@@ -35,6 +35,78 @@ _VENV_PYTHON_RELATIVE_PATH=".venv/bin/python"
 _VENV_CLI_RELATIVE_PATH=".venv/bin/osm-polygon-label-sentences"
 
 
+# Recreate the repository environment on the compute node. Frontends and
+# compute nodes can use different CPU architectures, so a virtualenv created
+# during staging must never be executed blindly by a worker allocation.
+prepare_compute_environment() {
+    local repo_root="$1"
+    local scratch_base="$2"
+    local job_log_dir="$3"
+    local label="${4:-compute}"
+    local uv_bin="${UV_BIN:-}"
+
+    if [ -z "${uv_bin}" ]; then
+        uv_bin="$(command -v uv || true)"
+    fi
+    if [ -z "${uv_bin}" ]; then
+        uv_bin="${HOME}/.local/bin/uv"
+    fi
+    if [ ! -x "${uv_bin}" ]; then
+        echo "${label}: uv is missing on the compute node" >&2
+        return 1
+    fi
+    if [ -L "${repo_root}/.venv" ]; then
+        echo "${label}: .venv must not be a symlink" >&2
+        return 1
+    fi
+    if [ -e "${scratch_base}/uv-cache" ] && [ -L "${scratch_base}/uv-cache" ]; then
+        echo "${label}: uv cache must not be a symlink" >&2
+        return 1
+    fi
+    rm -rf -- "${repo_root}/.venv"
+    mkdir -p -m 0700 -- "${scratch_base}/uv-cache"
+    export UV_CACHE_DIR="${scratch_base}/uv-cache"
+    if ! "${uv_bin}" sync --locked --no-dev \
+        --extra hub --extra segmentation --extra operator \
+        --project "${repo_root}" \
+        >"${job_log_dir}/environment.stdout.log" \
+        2>"${job_log_dir}/environment.stderr.log"; then
+        echo "${label}: compute-node environment preparation failed" >&2
+        return 1
+    fi
+    if [ ! -x "${repo_root}/.venv/bin/python" ]; then
+        echo "${label}: compute-node Python is missing" >&2
+        return 1
+    fi
+}
+
+
+# Install a non-destructive failure marker for a managed run. The marker is
+# intentionally written only below the operator root, allowing the Mac-side
+# cleanup to reclaim failed roots without ever scanning unrelated home data.
+mark_managed_run_failed() {
+    local run_root="$1"
+    local job_id="$2"
+    local return_code="$3"
+    if [ "${return_code}" -eq 0 ]; then
+        return 0
+    fi
+    case "${run_root}" in
+        "${HOME}/osm-polygon-operator/"*) ;;
+        *) return 0 ;;
+    esac
+    local marker="${run_root}/.operator-managed.json"
+    if [ ! -f "${marker}" ] || [ -L "${marker}" ]; then
+        return 0
+    fi
+    local marker_tmp="${marker}.tmp.${job_id}"
+    if printf '%s\n' '{"schema_version":1,"status":"failed"}' >"${marker_tmp}"; then
+        chmod 0600 "${marker_tmp}" 2>/dev/null || true
+        mv -f -- "${marker_tmp}" "${marker}" 2>/dev/null || true
+    fi
+}
+
+
 checkout_guard_error() {
     local message="$1"
     CHECKOUT_GUARD_ERROR="${message}"

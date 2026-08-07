@@ -77,6 +77,10 @@ while IFS= read -r -d '' candidate; do
   [ -f "$marker" ] && [ ! -L "$marker" ] || continue
   status=$(sed -n 's/.*"status":"\\([^"]*\\)".*/\\1/p' "$marker")
   case "$status" in complete|failed) ;; *) continue ;; esac
+  if [ "$status" = failed ]; then
+    resumable=$(find -P "$candidate" -type f \\( -name progress.json -o -path '*/checkpoints/*' \\) -print -quit)
+    [ -z "$resumable" ] || continue
+  fi
   printf '%s\\n' "$candidate"
   if [ {shlex.quote(action)} = delete ]; then rm -rf -- "$candidate"; fi
 done

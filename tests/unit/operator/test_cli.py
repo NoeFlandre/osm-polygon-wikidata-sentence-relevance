@@ -543,6 +543,88 @@ def test_run_reclaims_managed_storage_then_reprobes(
     assert cleaned == [True]
 
 
+def test_run_reclaims_low_storage_before_selecting_another_compatible_site(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _install_run_fakes(monkeypatch, tmp_path)
+    probes = iter(
+        [
+            SiteProbe("nancy", "nancy", True, 80_000, (8, 0), 1, 0),
+            SiteProbe("sophia", "sophia", True, 80_000, (8, 0), 100 * 1024**3, 0),
+            SiteProbe("nancy", "nancy", True, 80_000, (8, 0), 100 * 1024**3, 0),
+            SiteProbe("sophia", "sophia", True, 80_000, (8, 0), 100 * 1024**3, 0),
+        ]
+    )
+    cleaned: list[bool] = []
+    monkeypatch.setattr(
+        cli,
+        "probe_site",
+        lambda _target, _run_id, _requirements=None: next(probes),
+    )
+    monkeypatch.setattr(
+        cli,
+        "cleanup_managed_runs",
+        lambda _ssh, *, execute: cleaned.append(execute) or (),
+    )
+
+    assert cli._run(_run_args(stage="split", sites=["nancy", "sophia"])) == 0
+    assert cleaned == [True, True]
+
+
+def test_run_storage_cleanup_skips_unreachable_sites(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _install_run_fakes(monkeypatch, tmp_path)
+    probes = iter(
+        [
+            SiteProbe("nancy", "nancy", True, 80_000, (8, 0), 1, 0),
+            SiteProbe("bordeaux", "bordeaux", False, 0, None, 0, 0),
+            SiteProbe("nancy", "nancy", True, 80_000, (8, 0), 100 * 1024**3, 0),
+            SiteProbe("bordeaux", "bordeaux", False, 0, None, 0, 0),
+        ]
+    )
+    cleaned: list[bool] = []
+    monkeypatch.setattr(
+        cli, "probe_site", lambda _target, _run_id, _requirements=None: next(probes)
+    )
+    monkeypatch.setattr(
+        cli,
+        "cleanup_managed_runs",
+        lambda _ssh, *, execute: cleaned.append(execute) or (),
+    )
+
+    assert cli._run(_run_args(stage="split", sites=["nancy", "bordeaux"])) == 0
+    assert cleaned == [True]
+
+
+def test_run_retries_cleanup_when_storage_remains_insufficient(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _install_run_fakes(monkeypatch, tmp_path)
+    probes = iter(
+        [
+            SiteProbe("nancy", "nancy", True, 80_000, (8, 0), 1, 0),
+            SiteProbe("bordeaux", "bordeaux", False, 0, None, 0, 0),
+            SiteProbe("nancy", "nancy", True, 80_000, (8, 0), 1, 0),
+            SiteProbe("bordeaux", "bordeaux", False, 0, None, 0, 0),
+            SiteProbe("nancy", "nancy", True, 80_000, (8, 0), 100 * 1024**3, 0),
+            SiteProbe("bordeaux", "bordeaux", False, 0, None, 0, 0),
+        ]
+    )
+    cleaned: list[bool] = []
+    monkeypatch.setattr(
+        cli, "probe_site", lambda _target, _run_id, _requirements=None: next(probes)
+    )
+    monkeypatch.setattr(
+        cli,
+        "cleanup_managed_runs",
+        lambda _ssh, *, execute: cleaned.append(execute) or (),
+    )
+
+    assert cli._run(_run_args(stage="split", sites=["nancy", "bordeaux"])) == 0
+    assert cleaned == [True, True]
+
+
 def test_run_label_reuses_checkpoints_and_completes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

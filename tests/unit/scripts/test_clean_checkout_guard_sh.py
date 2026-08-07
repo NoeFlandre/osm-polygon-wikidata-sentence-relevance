@@ -98,6 +98,15 @@ def test_guard_accepts_clean_repository(tmp_path: Path) -> None:
     _expect_pass(result)
 
 
+def test_guard_exports_compute_environment_bootstrap_contract() -> None:
+    text = GUARD.read_text(encoding="utf-8")
+    assert "prepare_compute_environment()" in text
+    assert "command -v uv || true" in text
+    assert 'UV_CACHE_DIR="${scratch_base}/uv-cache"' in text
+    assert 'rm -rf -- "${repo_root}/.venv"' in text
+    assert '"${uv_bin}" sync --locked --no-dev' in text
+
+
 def test_guard_accepts_approved_venv_directory(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     _init_repo(repo)

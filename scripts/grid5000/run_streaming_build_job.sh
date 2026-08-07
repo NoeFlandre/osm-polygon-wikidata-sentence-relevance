@@ -26,6 +26,28 @@ BATCH_SIZE="$9"; readonly BATCH_SIZE
 MAX_SHARDS="${10}"; readonly MAX_SHARDS
 SHARD_KEY="${11}"; readonly SHARD_KEY
 
+RUN_ROOT="$(cd "${REPO_ROOT}/.." && pwd -P)"; readonly RUN_ROOT
+case "${RUN_ROOT}" in
+    "${HOME}/osm-polygon-operator/"*) ;;
+    *)
+        echo "run_streaming_build_job: managed run root is outside the operator directory" >&2
+        exit 1
+        ;;
+esac
+MARKER="${RUN_ROOT}/.operator-managed.json"; readonly MARKER
+mark_failed_on_exit() {
+    rc=$?
+    if [ "${rc}" -ne 0 ] && [ -f "${MARKER}" ] && [ ! -L "${MARKER}" ]; then
+        marker_tmp="${MARKER}.tmp.${OAR_JOB_ID}"
+        if printf '%s\n' '{"schema_version":1,"status":"failed"}' >"${marker_tmp}"; then
+            chmod 0600 "${marker_tmp}" 2>/dev/null || true
+            mv -f -- "${marker_tmp}" "${MARKER}" 2>/dev/null || true
+        fi
+    fi
+    exit "${rc}"
+}
+trap mark_failed_on_exit EXIT
+
 if [ "$(git -C "${REPO_ROOT}" rev-parse HEAD)" != "${EXPECTED_SOURCE_COMMIT}" ]; then
     echo "run_streaming_build_job: checkout commit mismatch" >&2
     exit 1
@@ -35,15 +57,16 @@ if [ -n "$(git -C "${REPO_ROOT}" status --porcelain)" ]; then
     exit 1
 fi
 
-PYTHON="${REPO_ROOT}/.venv/bin/python"
 PAYLOAD="${REPO_ROOT}/scripts/grid5000/run_streaming_build.sh"
 DEADLINE_HELPER="${REPO_ROOT}/scripts/grid5000/_deadline_helper.sh"
-if [ ! -x "${PYTHON}" ] || [ ! -x "${PAYLOAD}" ] || [ ! -r "${DEADLINE_HELPER}" ]; then
-    echo "run_streaming_build_job: required executable is missing" >&2
+if [ ! -x "${PAYLOAD}" ] || [ ! -r "${DEADLINE_HELPER}" ]; then
+    echo "run_streaming_build_job: required payload or deadline helper is missing" >&2
     exit 1
 fi
 # shellcheck source=_deadline_helper.sh
 source "${DEADLINE_HELPER}"
+# shellcheck source=_checkout_guard.sh
+source "$(dirname "${BASH_SOURCE[0]}")/_checkout_guard.sh"
 
 SCRATCH_BASE="${LOCALSCRATCH:-${OAR_JOB_SCRATCH_DIR:-/tmp/oar-${OAR_JOB_ID}}}"
 case "${SCRATCH_BASE}" in
@@ -56,6 +79,14 @@ mkdir -m 0700 -- "${WORK_DIR}"
 
 JOB_LOG_DIR="${LOG_ROOT}/${OAR_JOB_ID}"
 mkdir -m 0700 -- "${JOB_LOG_DIR}"
+
+prepare_compute_environment "${REPO_ROOT}" "${SCRATCH_BASE}" "${JOB_LOG_DIR}" \
+    "run_streaming_build_job"
+PYTHON="${REPO_ROOT}/.venv/bin/python"
+if [ ! -x "${PYTHON}" ]; then
+    echo "run_streaming_build_job: compute-node Python is missing" >&2
+    exit 1
+fi
 
 "${PYTHON}" "${REPO_ROOT}/scripts/grid5000/gpu_preflight.py" \
     >"${JOB_LOG_DIR}/gpu_preflight.json" \

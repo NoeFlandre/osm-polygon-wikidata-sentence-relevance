@@ -56,3 +56,22 @@ def test_canary_prioritizes_language_coverage() -> None:
 def test_canary_rejects_invalid_or_non_partial_limit(limit: object) -> None:
     with pytest.raises(ValueError, match="row limit"):
         select_canary_rows(_table(), limit)  # type: ignore[arg-type]
+
+
+def test_canary_rejects_missing_required_columns() -> None:
+    table = _table().drop(["region"])
+
+    with pytest.raises(ValueError, match="missing required columns"):
+        select_canary_rows(table, 2)
+
+
+def test_canary_rejects_non_afghanistan_rows() -> None:
+    base = _table()
+    table = base.set_column(
+        base.column_names.index("region"),
+        "region",
+        pa.array(["france"] * base.num_rows),
+    )
+
+    with pytest.raises(ValueError, match="only Afghanistan"):
+        select_canary_rows(table, 2)

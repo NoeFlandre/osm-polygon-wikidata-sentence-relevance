@@ -222,6 +222,13 @@ def test_job_wrapper_accepts_bounded_operational_deadline_override() -> None:
     assert 'deadline_helper_run "${DEADLINE_DURATION}" "${DEADLINE_GRACE}"' in text
 
 
+def test_job_wrapper_rebuilds_environment_on_compute_node_and_marks_failure() -> None:
+    text = _text("run_afghanistan_labeling_job.sh")
+    assert "_checkout_guard.sh" in text
+    assert "prepare_compute_environment" in text
+    assert "trap mark_failed_on_exit EXIT" in text
+
+
 def test_job_wrapper_acquires_nonblocking_run_lock_before_gpu_work() -> None:
     text = _text("run_afghanistan_labeling_job.sh")
     assert "flock -n" in text

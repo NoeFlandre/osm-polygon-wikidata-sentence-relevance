@@ -36,6 +36,12 @@ RUN_ROOT="$(cd "${REPO_ROOT}/.." && pwd -P)"; readonly RUN_ROOT
 # isolation.
 # shellcheck source=scripts/grid5000/_checkout_guard.sh
 . "$(dirname "${BASH_SOURCE[0]}")/_checkout_guard.sh"
+mark_failed_on_exit() {
+    local rc=$?
+    mark_managed_run_failed "${RUN_ROOT}" "${OAR_JOB_ID}" "${rc}"
+    exit "${rc}"
+}
+trap mark_failed_on_exit EXIT
 WORK_DIR="$5"
 
 if [ "$(git -C "${REPO_ROOT}" rev-parse HEAD)" != "${EXPECTED_SOURCE_COMMIT}" ]; then
@@ -85,10 +91,9 @@ if ! [[ "${SAMPLING_TARGET}" =~ ^(0|[1-9][0-9]*)$ ]] || \
     exit 2
 fi
 
-PYTHON="${REPO_ROOT}/.venv/bin/python"
 PAYLOAD="${REPO_ROOT}/scripts/grid5000/run_afghanistan_labeling.sh"
 LLAMA_SERVER_DIR="${RUN_ROOT}/llama-server-bin"
-if [ ! -x "${PYTHON}" ] || [ ! -x "${PAYLOAD}" ] || \
+if [ ! -x "${PAYLOAD}" ] || \
    [ ! -x "${LLAMA_SERVER_DIR}/llama-server" ]; then
     echo "run_afghanistan_labeling_job: required executable is missing" >&2
     exit 1
@@ -97,6 +102,15 @@ export PATH="${LLAMA_SERVER_DIR}:${PATH}"
 
 JOB_LOG_DIR="${LOG_ROOT}/${OAR_JOB_ID}"
 mkdir -m 0700 -- "${JOB_LOG_DIR}"
+SCRATCH_BASE="${LOCALSCRATCH:-${OAR_JOB_SCRATCH_DIR:-/tmp/oar-${OAR_JOB_ID}}}"
+case "${SCRATCH_BASE}" in
+    *"${OAR_JOB_ID}"*) ;;
+    *) echo "run_afghanistan_labeling_job: scratch path is not allocation-bound" >&2; exit 1 ;;
+esac
+mkdir -p -m 0700 -- "${SCRATCH_BASE}"
+prepare_compute_environment "${REPO_ROOT}" "${SCRATCH_BASE}" "${JOB_LOG_DIR}" \
+    "run_afghanistan_labeling_job"
+PYTHON="${REPO_ROOT}/.venv/bin/python"
 
 set +e
 # Defaults preserve the historical 55-minute allocation contract. The

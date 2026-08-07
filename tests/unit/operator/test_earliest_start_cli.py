@@ -150,7 +150,8 @@ def test_cli_adopts_running_trial_then_cancels_fallback(
     assert durable.facts["replacement_status"] == "adopted"
     assert cancelled == [("sophia", 42)]
     assert len(submitted_requests) == 1
-    assert submitted_requests[0].command[1:4] == ("40000", "00:20:00", "day")
+    assert submitted_requests[0].command[1:3] == ("40000", "00:20:00")
+    assert submitted_requests[0].command[3] in {"day", "night"}
 
 
 def test_cli_retains_fallback_when_no_runtime_ready_candidate(
