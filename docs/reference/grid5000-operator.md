@@ -34,11 +34,13 @@ command printed by the operator.
 
 ## Earliest policy-compliant start
 
-When `resume` finds a queued labeling job whose OAR start forecast is more
-than ten minutes away, it checks every configured site for a compatible GPU
-that is factually idle now. A site is eligible only when the same immutable
-run already has its CUDA labeling runtime staged there and the live
-usage-policy and home-quota checks pass.
+When a fresh split submission, a regional label submission, or `resume` finds
+a queued job whose OAR start forecast is more than ten minutes away, it checks
+every configured site for a compatible GPU that is factually idle now. A site
+is eligible only when the required immutable runtime is staged there and the
+live usage-policy and home-quota checks pass. Worldwide `all` runs optimize
+the split allocation first; labeling then stays with the site holding the
+validated split output.
 
 The queued job remains the fallback. Replacement trials request a 20-minute
 allocation, which is easier for OAR to backfill than the normal 55-minute

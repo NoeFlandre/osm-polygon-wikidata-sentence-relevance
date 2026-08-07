@@ -520,6 +520,122 @@ def test_run_split_finalizes_publishes_and_marks_complete(
     assert "Sentence splitting complete" in capsys.readouterr().out
 
 
+def test_fresh_split_submission_optimizes_before_monitoring(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A fresh split run must trial earlier sites before it starts waiting."""
+
+    _install_run_fakes(monkeypatch, tmp_path)
+    calls: list[tuple[str, int]] = []
+
+    def fake_optimize(
+        _args: SimpleNamespace,
+        _store: object,
+        _config: OperatorConfig,
+        fallback_site: str,
+        fallback_job_id: int,
+    ) -> tuple[str, int]:
+        calls.append((fallback_site, fallback_job_id))
+        return fallback_site, fallback_job_id
+
+    monkeypatch.setattr(cli, "_optimize_queued_start", fake_optimize)
+
+    assert cli._run(_run_args(stage="split", sites=["nancy"])) == 0
+    assert calls == [("nancy", 80)]
+
+
+def test_fresh_split_rebinds_monitoring_after_site_replacement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A trial winner must become the controller used for the same allocation."""
+
+    _install_run_fakes(monkeypatch, tmp_path)
+    attached: list[str] = []
+    original_attach = cli._attach_to_site
+
+    def recording_attach(
+        store: object,
+        config: OperatorConfig,
+        site: str,
+        *,
+        poll_seconds: float,
+        preflight: object = None,
+    ) -> tuple[object, object, object, object]:
+        attached.append(site)
+        return original_attach(
+            store, config, site, poll_seconds=poll_seconds, preflight=preflight
+        )
+
+    monkeypatch.setattr(cli, "_attach_to_site", recording_attach)
+
+    def replace_with_sophia(
+        _args: SimpleNamespace,
+        store: _FakeStore,
+        _config: OperatorConfig,
+        _fallback_site: str,
+        _fallback_job_id: int,
+    ) -> tuple[str, int]:
+        current = store.load()
+        store.transition(
+            expected=current.phase,
+            target=current.phase,
+            facts={"site": "sophia", "job_id": 81},
+        )
+        return "sophia", 81
+
+    monkeypatch.setattr(cli, "_optimize_queued_start", replace_with_sophia)
+
+    assert cli._run(_run_args(stage="split", sites=["nancy", "sophia"])) == 0
+    assert attached == ["sophia"]
+
+
+def test_fresh_label_rebind_restages_candidate_assets(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A regional label trial must restage assets on its adopted site."""
+
+    _install_run_fakes(monkeypatch, tmp_path)
+    attached: list[str] = []
+    original_attach = cli._attach_to_site
+
+    def recording_attach(
+        store: object,
+        config: OperatorConfig,
+        site: str,
+        *,
+        poll_seconds: float,
+        preflight: object = None,
+    ) -> tuple[object, object, object, object]:
+        attached.append(site)
+        return original_attach(
+            store, config, site, poll_seconds=poll_seconds, preflight=preflight
+        )
+
+    monkeypatch.setattr(cli, "_attach_to_site", recording_attach)
+
+    def replace_with_sophia(
+        _args: SimpleNamespace,
+        store: _FakeStore,
+        _config: OperatorConfig,
+        _fallback_site: str,
+        _fallback_job_id: int,
+    ) -> tuple[str, int]:
+        current = store.load()
+        store.transition(
+            expected=current.phase,
+            target=RunPhase.RUNNING,
+            facts={"site": "sophia", "job_id": 81},
+        )
+        return "sophia", 81
+
+    monkeypatch.setattr(cli, "_optimize_queued_start", replace_with_sophia)
+
+    args = _run_args(stage="label", sites=["nancy", "sophia"])
+    args.sampling_target = None
+    assert cli._run(args) == 0
+    assert attached == ["sophia"]
+
+
 def test_run_reclaims_managed_storage_then_reprobes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

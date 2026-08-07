@@ -6,7 +6,7 @@ import json
 import re
 import sys
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -197,12 +197,13 @@ def _attach_to_site(
     site: str,
     *,
     poll_seconds: float,
+    preflight: Callable[[], None] | None = None,
 ) -> tuple[SshClient, RemoteLayout, OarClient, Controller]:
     """Open one SSH connection to a recorded site and build the controller."""
 
     ssh = SshClient(target=site, command_timeout=1800)
     layout = RemoteLayout(_remote_home(ssh) / "osm-polygon-operator" / config.run_id)
-    oar = OarClient(ssh)
+    oar = OarClient(ssh, preflight=preflight)
     stager = Stager(ssh)
     controller = Controller(
         config=config,
@@ -1204,6 +1205,7 @@ def _run(args: SimpleNamespace) -> int:
         probes = probe_targets("Re-probing Grid'5000 sites")
         selection = select_site(probes, requirements)
     target = selection.selected.target
+    active_site = selection.selected.name
     _milestone(f"Selected Grid'5000 site: {selection.selected.name}")
     ssh = SshClient(target=target, command_timeout=1800)
     home = _remote_home(ssh)
@@ -1225,7 +1227,7 @@ def _run(args: SimpleNamespace) -> int:
     _milestone("Storage preflight passed")
 
     def submission_preflight() -> None:
-        _usage_policy_preflight(ssh, selection.selected.name)
+        _usage_policy_preflight(ssh, active_site)
         ensure_home_headroom(
             ssh,
             protected_root=layout.root,
@@ -1256,6 +1258,25 @@ def _run(args: SimpleNamespace) -> int:
     if config.stage in {Stage.SPLIT, Stage.ALL} and not split_done:
         for allocation in range(1, 101):
             job_id = controller.submit(component=Stage.SPLIT)
+            optimized_site, optimized_job_id = _optimize_queued_start(
+                args,
+                store,
+                config,
+                active_site,
+                job_id,
+            )
+            if optimized_site != active_site:
+                mark_remote_status(ssh, layout, "failed")
+                active_site = optimized_site
+                ssh, layout, oar, controller = _attach_to_site(
+                    store,
+                    config,
+                    active_site,
+                    poll_seconds=args.poll_seconds,
+                    preflight=submission_preflight,
+                )
+                stager = Stager(ssh)
+            job_id = optimized_job_id
             print(
                 f"Submitted sentence splitting job {job_id} (allocation {allocation})",
                 flush=True,
@@ -1371,6 +1392,31 @@ def _run(args: SimpleNamespace) -> int:
                 ),
                 gpu_memory_mb=getattr(args, "gpu_memory_mb", 40_000),
             )
+            if config.stage is Stage.LABEL:
+                optimized_site, optimized_job_id = _optimize_queued_start(
+                    args,
+                    store,
+                    config,
+                    active_site,
+                    job_id,
+                )
+                if optimized_site != active_site:
+                    mark_remote_status(ssh, layout, "failed")
+                    active_site = optimized_site
+                    ssh, layout, oar, controller = _attach_to_site(
+                        store,
+                        config,
+                        active_site,
+                        poll_seconds=args.poll_seconds,
+                        preflight=submission_preflight,
+                    )
+                    stager = Stager(ssh)
+                    assets = stager.prepare_label_assets(
+                        config,
+                        layout,
+                        download_input=True,
+                    )
+                job_id = optimized_job_id
             print(
                 f"Submitted labeling job {job_id} (allocation {allocation})",
                 flush=True,
