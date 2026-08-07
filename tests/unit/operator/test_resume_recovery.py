@@ -12,6 +12,7 @@ import pytest
 from osm_polygon_sentence_relevance.operator import cli
 from osm_polygon_sentence_relevance.operator.config import OperatorConfig
 from osm_polygon_sentence_relevance.operator.oar import ExitClass
+from osm_polygon_sentence_relevance.operator.staging import LabelAssets
 from osm_polygon_sentence_relevance.operator.state import RunPhase, StateStore
 
 
@@ -25,11 +26,11 @@ def _resume_args(run_id: str) -> SimpleNamespace:
     )
 
 
-def _config() -> OperatorConfig:
+def _config(*, stage: str = "label") -> OperatorConfig:
     return OperatorConfig.build(
         scope="region",
         region="afghanistan-latest",
-        stage="label",
+        stage=stage,
         source_commit="a" * 40,
         input_revision="b" * 40,
     )
@@ -40,8 +41,9 @@ def _store_at(
     phase: RunPhase,
     *,
     facts: dict[str, object],
+    stage: str = "label",
 ) -> tuple[OperatorConfig, StateStore]:
-    config = _config()
+    config = _config(stage=stage)
     store = StateStore(root)
     store.load_or_create(config.run_identity)
     chain = [
@@ -141,7 +143,7 @@ def test_resume_prepared_continuation_validates_assets_and_submits(
         ) -> Any:
             assert download_input is True
             calls.append("assets")
-            return SimpleNamespace(
+            return LabelAssets(
                 input_parquet=layout.root / "input/sentences.parquet",
                 model_file=layout.root / "model/model.gguf",
                 tokenizer_dir=layout.root / "tokenizer",
@@ -196,6 +198,79 @@ def test_resume_prepared_continuation_validates_assets_and_submits(
     assert cli._resume_run(config.run_id, args) == 0
     assert calls == ["policy", "quota", "checkout", "assets", "relay", "submit"]
     assert seen == [456]
+
+
+def test_resume_prepared_stage_all_reuses_finalized_split_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config, store = _store_at(
+        tmp_path,
+        RunPhase.REMOTE_PREPARED,
+        facts={
+            "site": "grenoble",
+            "split_output_job_id": 789,
+        },
+        stage="all",
+    )
+    monkeypatch.setattr(cli, "DATA_ROOT", tmp_path)
+    calls: list[object] = []
+
+    class FakeStager:
+        def prepare(self, _config: Any, _layout: Any) -> Any:
+            calls.append("checkout")
+            return SimpleNamespace(reused=True)
+
+        def prepare_label_assets(
+            self, _config: Any, layout: Any, *, download_input: bool
+        ) -> Any:
+            calls.append(("assets", download_input))
+            return LabelAssets(
+                input_parquet=layout.root / "input/sentences.parquet",
+                model_file=layout.root / "model/model.gguf",
+                tokenizer_dir=layout.root / "tokenizer",
+                llama_server_ready=True,
+            )
+
+    class FakeSsh:
+        def run(self, command: str) -> SimpleNamespace:
+            calls.append(command)
+            return SimpleNamespace(stdout="")
+
+    class FakeController:
+        def submit(self, **kwargs: Any) -> int:
+            calls.append(kwargs["input_parquet"])
+            store.transition(
+                expected=RunPhase.REMOTE_PREPARED,
+                target=RunPhase.SUBMITTED,
+                facts={"job_id": 456, "active_stage": "label"},
+            )
+            return 456
+
+    layout = SimpleNamespace(
+        root=Path("/home/u/run"),
+        logs=Path("/home/u/run/logs"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_attach_to_site",
+        lambda *_a, **_kw: (FakeSsh(), layout, object(), FakeController()),
+    )
+    monkeypatch.setattr(cli, "_usage_policy_preflight", lambda *_a: None)
+    monkeypatch.setattr(cli, "ensure_home_headroom", lambda *_a, **_kw: None)
+    monkeypatch.setattr(cli, "Stager", lambda _ssh: FakeStager())
+    monkeypatch.setattr(
+        cli, "_classify_or_continue", lambda **_kwargs: ExitClass.COMPLETE
+    )
+    monkeypatch.setattr(
+        cli,
+        "_optimize_queued_start",
+        lambda _args, _store, _config, site, job_id: (site, job_id),
+    )
+
+    args = _resume_args(config.run_id)
+    assert cli._resume_run(config.run_id, args) == 0
+    assert ("assets", False) in calls
+    assert Path("/home/u/run/logs/789/output/sentences.parquet") in calls
 
 
 def test_resume_refuses_prepared_state_without_site(

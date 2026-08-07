@@ -7,6 +7,7 @@ import re
 import sys
 import time
 from collections.abc import Callable, Mapping
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -1039,14 +1040,22 @@ def _resume_run(run_id: str, args: SimpleNamespace) -> int:
             split_output = layout.logs / str(split_job_raw) / "output/sentences.parquet"
             v2_input = stager.prepare_v2_input(config, layout, split_output)
             assets = stager.prepare_label_assets(config, layout, download_input=False)
-            assets = type(assets)(
-                v2_input,
-                assets.model_file,
-                assets.tokenizer_dir,
-                assets.llama_server_ready,
-            )
+            assets = replace(assets, input_parquet=v2_input)
         else:
-            assets = stager.prepare_label_assets(config, layout, download_input=True)
+            assets = stager.prepare_label_assets(
+                config,
+                layout,
+                download_input=config.stage is Stage.LABEL,
+            )
+            if config.stage is Stage.ALL:
+                split_job_raw = durable.facts.get("split_output_job_id")
+                if type(split_job_raw) is not int or split_job_raw <= 0:
+                    raise RuntimeError("stage-all continuation has no split output")
+                input_parquet = (
+                    layout.logs / str(split_job_raw) / "output/sentences.parquet"
+                )
+                ssh.run(f"test -s {input_parquet}")
+                assets = replace(assets, input_parquet=input_parquet)
         if not assets.llama_server_ready:
             ensure_llama_server(ssh, oar, store, layout, args.poll_seconds)
         relay_root_value = durable.facts.get("resume_relay_root")
@@ -1395,11 +1404,10 @@ def _run(args: SimpleNamespace) -> int:
         if not assets.llama_server_ready:
             ensure_llama_server(ssh, oar, store, layout, args.poll_seconds)
         if config.stage is Stage.ALL:
-            assets = type(assets)(
-                input_parquet,
-                assets.model_file,
-                assets.tokenizer_dir,
-                True,
+            assets = replace(
+                assets,
+                input_parquet=input_parquet,
+                llama_server_ready=True,
             )
         for allocation in range(1, 101):
             job_id = controller.submit(
