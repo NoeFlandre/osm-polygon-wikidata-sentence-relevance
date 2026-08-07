@@ -402,6 +402,7 @@ class _FakeStore:
 
 class _FakeSsh:
     def __init__(self, **_kwargs: object) -> None:
+        self.target = str(_kwargs.get("target", ""))
         self.commands: list[str] = []
 
     def run(self, command: str) -> SimpleNamespace:
@@ -541,6 +542,75 @@ def test_run_reclaims_managed_storage_then_reprobes(
     args = _run_args(stage="split", sites=["nancy"])
     assert cli._run(args) == 0
     assert cleaned == [True]
+
+
+def test_run_reclaims_terminal_storage_on_every_reachable_site(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _install_run_fakes(monkeypatch, tmp_path)
+    probes = iter(
+        [
+            SiteProbe("nancy", "nancy", True, 80_000, (8, 0), 100 * 1024**3, 0),
+            SiteProbe("sophia", "sophia", True, 80_000, (8, 0), 100 * 1024**3, 0),
+            SiteProbe("bordeaux", "bordeaux", False, 0, None, 0, 0),
+            SiteProbe("nancy", "nancy", True, 80_000, (8, 0), 100 * 1024**3, 0),
+            SiteProbe("sophia", "sophia", True, 80_000, (8, 0), 100 * 1024**3, 0),
+            SiteProbe("bordeaux", "bordeaux", False, 0, None, 0, 0),
+        ]
+    )
+    cleaned: list[str] = []
+    monkeypatch.setattr(
+        cli,
+        "probe_site",
+        lambda target, _run_id, _requirements=None: next(probes),
+    )
+    monkeypatch.setattr(
+        cli,
+        "cleanup_managed_runs",
+        lambda ssh, *, execute: cleaned.append(ssh.target) or (),
+    )
+
+    assert (
+        cli._run(_run_args(stage="split", sites=["nancy", "sophia", "bordeaux"])) == 0
+    )
+    assert cleaned == ["nancy", "sophia"]
+
+
+def test_terminal_storage_cleanup_skips_unreachable_sites(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[object] = []
+    monkeypatch.setattr(
+        cli,
+        "cleanup_managed_runs",
+        lambda *_args, **_kwargs: calls.append(True) or (),
+    )
+    cli._reclaim_terminal_managed_storage(
+        [SiteProbe("bordeaux", "bordeaux", False, 0, None, 0, 0)]
+    )
+    assert calls == []
+
+
+def test_terminal_storage_cleanup_reports_removed_roots(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(
+        cli,
+        "cleanup_managed_runs",
+        lambda *_args, **_kwargs: ("/home/run-a", "/home/run-b"),
+    )
+    cli._reclaim_terminal_managed_storage(
+        [SiteProbe("nancy", "nancy", True, 80_000, (8, 0), 1, 0)]
+    )
+    assert "Site nancy: removed 2 terminal managed run(s)" in capsys.readouterr().out
+
+
+def test_run_rejects_missing_external_data_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(cli, "DATA_ROOT", tmp_path / "missing")
+    with pytest.raises(RuntimeError, match="external data root"):
+        cli._run(SimpleNamespace())
 
 
 def test_run_reclaims_low_storage_before_selecting_another_compatible_site(
@@ -696,6 +766,24 @@ def test_run_reraises_when_no_site_can_satisfy_requirements(
 
     with pytest.raises(cli.NoCompatibleSiteError):
         cli._run(_run_args(stage="split", sites=["nancy"]))
+
+
+def test_run_retries_cleanup_before_reporting_persistent_storage_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _install_run_fakes(monkeypatch, tmp_path)
+    low = SiteProbe("nancy", "nancy", True, 80_000, (8, 0), 1, 0)
+    monkeypatch.setattr(cli, "probe_site", lambda *_args, **_kwargs: low)
+    cleaned: list[str] = []
+    monkeypatch.setattr(
+        cli,
+        "cleanup_managed_runs",
+        lambda ssh, *, execute: cleaned.append(ssh.target) or (),
+    )
+
+    with pytest.raises(cli.NoCompatibleSiteError):
+        cli._run(_run_args(stage="split", sites=["nancy"]))
+    assert cleaned == ["nancy", "nancy", "nancy"]
 
 
 def test_failed_allocation_marks_managed_remote_root_eligible_for_cleanup(

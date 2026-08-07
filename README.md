@@ -56,9 +56,10 @@ day or night/weekend window; each allocation checkpoints after at most 45
 minutes and the next one resumes automatically. Site selection uses the
 account's `/home` soft-quota headroom rather than the shared filesystem's free
 space. All current Grid'5000 sites are probed; unreachable or incompatible
-sites are discarded before selection. When any reachable site is storage-limited,
-the operator reclaims terminal managed roots on every reachable site. Failed
-roots with checkpoints, the active run, and unrelated files are never deleted.
+sites are discarded before selection. At every run, the operator reclaims
+terminal managed roots on every reachable site before selection, then re-probes
+capacity. Failed roots with checkpoints, the active run, and unrelated files
+are never deleted.
 
 Each compute wrapper recreates `.venv` on the allocated node before invoking
 Python, avoiding execution of a frontend-built environment on a different

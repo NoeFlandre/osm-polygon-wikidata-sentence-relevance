@@ -1075,6 +1075,24 @@ def _resume_run(run_id: str, args: SimpleNamespace) -> int:
     return 0
 
 
+def _reclaim_terminal_managed_storage(probes: list[SiteProbe]) -> None:
+    """Remove only terminal pipeline roots on every reachable frontend."""
+
+    reachable = [probe for probe in probes if probe.reachable]
+    if not reachable:
+        return
+    _milestone("Reclaiming terminal pipeline-managed storage on reachable sites")
+    for probe in reachable:
+        removed = cleanup_managed_runs(
+            SshClient(target=probe.target),
+            execute=True,
+        )
+        if removed:
+            _milestone(
+                f"Site {probe.name}: removed {len(removed)} terminal managed run(s)"
+            )
+
+
 def _run(args: SimpleNamespace) -> int:
     if not DATA_ROOT.exists():
         raise RuntimeError(f"external data root is unavailable: {DATA_ROOT}")
@@ -1136,41 +1154,35 @@ def _run(args: SimpleNamespace) -> int:
         ),
     )
     targets = tuple(dict.fromkeys(args.site))
-    probes: list[SiteProbe] = []
-    with _CONSOLE.progress(
-        description="Probing Grid'5000 sites",
-        total=len(targets),
-    ) as progress:
-        for target in targets:
-            _milestone(f"Probing Grid'5000 site: {target}")
-            probe = probe_site(target, config.run_id, requirements)
-            probes.append(probe)
-            if probe.reachable:
-                _milestone(
-                    f"Site {probe.name}: reachable, GPU {probe.gpu_memory_mb} MiB, "
-                    f"persistent free {probe.persistent_free_bytes // 1024**3} GiB"
-                )
-            else:
-                _milestone(f"Site {target}: unavailable")
-            progress.advance()
+
+    def probe_targets(description: str) -> list[SiteProbe]:
+        probes: list[SiteProbe] = []
+        with _CONSOLE.progress(description=description, total=len(targets)) as progress:
+            for target in targets:
+                _milestone(f"Probing Grid'5000 site: {target}")
+                probe = probe_site(target, config.run_id, requirements)
+                probes.append(probe)
+                if probe.reachable:
+                    _milestone(
+                        f"Site {probe.name}: reachable, GPU {probe.gpu_memory_mb} MiB, "
+                        f"persistent free {probe.persistent_free_bytes // 1024**3} GiB"
+                    )
+                else:
+                    _milestone(f"Site {target}: unavailable")
+                progress.advance()
+        return probes
+
+    probes = probe_targets("Probing Grid'5000 sites")
+    _reclaim_terminal_managed_storage(probes)
+    if any(probe.reachable for probe in probes):
+        probes = probe_targets("Re-probing Grid'5000 sites after cleanup")
 
     if cleanup_can_restore_compatibility(probes, requirements):
         _milestone(
             "Reclaiming only terminal pipeline-managed storage before site selection"
         )
-        for probe in probes:
-            if probe.reachable:
-                cleanup_managed_runs(SshClient(target=probe.target), execute=True)
-        probes = []
-        with _CONSOLE.progress(
-            description="Re-probing Grid'5000 sites after cleanup",
-            total=len(targets),
-        ) as progress:
-            for target in targets:
-                _milestone(f"Re-probing Grid'5000 site: {target}")
-                probe = probe_site(target, config.run_id, requirements)
-                probes.append(probe)
-                progress.advance()
+        _reclaim_terminal_managed_storage(probes)
+        probes = probe_targets("Re-probing Grid'5000 sites after cleanup")
     try:
         selection = select_site(probes, requirements)
     except NoCompatibleSiteError:
@@ -1179,18 +1191,8 @@ def _run(args: SimpleNamespace) -> int:
         _milestone(
             "No compatible site; reclaiming only completed or failed managed runs"
         )
-        for probe in probes:
-            if probe.reachable:
-                cleanup_managed_runs(SshClient(target=probe.target), execute=True)
-        probes = []
-        with _CONSOLE.progress(
-            description="Re-probing Grid'5000 sites",
-            total=len(targets),
-        ) as progress:
-            for target in targets:
-                _milestone(f"Re-probing Grid'5000 site: {target}")
-                probes.append(probe_site(target, config.run_id, requirements))
-                progress.advance()
+        _reclaim_terminal_managed_storage(probes)
+        probes = probe_targets("Re-probing Grid'5000 sites")
         selection = select_site(probes, requirements)
     target = selection.selected.target
     _milestone(f"Selected Grid'5000 site: {selection.selected.name}")
