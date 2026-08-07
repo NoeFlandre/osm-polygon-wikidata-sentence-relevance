@@ -792,9 +792,17 @@ def _optimize_queued_start(
                 time.monotonic() + remaining,
             )
 
-    if existing_trial is None and not should_seek_replacement(
-        fallback_status,
-        now=now,
+    seek_unpredicted = (
+        fallback_status.state is JobState.QUEUED
+        and fallback_status.scheduled_start is None
+    )
+    if (
+        existing_trial is None
+        and not seek_unpredicted
+        and not should_seek_replacement(
+            fallback_status,
+            now=now,
+        )
     ):
         return fallback_site, fallback_job_id
 

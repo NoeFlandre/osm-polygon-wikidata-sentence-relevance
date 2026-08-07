@@ -212,6 +212,46 @@ def test_cli_retains_fallback_when_no_runtime_ready_candidate(
     )
 
 
+def test_cli_trials_candidate_when_scheduler_has_no_forecast(
+    tmp_path: Any,
+    monkeypatch: Any,
+) -> None:
+    config, store = _queued_store(tmp_path)
+    submitted: list[Any] = []
+
+    class _Oar:
+        def __init__(self, ssh: _Ssh, *, preflight: Any = None) -> None:
+            self.site = ssh.target
+            self.preflight = preflight
+
+        def status(self, job_id: int) -> JobStatus:
+            if job_id == 42:
+                return JobStatus(42, JobState.QUEUED, scheduled_start=None)
+            return JobStatus(job_id, JobState.RUNNING)
+
+        def submit(self, request: Any) -> int:
+            submitted.append(request)
+            return 101
+
+        def cancel(self, _job_id: int) -> None:
+            return None
+
+    monkeypatch.setattr(cli, "SshClient", _Ssh)
+    monkeypatch.setattr(cli, "OarClient", _Oar)
+    monkeypatch.setattr(cli, "Stager", _Stager)
+    monkeypatch.setattr(cli, "_remote_home", lambda _ssh: PurePosixPath("/home/u"))
+    monkeypatch.setattr(cli, "_usage_policy_preflight", lambda *_a: None)
+    monkeypatch.setattr(cli, "ensure_home_headroom", lambda *_a, **_kw: None)
+    monkeypatch.setattr(cli, "probe_site", lambda site, *_a, **_kw: _ready_probe(site))
+    args = SimpleNamespace(site=["nancy"], gpu_memory_mb=40_000)
+
+    assert cli._optimize_queued_start(args, store, config, "sophia", 42) == (
+        "nancy",
+        101,
+    )
+    assert len(submitted) == 1
+
+
 def test_cli_split_replacement_uses_split_submission_without_llama_runtime(
     tmp_path: Any,
     monkeypatch: Any,
