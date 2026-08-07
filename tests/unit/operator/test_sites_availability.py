@@ -58,6 +58,15 @@ def test_parse_oarnodes_records_requires_numeric_fields() -> None:
     assert len(parse_oarnodes_records(payload)) == 1
 
 
+def test_string_job_identifier_counts_as_one_assigned_job() -> None:
+    """OAR emits a scalar job id for a busy resource, not a job list."""
+
+    payload = _record(jobs="2981309")
+    nodes = parse_oarnodes_records(payload)
+    assert len(nodes) == 1
+    assert nodes[0].jobs_assigned == 1
+
+
 def test_idle_compatible_is_true_when_at_least_one_compatible_node_is_idle() -> None:
     payload = [
         _record(jobs=0, gpu_mem=16000, gpu_compute_capability_major=7),
@@ -111,6 +120,7 @@ def test_availability_command_is_remote_query_not_nested_ssh() -> None:
     assert not cmd.startswith("ssh ")
     assert "oarnodes -J" in cmd
     assert "jq" in cmd
+    assert "type" in cmd
 
 
 def test_parse_oarnodes_records_accepts_single_object_payload() -> None:

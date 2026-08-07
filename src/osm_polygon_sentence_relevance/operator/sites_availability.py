@@ -25,7 +25,8 @@ from osm_polygon_sentence_relevance.operator.sites import SiteRequirements
 _OARNODES_QUERY: Final[str] = (
     "oarnodes -J | jq -c '.[] | select(.gpu_count > 0 "
     'and .state == "Alive") | '
-    "{state, jobs: (.jobs // [] | length), gpu_mem, "
+    "{state, jobs: (if .jobs == null then 0 "
+    'elif (.jobs | type) == "array" then (.jobs | length) else 1 end), '
     "gpu_compute_capability_major}'"
 )
 
@@ -81,6 +82,31 @@ def _coerce_int(value: object, *, minimum: int) -> int | None:
     return None
 
 
+def _coerce_jobs(value: object) -> int | None:
+    """Normalize OAR's assigned-job field to a count.
+
+    ``oarnodes -J`` emits a scalar job id for one assigned job on current
+    frontends, while fixtures and older OAR versions may expose a list or an
+    already-counted integer. A job id must never be interpreted as its
+    numeric value.
+    """
+
+    if isinstance(value, bool):
+        return None
+    if value is None:
+        return 0
+    if isinstance(value, int):
+        return value if value >= 0 else None
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return 0
+        return 1 if stripped.isdigit() else None
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        return len(value)
+    return None
+
+
 def parse_oarnodes_records(
     payload: object,
 ) -> tuple[GpuNode, ...]:
@@ -107,7 +133,7 @@ def parse_oarnodes_records(
         cuda_major = _coerce_int(record.get("gpu_compute_capability_major"), minimum=0)
         if cuda_major is None:
             continue
-        jobs_assigned = _coerce_int(record.get("jobs"), minimum=0)
+        jobs_assigned = _coerce_jobs(record.get("jobs"))
         if jobs_assigned is None:
             continue
         nodes.append(
