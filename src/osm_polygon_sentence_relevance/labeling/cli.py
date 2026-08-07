@@ -8,22 +8,25 @@ import json
 import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 
 from .canary import select_canary_rows
 from .checkpoint import CheckpointStore
-from .checkpoint_mirror import CheckpointMirror
+from .checkpoint_mirror import CheckpointMirror, CheckpointStoreLike
 from .contracts import RunIdentity
 from .engine import LabelEngine
 from .finalization import finalize_labeled_dataset
-from .prompt import PROMPT_VERSION, build_messages
+from .prompt import (
+    PROMPT_VERSION,
+    build_messages,
+)
 from .publication import publish_labeled_dataset
 from .releases import ReleaseLane, release_lane, trackio_space_id
 from .repair import BoundedRepair
-from .runner import LabelingRunner, StopController
+from .runner import LabelingRunner, RunResult, StopController
 from .runtime import (
     MIN_PER_SLOT_CONTEXT,
     SUPPORTED_LLAMA_PARALLEL,
@@ -40,6 +43,16 @@ from .sampling import (
 )
 from .tracking import log_static_labeling_run
 from .tracking_progress import TrackioBatchLogger
+from .v2_checkpoint import V2CheckpointStore
+from .v2_contracts import (
+    V2_LOGIT_PROMPT_VERSION,
+    V2_MODEL_FILE,
+    V2_MODEL_REPO_ID,
+)
+from .v2_engine import V2Engine, V2LogitEngine
+from .v2_finalization import finalize_v2_dataset
+from .v2_runner import V2LogitRunner
+from .v2_sampling import V2_SAMPLING_VERSION, select_v2_rows
 from .validation import parse_label_response
 
 MODEL_REPO_ID = "unsloth/Qwen3.6-27B-MTP-GGUF"
@@ -159,6 +172,11 @@ def _parser() -> argparse.ArgumentParser:
         "--endpoint", default="http://127.0.0.1:8000/v1/chat/completions"
     )
     probe.add_argument("--sample-size", type=int, default=4)
+    probe.add_argument(
+        "--release-lane",
+        choices=tuple(lane.value for lane in ReleaseLane),
+        default=None,
+    )
     _add_server_config_args(probe)
 
     finalize = sub.add_parser("finalize", help="Build validated labeled artifacts")
@@ -249,14 +267,15 @@ def _identity(
     sampling_enabled = release_lane == ReleaseLane.V2_WORLDWIDE.value or (
         args.sampling_target > 0
     )
+    v2 = release_lane == ReleaseLane.V2_WORLDWIDE.value
     return RunIdentity(
         input_sha256=input_sha,
         input_dataset_revision=_hex(args.input_dataset_revision, 40, "input revision"),
-        model_repo_id=MODEL_REPO_ID,
+        model_repo_id=V2_MODEL_REPO_ID if v2 else MODEL_REPO_ID,
         model_revision=_hex(args.model_revision, 40, "model revision"),
-        model_file=MODEL_FILE,
+        model_file=V2_MODEL_FILE if v2 else MODEL_FILE,
         model_file_sha256=_hex(args.model_file_sha256, 64, "model file SHA-256"),
-        prompt_version=PROMPT_VERSION,
+        prompt_version=(V2_LOGIT_PROMPT_VERSION if v2 else PROMPT_VERSION),
         source_commit=_hex(args.source_commit, 40, "source commit"),
         engine=args.engine,
         engine_version=args.engine_version,
@@ -269,14 +288,22 @@ def _identity(
         sampling_target=args.sampling_target if sampling_enabled else None,
         sampling_seed=args.sampling_seed if sampling_enabled else None,
         h3_resolution=args.h3_resolution if sampling_enabled else None,
-        sampling_version=SAMPLING_VERSION if sampling_enabled else None,
+        sampling_version=(V2_SAMPLING_VERSION if v2 else SAMPLING_VERSION)
+        if sampling_enabled
+        else None,
         release_lane=release_lane,
     )
 
 
-def _default_engine_factory(args: argparse.Namespace) -> LabelEngine:
+def _default_engine_factory(args: argparse.Namespace) -> LabelEngine | V2LogitEngine:
     plan = _resolve_runtime_plan(args)
     factory = resolve_engine_factory(plan)
+    if getattr(args, "release_lane", None) == ReleaseLane.V2_WORLDWIDE.value:
+        return V2LogitEngine(
+            endpoint=args.endpoint,
+            model=V2_MODEL_REPO_ID,
+            concurrency=plan.parallel,
+        )
     return factory(endpoint=args.endpoint, model=MODEL_REPO_ID)
 
 
@@ -295,9 +322,28 @@ _PROMPT_COLUMNS = {
 }
 
 
-def _load_input(path: Path) -> pa.Table:
+def _load_input(path: Path, *, v2: bool = False) -> pa.Table:
     table = pq.read_table(path)
-    if missing := _PROMPT_COLUMNS.difference(table.column_names):
+    required = (
+        {
+            "sentence_id",
+            "sentence_text_raw",
+            "previous_sentence",
+            "next_sentence",
+            "page_title",
+            "section_path",
+            "area_km2",
+            "area_bucket",
+            "polygon_id",
+            "lat",
+            "lon",
+            "language",
+            "osm_primary_tag",
+        }
+        if v2
+        else _PROMPT_COLUMNS
+    )
+    if missing := required.difference(table.column_names):
         raise ValueError(
             f"input is missing required labeling columns: {sorted(missing)}"
         )
@@ -305,7 +351,7 @@ def _load_input(path: Path) -> pa.Table:
 
 
 def _checkpoint_mirror(
-    args: argparse.Namespace, store: CheckpointStore
+    args: argparse.Namespace, store: CheckpointStoreLike
 ) -> CheckpointMirror | None:
     dataset_id = args.checkpoint_dataset_id
     branch = args.checkpoint_branch
@@ -325,7 +371,7 @@ def _checkpoint_mirror(
 
 
 def _batch_tracker(
-    args: argparse.Namespace, store: CheckpointStore
+    args: argparse.Namespace, store: CheckpointStoreLike
 ) -> TrackioBatchLogger | None:
     """Build the optional asynchronous batch logger for a labeled run."""
 
@@ -374,8 +420,9 @@ def _trackio_space_for_output(output_dir: Path) -> str:
     return trackio_space_id(ReleaseLane.V1_AFGHANISTAN)
 
 
-def _probe(args: argparse.Namespace, engine: LabelEngine) -> int:
-    table = _load_input(Path(args.input_parquet))
+def _probe(args: argparse.Namespace, engine: LabelEngine | V2LogitEngine) -> int:
+    v2 = args.release_lane == ReleaseLane.V2_WORLDWIDE.value
+    table = _load_input(Path(args.input_parquet), v2=v2)
     if args.sample_size < 1 or args.sample_size > table.num_rows:
         raise ValueError("sample size must be within the input row count")
     selected = (
@@ -383,9 +430,43 @@ def _probe(args: argparse.Namespace, engine: LabelEngine) -> int:
         if args.sample_size == table.num_rows
         else select_canary_rows(table, args.sample_size)
     )
+    if v2:
+        from .v2_prompt import V2PromptInput, build_v2_messages
+
+        prompt_inputs = [
+            V2PromptInput(
+                sentence_id=str(row["sentence_id"]),
+                sentence_text=str(row["sentence_text_raw"]),
+                previous_sentence=row.get("previous_sentence"),
+                next_sentence=row.get("next_sentence"),
+                page_title=str(row["page_title"]),
+                section_title=(
+                    str(row["section_path"][-1]) if row.get("section_path") else "none"
+                ),
+            )
+            for row in selected.to_pylist()
+        ]
+        # Test doubles and alternate transports implement the same public
+        # protocol but are not required to subclass the HTTP client.
+        v2_protocol = cast(V2Engine, engine)
+        results = v2_protocol.generate(
+            [build_v2_messages(item) for item in prompt_inputs],
+            sentence_ids=[item.sentence_id for item in prompt_inputs],
+        )
+        if len(results) != len(prompt_inputs):
+            raise ValueError("engine response count does not match probe size")
+        print(
+            json.dumps(
+                {"engine": args.engine, "validated_responses": len(results)},
+                sort_keys=True,
+            )
+        )
+        return 0
     prompt_inputs = [LabelingRunner._prompt(row) for row in selected.to_pylist()]
-    responses = engine.generate(
-        [build_messages(prompt_input) for prompt_input in prompt_inputs]
+    message_builder = build_messages
+    legacy_engine = cast(LabelEngine, engine)
+    responses = legacy_engine.generate(
+        [message_builder(prompt_input) for prompt_input in prompt_inputs]
     )
     if len(responses) != len(prompt_inputs):
         raise ValueError("engine response count does not match probe size")
@@ -407,7 +488,7 @@ def main(
     argv: Sequence[str] | None = None,
     *,
     engine_factory: Callable[
-        [argparse.Namespace], LabelEngine
+        [argparse.Namespace], LabelEngine | V2LogitEngine
     ] = _default_engine_factory,
     publish_fn: Callable[..., Any] = publish_labeled_dataset,
     track_fn: Callable[..., Any] = log_static_labeling_run,
@@ -450,14 +531,32 @@ def main(
             return _probe(args, engine_factory(args))
         input_path = Path(args.input_parquet)
         identity = _identity(args, input_path, plan)
-        store = CheckpointStore(Path(args.work_dir), identity)
+        is_v2 = args.release_lane == ReleaseLane.V2_WORLDWIDE.value
+        if is_v2:
+            store_v2 = V2CheckpointStore(Path(args.work_dir), identity)
+            store = None
+        else:
+            store_v2 = None
+            store = CheckpointStore(Path(args.work_dir), identity)
         if args.command == "finalize":
-            result = finalize_labeled_dataset(
-                input_path=input_path,
-                store=store,
-                output_dir=Path(args.output_dir),
-                dataset_repo_id=args.dataset_id,
-            )
+            if is_v2:
+                if store_v2 is None:
+                    raise RuntimeError("V2 checkpoint store was not initialized")
+                result = finalize_v2_dataset(
+                    input_path=input_path,
+                    store=store_v2,
+                    output_dir=Path(args.output_dir),
+                    dataset_repo_id=args.dataset_id,
+                )
+            else:
+                if store is None:
+                    raise RuntimeError("V1 checkpoint store was not initialized")
+                result = finalize_labeled_dataset(
+                    input_path=input_path,
+                    store=store,
+                    output_dir=Path(args.output_dir),
+                    dataset_repo_id=args.dataset_id,
+                )
             print(
                 json.dumps(
                     {"rows": result.row_count, "sha256": result.parquet_sha256},
@@ -465,51 +564,81 @@ def main(
                 )
             )
             return 0
-        table = select_label_rows(
-            _load_input(input_path),
-            row_limit=args.row_limit,
-            sampling_target=args.sampling_target,
-            sampling_seed=args.sampling_seed,
-            h3_resolution=args.h3_resolution,
-        )
+        table = _load_input(input_path, v2=is_v2)
+        if is_v2:
+            table = select_v2_rows(
+                table,
+                target=args.row_limit or args.sampling_target,
+                seed=args.sampling_seed,
+            )
+        else:
+            table = select_label_rows(
+                table,
+                row_limit=args.row_limit,
+                sampling_target=args.sampling_target,
+                sampling_seed=args.sampling_seed,
+                h3_resolution=args.h3_resolution,
+            )
         stop = StopController()
         stop.install()
         repair_log_path = Path(args.work_dir) / "repair.log"
-        mirror = _checkpoint_mirror(args, store)
-        tracker = _batch_tracker(args, store)
+        run_store: CheckpointStoreLike
+        if is_v2:
+            if store_v2 is None:
+                raise RuntimeError("V2 checkpoint store was not initialized")
+            run_store = store_v2
+        else:
+            if store is None:
+                raise RuntimeError("V1 checkpoint store was not initialized")
+            run_store = store
+        mirror = _checkpoint_mirror(args, run_store)
+        tracker = _batch_tracker(args, run_store)
         try:
             if mirror is not None:
                 mirror.start()
             if tracker is not None:
                 tracker.start()
-            result = LabelingRunner(
-                engine=engine_factory(args),
-                store=store,
-                batch_size=args.batch_size,
-                stop_requested=stop,
-                repair=BoundedRepair(max_attempts=3),
-                repair_log_path=repair_log_path,
-                checkpoint_mirror=(mirror.enqueue if mirror is not None else None),
-                batch_tracker=(tracker.enqueue if tracker is not None else None),
-            ).run(table)
+            if is_v2:
+                if store_v2 is None:
+                    raise RuntimeError("V2 checkpoint store was not initialized")
+                v2_engine = engine_factory(args)
+                result = V2LogitRunner(
+                    engine=cast(V2Engine, v2_engine),
+                    store=store_v2,
+                    batch_size=args.batch_size,
+                    stop_requested=stop,
+                    batch_callback=(tracker.enqueue if tracker is not None else None),
+                    checkpoint_mirror=(mirror.enqueue if mirror is not None else None),
+                ).run(table)
+            else:
+                if store is None:
+                    raise RuntimeError("V1 checkpoint store was not initialized")
+                repair = BoundedRepair(max_attempts=3)
+                result = LabelingRunner(
+                    engine=cast(LabelEngine, engine_factory(args)),
+                    store=store,
+                    batch_size=args.batch_size,
+                    stop_requested=stop,
+                    repair=repair,
+                    repair_log_path=repair_log_path,
+                    checkpoint_mirror=(mirror.enqueue if mirror is not None else None),
+                    batch_tracker=(tracker.enqueue if tracker is not None else None),
+                ).run(table)
         finally:
             if mirror is not None:
                 mirror.close(wait=True, timeout=args.checkpoint_drain_seconds)
             if tracker is not None:
                 tracker.close(wait=True, timeout=args.checkpoint_drain_seconds)
-        print(
-            json.dumps(
-                {
-                    "completed": result.completed,
-                    "total": result.total,
-                    "interrupted": result.interrupted,
-                    "elapsed_seconds": result.elapsed_seconds,
-                    "input_sha256": identity.input_sha256,
-                    "repair_stats": result.repair_stats.to_dict(),
-                },
-                sort_keys=True,
-            )
-        )
+        output = {
+            "completed": result.completed,
+            "total": result.total,
+            "interrupted": result.interrupted,
+            "elapsed_seconds": result.elapsed_seconds,
+            "input_sha256": identity.input_sha256,
+        }
+        if not is_v2:
+            output["repair_stats"] = cast(RunResult, result).repair_stats.to_dict()
+        print(json.dumps(output, sort_keys=True))
         return 0
     except (ValueError, RuntimeError, OSError) as exc:
         print(f"Error: {exc}", file=sys.stderr)

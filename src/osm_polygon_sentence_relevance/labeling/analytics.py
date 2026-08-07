@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from collections import Counter, defaultdict
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -79,7 +80,7 @@ def _column_values(table: pa.Table, name: str) -> list[object]:
     return table[name].to_pylist()
 
 
-def _counts(values: list[object]) -> dict[str, int]:
+def _counts(values: Sequence[object]) -> dict[str, int]:
     return dict(sorted(Counter(_normalized(value) for value in values).items()))
 
 

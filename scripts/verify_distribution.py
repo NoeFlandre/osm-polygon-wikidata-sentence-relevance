@@ -94,6 +94,9 @@ SDIST_PRODUCTION_SHELL_SCRIPTS = (
     "scripts/grid5000/submit_streaming_build.sh",
     "scripts/grid5000/submit_streaming_finalization.sh",
     "scripts/grid5000/submit_afghanistan_labeling.sh",
+    "scripts/grid5000/run_worldwide_labeling.sh",
+    "scripts/grid5000/run_worldwide_labeling_job.sh",
+    "scripts/grid5000/submit_worldwide_labeling.sh",
 )
 SDIST_PRODUCTION_PYTHON_SCRIPTS = (
     "scripts/grid5000/gpu_preflight.py",

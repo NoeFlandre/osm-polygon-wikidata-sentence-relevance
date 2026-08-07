@@ -59,6 +59,7 @@ nav:
       - Decisions:
           - Domain package layout: architecture/decisions/0001-domain-package-layout.md
           - Contracts package: architecture/decisions/0002-contracts-package.md
+          - Worldwide binary place relevance: architecture/decisions/0003-v2-binary-place-description.md
   - Reference:
       - CLI reference: reference/cli.md
       - Afghanistan labeling: reference/labeling.md

@@ -273,6 +273,23 @@ def test_label_micro_allocation_uses_existing_helper_and_wrapper_contract() -> N
     assert payload.count("run_afghanistan_labeling_job.sh") == 1
 
 
+def test_worldwide_label_uses_dedicated_v2_launcher() -> None:
+    config = OperatorConfig.build(
+        scope="all",
+        stage="label",
+        source_commit="a" * 40,
+        input_revision="b" * 40,
+    )
+    request = label_submission(
+        config,
+        RemoteLayout(PurePosixPath("/r")),
+        input_parquet=PurePosixPath("/r/input.parquet"),
+        model_file=PurePosixPath("/r/model.gguf"),
+        tokenizer_dir=PurePosixPath("/r/tokenizer"),
+    )
+    assert request.command[0].endswith("submit_worldwide_labeling.sh")
+
+
 @pytest.mark.parametrize(
     ("overrides", "message"),
     [

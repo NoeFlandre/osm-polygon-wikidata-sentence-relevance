@@ -122,6 +122,43 @@ def test_prepare_label_assets_requires_revision_and_marker() -> None:
         )
 
 
+def test_prepare_v2_input_enriches_split_output_from_pinned_polygon_files() -> None:
+    ssh = RecordingSsh(["V2_INPUT_OK\n"])
+    layout = RemoteLayout(PurePosixPath("/home/user/operator/run"))
+    source = layout.logs / "42/output/sentences.parquet"
+    output = Stager(ssh).prepare_v2_input(_config(stage="all"), layout, source)  # type: ignore[arg-type]
+    assert output == layout.root / "input/v2-sentences.parquet"
+    command = ssh.commands[0]
+    assert '"$python" -m osm_polygon_sentence_relevance.labeling.v2_input' in command
+    assert "--source" in command
+    assert str(source) in command
+    assert "--dataset-id" in command
+    assert "--revision" in command
+    assert "--cache-dir" in command
+    assert "V2_INPUT_OK" in command
+
+
+def test_prepare_v2_input_requires_immutable_revision() -> None:
+    config = _config(stage="all")
+    object.__setattr__(config, "input_dataset_revision", None)
+    with pytest.raises(ValueError, match="revision"):
+        Stager(RecordingSsh([])).prepare_v2_input(
+            config,
+            RemoteLayout(PurePosixPath("/home/user/operator/run")),
+            PurePosixPath("/home/user/sentences.parquet"),
+        )  # type: ignore[arg-type]
+
+
+def test_prepare_v2_input_requires_success_marker() -> None:
+    layout = RemoteLayout(PurePosixPath("/home/user/operator/run"))
+    with pytest.raises(RuntimeError, match="preparation failed"):
+        Stager(RecordingSsh(["unexpected\n"])).prepare_v2_input(
+            _config(stage="all"),
+            layout,
+            layout.logs / "42/output/sentences.parquet",
+        )  # type: ignore[arg-type]
+
+
 def test_clean_generated_python_caches_is_scoped_to_runtime_sources() -> None:
     ssh = RecordingSsh(["PYTHON_CACHES_CLEAN\n"])
     layout = RemoteLayout(PurePosixPath("/home/user/operator/run"))

@@ -32,7 +32,7 @@ def test_guide_has_exactly_three_canonical_submission_commands() -> None:
     assert commands == [
         '"${REPO_ROOT}/scripts/grid5000/submit_streaming_build.sh" \\',
         '"${REPO_ROOT}/scripts/grid5000/submit_streaming_finalization.sh" \\',
-        '"${REPO_ROOT}/scripts/grid5000/submit_afghanistan_labeling.sh" \\',
+        '"${REPO_ROOT}/scripts/grid5000/submit_worldwide_labeling.sh" \\',
     ]
 
 

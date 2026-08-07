@@ -13,6 +13,7 @@ import osm_polygon_sentence_relevance.labeling.cli as labeling_cli
 from osm_polygon_sentence_relevance.labeling.cli import main
 from osm_polygon_sentence_relevance.labeling.finalization import TRACKIO_SPACE_ID
 from osm_polygon_sentence_relevance.labeling.releases import V2_TRACKIO_SPACE_ID
+from osm_polygon_sentence_relevance.labeling.v2_contracts import V2LogitRecord
 
 
 class Engine:
@@ -31,6 +32,25 @@ class Engine:
         ]
 
 
+class V2Engine:
+    def generate(
+        self,
+        messages: list[list[dict[str, str]]],
+        *,
+        sentence_ids: list[str] | None = None,
+    ) -> list[V2LogitRecord]:
+        ids = sentence_ids or [f"s{index}" for index in range(len(messages))]
+        return [
+            V2LogitRecord(
+                sentence_id=sentence_id,
+                place_relevance="yes",
+                yes_logprob=-0.1,
+                no_logprob=-2.0,
+            )
+            for sentence_id in ids
+        ]
+
+
 def _input(path: Path) -> str:
     pq.write_table(
         pa.table(
@@ -46,6 +66,11 @@ def _input(path: Path) -> str:
                 "language": ["en"],
                 "page_title": ["Place"],
                 "section_path": [["History"]],
+                "polygon_id": ["polygon-1"],
+                "lat": [34.5],
+                "lon": [69.2],
+                "area_km2": [0.5],
+                "area_bucket": ["small"],
             }
         ),
         path,
@@ -216,6 +241,43 @@ def test_label_command_runs_and_reports_resumable_result(
     assert output["input_sha256"] == digest
 
 
+def test_v2_label_command_uses_single_binary_logit_contract(
+    tmp_path: Path, capsys
+) -> None:
+    source = tmp_path / "sentences.parquet"
+    _input(source)
+    rc = main(
+        [
+            "label",
+            "--input-parquet",
+            str(source),
+            "--work-dir",
+            str(tmp_path / "work"),
+            "--input-dataset-revision",
+            "a" * 40,
+            "--model-revision",
+            "b" * 40,
+            "--model-file-sha256",
+            "c" * 64,
+            "--source-commit",
+            "d" * 40,
+            "--engine",
+            "llama.cpp",
+            "--engine-version",
+            "0.21.0",
+            "--batch-size",
+            "1",
+            "--sampling-target",
+            "1",
+            "--release-lane",
+            "v2-worldwide",
+        ],
+        engine_factory=lambda args: V2Engine(),
+    )
+    assert rc == 0
+    assert json.loads(capsys.readouterr().out)["completed"] == 1
+
+
 def test_label_command_starts_and_closes_optional_checkpoint_mirror(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -267,6 +329,70 @@ def test_label_command_starts_and_closes_optional_checkpoint_mirror(
                 "0",
             ],
             engine_factory=lambda args: Engine(),
+        )
+        == 0
+    )
+    assert events == [
+        ("init", "owner/dataset", "checkpoints/aaaaaaaaaaaaaaaaaaaa"),
+        "start",
+        ("enqueue", 0),
+        ("close", True, 0.0),
+    ]
+
+
+def test_v2_label_command_mirrors_each_checkpoint(tmp_path: Path, monkeypatch) -> None:
+    source = tmp_path / "source.parquet"
+    _input(source)
+    events: list[object] = []
+
+    class FakeMirror:
+        def __init__(self, **kwargs: object) -> None:
+            events.append(("init", kwargs["dataset_id"], kwargs["branch"]))
+
+        def start(self) -> None:
+            events.append("start")
+
+        def enqueue(self, index: int) -> None:
+            events.append(("enqueue", index))
+
+        def close(self, *, wait: bool, timeout: float) -> None:
+            events.append(("close", wait, timeout))
+
+    monkeypatch.setattr(labeling_cli, "CheckpointMirror", FakeMirror)
+    assert (
+        main(
+            [
+                "label",
+                "--input-parquet",
+                str(source),
+                "--work-dir",
+                str(tmp_path / "work"),
+                "--input-dataset-revision",
+                "a" * 40,
+                "--model-revision",
+                "b" * 40,
+                "--model-file-sha256",
+                "c" * 64,
+                "--source-commit",
+                "d" * 40,
+                "--engine",
+                "llama.cpp",
+                "--engine-version",
+                "0.21.0",
+                "--batch-size",
+                "1",
+                "--sampling-target",
+                "1",
+                "--release-lane",
+                "v2-worldwide",
+                "--checkpoint-dataset-id",
+                "owner/dataset",
+                "--checkpoint-branch",
+                "checkpoints/aaaaaaaaaaaaaaaaaaaa",
+                "--checkpoint-drain-seconds",
+                "0",
+            ],
+            engine_factory=lambda args: V2Engine(),
         )
         == 0
     )

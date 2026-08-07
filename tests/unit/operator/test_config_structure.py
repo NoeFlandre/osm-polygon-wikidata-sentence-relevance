@@ -29,6 +29,7 @@ EXPECTED_EXPORTS = {
     "DEFAULT_SAMPLING_SEED",
     "DEFAULT_SAMPLING_H3_RESOLUTION",
     "SAMPLING_VERSION",
+    "V2_SAMPLING_VERSION",
     "DEFAULT_LABEL_MODEL_REPO_ID",
     "DEFAULT_LABEL_MODEL_REVISION",
     "DEFAULT_LABEL_MODEL_FILE",
@@ -36,6 +37,11 @@ EXPECTED_EXPORTS = {
     "DEFAULT_TOKENIZER_REPO_ID",
     "DEFAULT_TOKENIZER_REVISION",
     "SUPPORTED_LLAMA_PARALLEL",
+    "V2_LOGIT_PROMPT_VERSION",
+    "DEFAULT_V2_LABEL_MODEL_REPO_ID",
+    "DEFAULT_V2_LABEL_MODEL_REVISION",
+    "DEFAULT_V2_LABEL_MODEL_FILE",
+    "DEFAULT_V2_LABEL_MODEL_FILE_SHA256",
 }
 
 
@@ -70,7 +76,7 @@ def test_public_config_is_a_pure_explicit_facade() -> None:
     assert assignments == 1
 
 
-def test_public_config_exports_are_unchanged() -> None:
+def test_public_config_exports_are_explicit() -> None:
     assert set(config.__all__) == EXPECTED_EXPORTS
     assert len(config.__all__) == len(EXPECTED_EXPORTS)
 

@@ -18,10 +18,18 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 from queue import Empty, Queue
-from typing import Any
+from typing import Any, Protocol
 
-from .checkpoint import CheckpointStore
 from .releases import checkpoint_prefix
+
+
+class CheckpointStoreLike(Protocol):
+    """Common durable-store surface shared by V1 and V2 checkpoints."""
+
+    root: Path
+    directory: Path
+    identity: Any
+
 
 type UploadFiles = tuple[tuple[str, Path], ...]
 type UploadCallable = Callable[[str, str, UploadFiles], str]
@@ -67,7 +75,7 @@ def _validate_branch(branch: str) -> None:
         raise ValueError("checkpoint namespace must be checkpoints/<20 lowercase hex>")
 
 
-def _batch_paths(store: CheckpointStore, index: int) -> tuple[Path, Path]:
+def _batch_paths(store: CheckpointStoreLike, index: int) -> tuple[Path, Path]:
     stem = f"batch-{index:06d}"
     return store.directory / f"{stem}.parquet", store.directory / f"{stem}.json"
 
@@ -78,7 +86,7 @@ class CheckpointMirror:
     def __init__(
         self,
         *,
-        store: CheckpointStore,
+        store: CheckpointStoreLike,
         dataset_id: str,
         branch: str,
         uploader: UploadCallable | None = None,
@@ -340,6 +348,7 @@ def _default_uploader(dataset_id: str, branch: str, files: UploadFiles) -> str:
 __all__ = [
     "CheckpointMirror",
     "CheckpointMirrorError",
+    "CheckpointStoreLike",
     "UploadCallable",
     "UploadFiles",
 ]

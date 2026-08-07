@@ -19,7 +19,6 @@ import json
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 
-from .contracts import SentenceLabel
 from .validation import LabelValidationError, parse_label_response
 
 _MAX_REPAIR_ATTEMPTS = 1
@@ -50,6 +49,7 @@ def _build_repair_messages(
     target_sentence: str,
     reason: str,
     attempt: int = 1,
+    response_contract: str | None = None,
 ) -> Messages:
     """Return a copy of ``messages`` with a one-shot repair instruction appended."""
 
@@ -64,13 +64,11 @@ def _build_repair_messages(
                     f"{reason}. "
                     "Re-emit the JSON object with the corrections:\n"
                     f"- TARGET SENTENCE for substring matching: {target_sentence!r}\n"
-                    "- The JSON object must contain exactly five fields: "
-                    "landuse_relevance, polygon_relevance, landuse_reason, "
-                    "polygon_reason, evidence.\n"
+                    f"- {response_contract or 'The JSON object must contain exactly five fields: landuse_relevance, polygon_relevance, landuse_reason, polygon_reason, evidence.'}\n"
                     "- 'evidence' must be a short exact excerpt of the TARGET "
                     "SENTENCE above, or an empty string when no useful excerpt exists.\n"
-                    "- 'landuse_reason' and 'polygon_reason' must be consistent with "
-                    "their 'yes'/'no'/'uncertain' relevance labels."
+                    "- Every reason field must be consistent with its "
+                    "'yes'/'no'/'uncertain' label."
                 ),
             },
         ]
@@ -91,7 +89,8 @@ def _clear_invalid_evidence(
     *,
     target_sentence: str,
     error: LabelValidationError,
-) -> SentenceLabel | None:
+    parser: Callable[..., object],
+) -> object | None:
     """Clear only evidence that failed the strict substring/length contract."""
 
     if _failure_reason(error) not in {
@@ -106,7 +105,7 @@ def _clear_invalid_evidence(
     if not isinstance(value, dict):
         return None
     value["evidence"] = ""
-    return parse_label_response(
+    return parser(
         json.dumps(value, ensure_ascii=False),
         target_sentence=target_sentence,
     )
@@ -133,10 +132,18 @@ class RepairStats:
 class BoundedRepair:
     """Apply bounded repair attempts and validate every replacement strictly."""
 
-    def __init__(self, *, max_attempts: int = _MAX_REPAIR_ATTEMPTS) -> None:
+    def __init__(
+        self,
+        *,
+        max_attempts: int = _MAX_REPAIR_ATTEMPTS,
+        parser: Callable[..., object] | None = None,
+        response_contract: str | None = None,
+    ) -> None:
         if max_attempts < 1:
             raise ValueError("max_attempts must be at least 1")
         self.max_attempts = max_attempts
+        self._parser = parser or parse_label_response
+        self._response_contract = response_contract
         self._stats = RepairStats()
 
     @property
@@ -149,14 +156,14 @@ class BoundedRepair:
         engine: RepairEngine,
         messages: Messages,
         target_sentence: str,
-    ) -> SentenceLabel:
+    ) -> object:
         """Run one attempt plus up to ``max_attempts`` repair attempts."""
 
         messages_copy = list(messages)
         raw = _invoke_engine(engine, messages_copy)
         last_error: LabelValidationError | None
         try:
-            return parse_label_response(raw, target_sentence=target_sentence)
+            return self._parser(raw, target_sentence=target_sentence)
         except LabelValidationError as initial:
             initial_reason = _failure_reason(initial)
             self._stats = RepairStats(
@@ -172,11 +179,15 @@ class BoundedRepair:
         for _attempt in range(1, self.max_attempts + 1):
             reason = _failure_reason(last_error)
             repair_messages = _build_repair_messages(
-                messages_copy, target_sentence, reason, _attempt
+                messages_copy,
+                target_sentence,
+                reason,
+                _attempt,
+                self._response_contract,
             )
             raw = _invoke_engine(engine, repair_messages)
             try:
-                label = parse_label_response(raw, target_sentence=target_sentence)
+                label = self._parser(raw, target_sentence=target_sentence)
             except LabelValidationError as exc:
                 last_error = exc
                 self._stats = RepairStats(
@@ -204,6 +215,7 @@ class BoundedRepair:
                 raw,
                 target_sentence=target_sentence,
                 error=last_error,
+                parser=self._parser,
             )
             if normalized_label is not None:
                 self._stats = RepairStats(

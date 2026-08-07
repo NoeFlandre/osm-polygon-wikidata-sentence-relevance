@@ -6,13 +6,19 @@ import importlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pyarrow.parquet as pq
 
-from .analytics import LabelAnalytics, build_label_analytics
+from .analytics import (
+    LabelAnalytics,
+    build_label_analytics,
+)
 from .finalization import ValidatedLabeledPublication, validate_labeled_publication
 from .releases import release_lane, trackio_space_id
+from .v2_analytics import V2Analytics, build_v2_analytics
+from .v2_contracts import V2_LOGIT_PROMPT_VERSION
+from .v2_finalization import V2Publication, validate_v2_publication
 
 
 class TrackioError(RuntimeError):
@@ -138,6 +144,32 @@ def _payload(
     return payload
 
 
+def _v2_payload(
+    trackio: Any, directory: Path, analytics: V2Analytics
+) -> dict[str, Any]:
+    """Build the compact static payload for the binary V2 release."""
+
+    assets = directory / "assets"
+    return {
+        "total_labeled_sentences": analytics.total_labeled_sentences,
+        "unique_polygons": analytics.unique_polygons,
+        "unique_languages": analytics.unique_languages,
+        "place_description_yield": analytics.place_percentages.get("yes", 0.0),
+        "area_bucket_counts": _table(
+            trackio,
+            ["area_bucket", "sentences"],
+            [[key, value] for key, value in analytics.area_bucket_counts.items()],
+        ),
+        "label_distribution": trackio.Image(
+            assets / "label_distribution.png", caption="Place-description labels"
+        ),
+        "h3_sentence_distribution": trackio.Image(
+            assets / "h3_sentence_distribution.png",
+            caption="Labeled sentences by H3 cell",
+        ),
+    }
+
+
 def log_static_labeling_run(
     directory: Path,
     *,
@@ -157,16 +189,36 @@ def log_static_labeling_run(
         raise TrackioError("Trackio project must be non-blank")
     directory = Path(directory)
     try:
-        validated: ValidatedLabeledPublication = validate_labeled_publication(directory)
         manifest = _manifest(directory)
-        analytics = build_label_analytics(
-            pq.read_table(directory / "sentences.parquet")
+        identity = manifest.get("run_identity", {})
+        is_v2 = (
+            isinstance(identity, dict)
+            and identity.get("prompt_version") == V2_LOGIT_PROMPT_VERSION
         )
+        validated: ValidatedLabeledPublication | V2Publication
+        if is_v2:
+            validated = validate_v2_publication(directory)
+        else:
+            validated = validate_labeled_publication(directory)
+        table = pq.read_table(directory / "sentences.parquet")
+        if is_v2:
+            analytics: LabelAnalytics | V2Analytics = build_v2_analytics(
+                table, h3_resolution=int(identity.get("h3_resolution") or 3)
+            )
+        else:
+            analytics = build_label_analytics(table)
     except TrackioError:
         raise
     except Exception as exc:
         raise TrackioError("cannot validate final labeling publication") from exc
-    if manifest.get("statistics", {}).get("analytics") != analytics.to_dict():
+    persisted_analytics = manifest.get("statistics", {})
+    if is_v2:
+        if persisted_analytics != {
+            **analytics.to_dict(),
+            "h3": persisted_analytics.get("h3"),
+        }:
+            raise TrackioError("manifest analytics drift from final Parquet")
+    elif persisted_analytics.get("analytics") != analytics.to_dict():
         raise TrackioError("manifest analytics drift from final Parquet")
     trackio = _trackio()
     actual_run_name = run_name or f"final-{validated.parquet_sha256[:12]}"
@@ -196,7 +248,15 @@ def log_static_labeling_run(
     try:
         trackio.init(**init_kwargs)
         started = True
-        trackio.log(_payload(trackio, directory, analytics), step=0)
+        if is_v2:
+            v2_analytics = cast(V2Analytics, analytics)
+            trackio.log(
+                _v2_payload(trackio, directory, v2_analytics),
+                step=0,
+            )
+        else:
+            label_analytics = cast(LabelAnalytics, analytics)
+            trackio.log(_payload(trackio, directory, label_analytics), step=0)
     except Exception as exc:
         raise TrackioError("Trackio static run failed") from exc
     finally:
@@ -205,16 +265,27 @@ def log_static_labeling_run(
                 trackio.finish()
             except Exception as exc:
                 raise TrackioError("Trackio static run could not finish") from exc
+    if is_v2:
+        v2_analytics = cast(V2Analytics, analytics)
+        kpis: dict[str, int | float] = {
+            "total_labeled_sentences": v2_analytics.total_labeled_sentences,
+            "unique_polygons": v2_analytics.unique_polygons,
+            "unique_languages": v2_analytics.unique_languages,
+            "place_description_yield": v2_analytics.place_percentages.get("yes", 0.0),
+        }
+    else:
+        label_analytics = cast(LabelAnalytics, analytics)
+        kpis = {
+            "total_labeled_sentences": label_analytics.total_labeled_sentences,
+            "unique_polygons": label_analytics.unique_polygons,
+            "unique_languages": label_analytics.unique_languages,
+            "strong_positive_yield": label_analytics.strong_positive_yield,
+        }
     return TrackioResult(
         project=project,
         run_name=actual_run_name,
         row_count=validated.row_count,
-        kpis={
-            "total_labeled_sentences": analytics.total_labeled_sentences,
-            "unique_polygons": analytics.unique_polygons,
-            "unique_languages": analytics.unique_languages,
-            "strong_positive_yield": analytics.strong_positive_yield,
-        },
+        kpis=kpis,
         space_id=resolved_space_id,
     )
 

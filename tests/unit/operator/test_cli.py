@@ -456,6 +456,14 @@ class _FakeStager:
             True,
         )
 
+    def prepare_v2_input(
+        self,
+        _config: object,
+        layout: cli.RemoteLayout,
+        _source: object,
+    ) -> PurePosixPath:
+        return layout.v2_input
+
 
 class _FakeController:
     def __init__(self, **kwargs: object) -> None:
@@ -561,7 +569,7 @@ def test_run_label_reuses_checkpoints_and_completes(
             minimum_headroom_bytes
         ),
     )
-    args = _run_args(sites=["nancy"])
+    args = _run_args(stage="all", sites=["nancy"])
     args.scope = "all"
     args.region = None
     assert cli._run(args) == 0
@@ -577,6 +585,35 @@ def test_run_label_reuses_checkpoints_and_completes(
     assert "Labeling complete" in output
     assert headroom
     assert set(headroom) == {512 * 1024**2}
+
+
+def test_run_rejects_v2_label_stage_before_remote_mutation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _install_run_fakes(monkeypatch, tmp_path)
+    args = _run_args(stage="label", sites=["nancy"])
+    args.scope = "all"
+    args.region = None
+
+    with pytest.raises(RuntimeError, match="requires --stage all"):
+        cli._run(args)
+
+
+def test_run_reraises_when_no_site_can_satisfy_requirements(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _install_run_fakes(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        cli,
+        "probe_site",
+        lambda target, _run_id, _requirements=None: SiteProbe(
+            target, target, False, 0, (0, 0), 0, 0
+        ),
+    )
+    monkeypatch.setattr(cli, "cleanup_can_restore_compatibility", lambda *_a: False)
+
+    with pytest.raises(cli.NoCompatibleSiteError):
+        cli._run(_run_args(stage="split", sites=["nancy"]))
 
 
 def test_failed_allocation_marks_managed_remote_root_eligible_for_cleanup(

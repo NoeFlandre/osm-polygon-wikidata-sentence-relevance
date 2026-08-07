@@ -15,6 +15,9 @@ from typing import Annotated, Any, Final
 import click
 import typer
 
+from osm_polygon_sentence_relevance.labeling.v2_contracts import (
+    V2_LOGIT_PROMPT_VERSION,
+)
 from osm_polygon_sentence_relevance.operator import preflight as _preflight
 from osm_polygon_sentence_relevance.operator import recorded_job, relay
 from osm_polygon_sentence_relevance.operator.config import (
@@ -1000,7 +1003,21 @@ def _resume_run(run_id: str, args: SimpleNamespace) -> int:
         )
         stager = Stager(ssh)
         stager.prepare(config, layout)
-        assets = stager.prepare_label_assets(config, layout, download_input=True)
+        if config.prompt_version == V2_LOGIT_PROMPT_VERSION:
+            split_job_raw = durable.facts.get("split_output_job_id")
+            if type(split_job_raw) is not int:
+                raise RuntimeError("V2 continuation has no split output")
+            split_output = layout.logs / str(split_job_raw) / "output/sentences.parquet"
+            v2_input = stager.prepare_v2_input(config, layout, split_output)
+            assets = stager.prepare_label_assets(config, layout, download_input=False)
+            assets = type(assets)(
+                v2_input,
+                assets.model_file,
+                assets.tokenizer_dir,
+                assets.llama_server_ready,
+            )
+        else:
+            assets = stager.prepare_label_assets(config, layout, download_input=True)
         if not assets.llama_server_ready:
             ensure_llama_server(ssh, oar, store, layout, args.poll_seconds)
         relay_root_value = durable.facts.get("resume_relay_root")
@@ -1085,6 +1102,8 @@ def _run(args: SimpleNamespace) -> int:
             args, "sampling_h3_resolution", DEFAULT_SAMPLING_H3_RESOLUTION
         ),
     )
+    if config.prompt_version == V2_LOGIT_PROMPT_VERSION and config.stage is Stage.LABEL:
+        raise RuntimeError("worldwide V2 labeling requires --stage all")
     store = StateStore(DATA_ROOT)
     store.load_or_create(config.run_identity)
     _sync_sampling_target(store, config)
@@ -1283,6 +1302,11 @@ def _run(args: SimpleNamespace) -> int:
             )
         else:
             input_parquet = layout.root / "input/sentences.parquet"
+        if config.prompt_version == V2_LOGIT_PROMPT_VERSION:
+            if config.stage is not Stage.ALL:
+                raise RuntimeError("worldwide V2 labeling requires --stage all")
+            _milestone("Enriching split output with pinned polygon areas")
+            input_parquet = stager.prepare_v2_input(config, layout, input_parquet)
         _milestone("Staging immutable labeling assets")
         assets = stager.prepare_label_assets(
             config,

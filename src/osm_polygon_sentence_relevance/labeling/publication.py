@@ -23,6 +23,8 @@ from .releases import (
     release_lane,
     remote_release_path,
 )
+from .v2_contracts import V2_LOGIT_PROMPT_VERSION
+from .v2_finalization import V2_PUBLICATION_FILES, validate_v2_publication
 
 
 class LabelPublicationError(RuntimeError):
@@ -49,8 +51,8 @@ _BASE_RELEASE_FILES: tuple[str, ...] = (
     "assets/reason_code_distribution.png",
 )
 _V2_RELEASE_FILES: tuple[str, ...] = tuple(
-    remote_release_path(ReleaseLane.V2_WORLDWIDE, path) for path in _BASE_RELEASE_FILES
-) + ("v2-worldwide/assets/h3_sentence_distribution.png",)
+    remote_release_path(ReleaseLane.V2_WORLDWIDE, path) for path in V2_PUBLICATION_FILES
+)
 # ``.gitattributes`` must always be preserved verbatim; it is never
 # part of the add/replace/delete set so it survives across releases.
 _GITATTRIBUTES_NAME = ".gitattributes"
@@ -63,6 +65,16 @@ _OBSOLETE_DELETE_ALLOWLIST: frozenset[str] = frozenset(
         "assets/language_distribution.png",
         "assets/slice_yield.html",
         "v2-worldwide/assets/slice_yield.html",
+        "v2-worldwide/assets/joint_label_heatmap.png",
+        "v2-worldwide/assets/polygon_coverage_funnel.png",
+        "v2-worldwide/assets/reason_code_distribution.png",
+    }
+)
+_LEGACY_V2_PLACE_FILES: frozenset[str] = frozenset(
+    {
+        "v2-worldwide/assets/joint_label_heatmap.png",
+        "v2-worldwide/assets/polygon_coverage_funnel.png",
+        "v2-worldwide/assets/reason_code_distribution.png",
     }
 )
 
@@ -200,16 +212,24 @@ def publish_labeled_dataset(
         target_revision is not None and not target_revision.strip()
     ):
         raise LabelPublicationError("dataset ID and target revision must be non-blank")
-    validated = validate_labeled_publication(directory)
-    expected_revision = _expected_revision(directory)
-    target_revision = target_revision or expected_revision
-    _require_release_revision(target_revision, expected_revision)
     try:
         manifest = json.loads((Path(directory) / "manifest.json").read_text())
         lane = release_lane(manifest["run_identity"])
+        is_v2_logit = (
+            lane is ReleaseLane.V2_WORLDWIDE
+            and manifest["run_identity"].get("prompt_version")
+            == V2_LOGIT_PROMPT_VERSION
+        )
     except (OSError, json.JSONDecodeError, KeyError, TypeError) as exc:
         raise LabelPublicationError("label publication lane is missing") from exc
-
+    validated = (
+        validate_v2_publication(directory)
+        if is_v2_logit
+        else validate_labeled_publication(directory)
+    )
+    expected_revision = _expected_revision(directory)
+    target_revision = target_revision or expected_revision
+    _require_release_revision(target_revision, expected_revision)
     if hub_api is None:
         hub_api = _default_hub_api()
     if operation_factory is None:
@@ -250,7 +270,8 @@ def publish_labeled_dataset(
             }
         )
     for remote_path in remote_files:
-        if _classify_remote_path(remote_path) == "obsolete":
+        remove_legacy_v2_asset = remote_path in _LEGACY_V2_PLACE_FILES
+        if _classify_remote_path(remote_path) == "obsolete" or remove_legacy_v2_asset:
             operations.append(
                 {
                     "op": "delete",
@@ -295,8 +316,11 @@ def publish_labeled_dataset(
 
     try:
         readback_root = readback_downloader(dataset_id, oid)
-        readback = validate_labeled_publication(
-            _release_snapshot(Path(readback_root), lane)
+        readback_dir = _release_snapshot(Path(readback_root), lane)
+        readback = (
+            validate_v2_publication(readback_dir)
+            if is_v2_logit
+            else validate_labeled_publication(readback_dir)
         )
     except Exception as exc:
         raise LabelPublicationError("Hub readback validation failed") from exc

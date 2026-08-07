@@ -11,6 +11,8 @@ RETAINED_SHELL = {
     "_submit_gpu_job.sh",
     "run_afghanistan_labeling.sh",
     "run_afghanistan_labeling_job.sh",
+    "run_worldwide_labeling.sh",
+    "run_worldwide_labeling_job.sh",
     "run_streaming_build.sh",
     "run_streaming_build_job.sh",
     "run_streaming_finalization.sh",
@@ -18,6 +20,7 @@ RETAINED_SHELL = {
     "submit_streaming_build.sh",
     "submit_streaming_finalization.sh",
     "submit_afghanistan_labeling.sh",
+    "submit_worldwide_labeling.sh",
 }
 
 

@@ -6,6 +6,7 @@ import shlex
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 
+from osm_polygon_sentence_relevance.labeling.v2_contracts import V2_LOGIT_PROMPT_VERSION
 from osm_polygon_sentence_relevance.operator.config import OperatorConfig, Scope
 from osm_polygon_sentence_relevance.operator.oar import (
     SubmissionRequest,
@@ -47,6 +48,14 @@ class RemoteLayout:
     @property
     def label_output(self) -> PurePosixPath:
         return self.root / "label-output"
+
+    @property
+    def input_dir(self) -> PurePosixPath:
+        return self.root / "input"
+
+    @property
+    def v2_input(self) -> PurePosixPath:
+        return self.input_dir / "v2-sentences.parquet"
 
 
 def split_submission(config: OperatorConfig, layout: RemoteLayout) -> SubmissionRequest:
@@ -117,8 +126,15 @@ def label_submission(
     if revision is None:
         raise ValueError("immutable input revision is required")
     requirements = config.requirements
+    v2 = config.prompt_version == V2_LOGIT_PROMPT_VERSION
+    wrapper_name = (
+        "run_worldwide_labeling_job.sh" if v2 else "run_afghanistan_labeling_job.sh"
+    )
+    submit_name = (
+        "submit_worldwide_labeling.sh" if v2 else "submit_afghanistan_labeling.sh"
+    )
     wrapper_args = (
-        str(layout.repo / "scripts/grid5000/run_afghanistan_labeling_job.sh"),
+        str(layout.repo / "scripts/grid5000" / wrapper_name),
         str(layout.repo),
         str(layout.hf_home),
         str(layout.logs),
@@ -143,7 +159,7 @@ def label_submission(
     if walltime_seconds == DEFAULT_LABEL_WALLTIME_SECONDS and policy_type is None:
         return SubmissionRequest(
             (
-                str(layout.repo / "scripts/grid5000/submit_afghanistan_labeling.sh"),
+                str(layout.repo / "scripts/grid5000" / submit_name),
                 *wrapper_args[1:],
             )
         )

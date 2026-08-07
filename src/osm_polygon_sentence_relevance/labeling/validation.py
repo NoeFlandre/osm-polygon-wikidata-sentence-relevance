@@ -92,4 +92,7 @@ def parse_label_response(raw: str, *, target_sentence: str) -> SentenceLabel:
     )
 
 
-__all__ = ["LabelValidationError", "parse_label_response"]
+__all__ = [
+    "LabelValidationError",
+    "parse_label_response",
+]

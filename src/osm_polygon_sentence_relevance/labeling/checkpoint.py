@@ -86,20 +86,19 @@ class CheckpointStore:
         metadata = self.directory / f"{stem}.json"
         if parquet.exists() or metadata.exists():
             raise CheckpointError("checkpoint batch already exists")
-        table = pa.Table.from_pylist(
-            [
-                {
-                    "sentence_id": r.sentence_id,
-                    "landuse_relevance": r.landuse_relevance.value,
-                    "polygon_relevance": r.polygon_relevance.value,
-                    "landuse_reason": r.landuse_reason,
-                    "polygon_reason": r.polygon_reason,
-                    "evidence": r.evidence,
-                }
-                for r in records
-            ],
-            schema=LABEL_SCHEMA,
-        )
+        rows = [
+            {
+                "sentence_id": record.sentence_id,
+                "landuse_relevance": record.landuse_relevance.value,
+                "polygon_relevance": record.polygon_relevance.value,
+                "landuse_reason": record.landuse_reason,
+                "polygon_reason": record.polygon_reason,
+                "evidence": record.evidence,
+            }
+            for record in records
+        ]
+        schema = LABEL_SCHEMA
+        table = pa.Table.from_pylist(rows, schema=schema)
         sink = pa.BufferOutputStream()
         pq.write_table(table, sink, compression="zstd")
         _atomic_bytes(parquet, sink.getvalue().to_pybytes())
@@ -215,4 +214,8 @@ class CheckpointStore:
         )
 
 
-__all__ = ["LABEL_SCHEMA", "CheckpointError", "CheckpointStore"]
+__all__ = [
+    "LABEL_SCHEMA",
+    "CheckpointError",
+    "CheckpointStore",
+]

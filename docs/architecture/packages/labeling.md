@@ -2,9 +2,12 @@
 
 ## Responsibility
 
-Assigns land-use or land-cover and polygon-relevance labels with a pinned local
-LLM runtime. V2 selection can bound a run with deterministic H3, language, and
-OSM-primary-tag strata; the earlier Afghanistan V1 artifact remains separate.
+The historical V1 lane assigns independent land-use/land-cover and
+polygon-relevance labels with a pinned local LLM runtime. V2 is a separate
+worldwide lane: deterministic area-bucket and H3 strata select the rows, then
+one binary `place_relevance` label asks whether the target place is described
+visually or geographically. The release stores the first-token yes/no scores
+without generated explanations. The Afghanistan V1 artifact remains separate.
 
 ## Public entry points
 
@@ -19,6 +22,11 @@ and publication are isolated under `labeling/`.
 `checkpoint_mirror.py` is an optional operational boundary: it queues each
 validated local batch for one background Hugging Face staging upload without
 making the runner depend on network availability.
+
+`v2_input.py` is the V2-only input boundary. It reads the completed V1-schema
+split output, fetches the pinned upstream polygon metadata one region at a time,
+canonicalizes area buckets, and atomically writes the separate V2 sampling
+input. V1 output files are never rewritten.
 
 ## Invariants
 

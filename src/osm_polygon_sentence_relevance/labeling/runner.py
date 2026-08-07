@@ -168,7 +168,11 @@ class LabelingRunner:
         self.batch_size = batch_size
         self.stop_requested = stop_requested or (lambda: False)
         self.clock = clock
-        self.repair = repair or BoundedRepair(max_attempts=repair_max_attempts)
+        self.repair = repair or BoundedRepair(
+            max_attempts=repair_max_attempts,
+            parser=None,
+            response_contract=None,
+        )
         self.repair_log_path = repair_log_path
         self.checkpoint_mirror = checkpoint_mirror
         self.batch_tracker = batch_tracker
@@ -220,6 +224,8 @@ class LabelingRunner:
                     "attempts": self.repair.stats.to_dict(),
                 }
             )
+        if not isinstance(label, SentenceLabel):
+            raise LabelValidationError("V1 response did not produce two labels")
         return label
 
     @staticmethod
@@ -273,9 +279,10 @@ class LabelingRunner:
             rows = table.take(pa.array(indexes, type=pa.int64())).to_pylist()
             prompt_inputs = [self._prompt(row) for row in rows]
             before = self.clock()
-            responses = self.engine.generate(
-                [build_messages(prompt_input) for prompt_input in prompt_inputs]
-            )
+            batch_messages = [
+                build_messages(prompt_input) for prompt_input in prompt_inputs
+            ]
+            responses = self.engine.generate(batch_messages)
             initial_inference_seconds += max(0.0, self.clock() - before)
             if len(responses) != len(rows):
                 raise ValueError("engine response count does not match request count")
@@ -290,7 +297,7 @@ class LabelingRunner:
             for prompt_input, response, messages in zip(
                 prompt_inputs,
                 responses,
-                [build_messages(prompt_input) for prompt_input in prompt_inputs],
+                batch_messages,
                 strict=True,
             ):
                 try:
@@ -303,6 +310,8 @@ class LabelingRunner:
                 except LabelValidationError:
                     # Fail the batch: do not write partial results.
                     raise
+                if not isinstance(label, SentenceLabel):
+                    raise LabelValidationError("V1 response did not produce two labels")
                 records.append(
                     LabelRecord(
                         sentence_id=prompt_input.sentence_id,

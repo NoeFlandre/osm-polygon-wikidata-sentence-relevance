@@ -1,4 +1,4 @@
-"""Deterministic prompt construction for Afghanistan relevance labels."""
+"""Deterministic prompt construction for the versioned label contracts."""
 
 from __future__ import annotations
 

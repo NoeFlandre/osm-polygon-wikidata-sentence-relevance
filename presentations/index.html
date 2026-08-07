@@ -3,23 +3,35 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Project presentations</title>
-  <link rel="stylesheet" href="shared/styles.css">
+  <title>Sentence relevance project presentations</title>
+  <style>
+    :root { color-scheme: light; font-family: "Helvetica Neue", Arial, sans-serif; color: #16213e; background: #eef3f4; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; }
+    main { width: min(960px, calc(100vw - 48px)); padding: 56px; background: #fff; box-shadow: 0 20px 60px rgba(22, 33, 62, .12); }
+    .eyebrow { color: #176b87; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; }
+    h1 { max-width: 760px; margin: 22px 0 14px; font-size: clamp(36px, 6vw, 68px); line-height: 1.02; letter-spacing: -.04em; }
+    p { max-width: 720px; color: #5b6472; font-size: 20px; line-height: 1.45; }
+    .rule { width: 180px; height: 6px; margin: 28px 0 38px; background: #f2a65a; }
+    .links { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-top: 42px; }
+    a { display: block; padding: 24px; border: 1px solid #cbd6da; color: #176b87; text-decoration: none; font-weight: 700; font-size: 21px; }
+    a:hover { border-color: #176b87; background: #e7f3f5; }
+    small { display: block; margin-top: 10px; color: #5b6472; font-size: 15px; font-weight: 400; }
+    footer { margin-top: 46px; color: #5b6472; font-size: 13px; }
+    @media (max-width: 680px) { main { padding: 32px 26px; } .links { grid-template-columns: 1fr; } }
+  </style>
 </head>
 <body>
   <main class="deck">
-    <section class="slide active" style="display:block; max-width:900px; aspect-ratio:auto; min-height:520px;">
-      <div class="kicker"><span>Project presentations</span><span>01</span></div>
-      <h1>Afghanistan sentence relevance</h1>
-      <p class="subtitle">Two short decks for a first read of the dataset and the codebase.</p>
-      <div class="rule"></div>
-      <div class="two-col equal" style="margin-top:10%;">
-        <a class="outline link" href="afghanistan-dataset-overview/index.html"><strong>Dataset overview</strong><br><span class="muted">Rows, labels, method, provenance, and limits.</span></a>
-        <a class="outline link" href="codebase-overview/index.html"><strong>Codebase overview</strong><br><span class="muted">Pipeline layers, remote execution, state, and publication.</span></a>
-      </div>
-      <p class="lead muted" style="margin-top:12%;">Use the arrow keys or the controls at the bottom of each deck.</p>
-      <div class="footer">Local presentation deliverables · Open the HTML files directly in a browser.</div>
-    </section>
+    <div class="eyebrow">Research overview</div>
+    <h1>OSM polygon sentence relevance</h1>
+    <p>Two concise decks explain the public releases and the system that produces them. V1 is the published Afghanistan proof of concept. V2 is the separate worldwide stratified lane.</p>
+    <div class="rule"></div>
+    <div class="links">
+      <a href="afghanistan-dataset-overview/index.html">Dataset overview<small>V1 Afghanistan and V2 worldwide: data lineage, labels, sampling, and public artifacts.</small></a>
+      <a href="codebase-overview/index.html">Codebase overview<small>Sentence construction, labeling, remote execution, checkpoints, safety, and publication.</small></a>
+    </div>
+    <footer>Open the decks in a browser. Source Markdown is in <code>presentations/source/</code>.</footer>
   </main>
 </body>
 </html>

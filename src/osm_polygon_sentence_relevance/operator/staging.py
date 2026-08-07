@@ -211,5 +211,35 @@ printf 'LABEL_ASSETS_OK llama_ready=%s\\n' "$llama_ready"
             "llama_ready=true" in result.stdout,
         )
 
+    def prepare_v2_input(
+        self,
+        config: OperatorConfig,
+        layout: RemoteLayout,
+        source_parquet: PurePosixPath,
+    ) -> PurePosixPath:
+        """Enrich split output with pinned upstream polygon metadata."""
+
+        if config.input_dataset_revision is None:
+            raise ValueError("immutable input revision is required")
+        output = layout.v2_input
+        script = f"""
+set -euo pipefail
+umask 077
+python={_q(layout.repo / ".venv/bin/python")}
+mkdir -p -m 0700 {_q(layout.input_dir)} {_q(layout.hf_home)}
+"$python" -m osm_polygon_sentence_relevance.labeling.v2_input \\
+  --source {_q(source_parquet)} \\
+  --output {_q(output)} \\
+  --dataset-id {_q(config.input_dataset_id)} \\
+  --revision {_q(config.input_dataset_revision)} \\
+  --cache-dir {_q(layout.hf_home)}
+test -f {_q(output)}
+printf 'V2_INPUT_OK\\n'
+""".strip()
+        result = self._ssh.run(script)
+        if "V2_INPUT_OK" not in result.stdout:
+            raise RuntimeError("remote V2 input preparation failed")
+        return output
+
 
 __all__ = ["LabelAssets", "Stager", "StagingResult"]

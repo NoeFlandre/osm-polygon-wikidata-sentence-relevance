@@ -29,6 +29,7 @@ from osm_polygon_sentence_relevance.operator import (
 from osm_polygon_sentence_relevance.operator.config import (
     DEFAULT_SPLIT_MODEL,
     PROMPT_VERSION,
+    V2_LOGIT_PROMPT_VERSION,
     Grid5000Requirements,
 )
 
@@ -335,7 +336,6 @@ def test_scope_and_region_relationship_validation() -> None:
             input_revision="b" * 40,
             region=None,  # type: ignore[arg-type]
         )
-
     with pytest.raises(ValueError, match=r"region"):
         OperatorConfig.build(
             scope="all",
@@ -344,6 +344,17 @@ def test_scope_and_region_relationship_validation() -> None:
             input_revision="b" * 40,
             region="afghanistan-latest",
         )
+
+
+def test_worldwide_label_defaults_to_single_place_prompt() -> None:
+    config = OperatorConfig.build(
+        scope="all",
+        stage="label",
+        source_commit="a" * 40,
+        input_revision="b" * 40,
+    )
+    assert config.prompt_version == V2_LOGIT_PROMPT_VERSION
+    assert config.run_identity.to_dict()["prompt_version"] == V2_LOGIT_PROMPT_VERSION
 
 
 def test_invalid_revision_and_sha_validation() -> None:

@@ -24,10 +24,16 @@ from osm_polygon_sentence_relevance.operator._config.defaults import (
     DEFAULT_SPLIT_MODEL,
     DEFAULT_TOKENIZER_REPO_ID,
     DEFAULT_TOKENIZER_REVISION,
+    DEFAULT_V2_LABEL_MODEL_FILE,
+    DEFAULT_V2_LABEL_MODEL_FILE_SHA256,
+    DEFAULT_V2_LABEL_MODEL_REPO_ID,
+    DEFAULT_V2_LABEL_MODEL_REVISION,
     INPUT_DATASET_ID,
     OUTPUT_DATASET_ID,
     PROMPT_VERSION,
     SAMPLING_VERSION,
+    V2_LOGIT_PROMPT_VERSION,
+    V2_SAMPLING_VERSION,
 )
 from osm_polygon_sentence_relevance.operator._config.enums import Scope, Stage
 from osm_polygon_sentence_relevance.operator._config.identity import RunIdentity
@@ -85,20 +91,20 @@ class OperatorConfig:
         sampling_target: int | str | None = None,
         sampling_seed: str = DEFAULT_SAMPLING_SEED,
         sampling_h3_resolution: int = DEFAULT_SAMPLING_H3_RESOLUTION,
-        sampling_version: str = SAMPLING_VERSION,
+        sampling_version: str | None = None,
         region: str | None = None,
         input_revision: str | None = None,
         input_dataset_id: str = INPUT_DATASET_ID,
         output_dataset_id: str = OUTPUT_DATASET_ID,
         pipeline_version: str = PIPELINE_VERSION,
         split_model: str = DEFAULT_SPLIT_MODEL,
-        model_repo_id: str = DEFAULT_LABEL_MODEL_REPO_ID,
-        model_revision: str = DEFAULT_LABEL_MODEL_REVISION,
-        model_file: str = DEFAULT_LABEL_MODEL_FILE,
-        model_file_sha256: str = DEFAULT_LABEL_MODEL_FILE_SHA256,
-        tokenizer_repo_id: str = DEFAULT_TOKENIZER_REPO_ID,
-        tokenizer_revision: str = DEFAULT_TOKENIZER_REVISION,
-        prompt_version: str = PROMPT_VERSION,
+        model_repo_id: str | None = None,
+        model_revision: str | None = None,
+        model_file: str | None = None,
+        model_file_sha256: str | None = None,
+        tokenizer_repo_id: str | None = None,
+        tokenizer_revision: str | None = None,
+        prompt_version: str | None = None,
     ) -> OperatorConfig:
         canonical_scope = canonicalize_scope(scope)
         canonical_stage = canonicalize_stage(stage)
@@ -106,6 +112,29 @@ class OperatorConfig:
             canonical_scope, canonical_stage, region
         )
 
+        v2 = canonical_scope is Scope.ALL and prompt_version is None
+        effective_model_repo_id = model_repo_id or (
+            DEFAULT_V2_LABEL_MODEL_REPO_ID if v2 else DEFAULT_LABEL_MODEL_REPO_ID
+        )
+        effective_model_revision = model_revision or (
+            DEFAULT_V2_LABEL_MODEL_REVISION if v2 else DEFAULT_LABEL_MODEL_REVISION
+        )
+        effective_model_file = model_file or (
+            DEFAULT_V2_LABEL_MODEL_FILE if v2 else DEFAULT_LABEL_MODEL_FILE
+        )
+        effective_model_file_sha256 = model_file_sha256 or (
+            DEFAULT_V2_LABEL_MODEL_FILE_SHA256
+            if v2
+            else DEFAULT_LABEL_MODEL_FILE_SHA256
+        )
+        effective_tokenizer_repo_id = tokenizer_repo_id or DEFAULT_TOKENIZER_REPO_ID
+        effective_tokenizer_revision = tokenizer_revision or DEFAULT_TOKENIZER_REVISION
+        effective_prompt_version = (
+            V2_LOGIT_PROMPT_VERSION if v2 else prompt_version or PROMPT_VERSION
+        )
+        effective_sampling_version = sampling_version or (
+            V2_SAMPLING_VERSION if v2 else SAMPLING_VERSION
+        )
         validated_source_commit = validate_hex(
             source_commit, length=40, field="source_commit"
         )
@@ -119,25 +148,29 @@ class OperatorConfig:
         )
         validated_split_model = validate_nonblank_no_ws(split_model, "split_model")
         validated_model_repo = validate_repo_id(
-            model_repo_id, "model_repo_id", expected=DEFAULT_LABEL_MODEL_REPO_ID
+            effective_model_repo_id,
+            "model_repo_id",
+            expected=DEFAULT_V2_LABEL_MODEL_REPO_ID
+            if v2
+            else DEFAULT_LABEL_MODEL_REPO_ID,
         )
         validated_model_revision = validate_hex(
-            model_revision, length=40, field="model_revision"
+            effective_model_revision, length=40, field="model_revision"
         )
-        validated_model_file = validate_model_file(model_file, "model_file")
+        validated_model_file = validate_model_file(effective_model_file, "model_file")
         validated_model_file_sha256 = validate_hex(
-            model_file_sha256, length=64, field="model_file_sha256"
+            effective_model_file_sha256, length=64, field="model_file_sha256"
         )
         validated_tokenizer_repo = validate_repo_id(
-            tokenizer_repo_id,
+            effective_tokenizer_repo_id,
             "tokenizer_repo_id",
             expected=DEFAULT_TOKENIZER_REPO_ID,
         )
         validated_tokenizer_revision = validate_hex(
-            tokenizer_revision, length=40, field="tokenizer_revision"
+            effective_tokenizer_revision, length=40, field="tokenizer_revision"
         )
         validated_prompt_version = validate_nonblank_no_ws(
-            prompt_version, "prompt_version"
+            effective_prompt_version, "prompt_version"
         )
         validated_input_dataset_id = validate_repo_id(
             input_dataset_id,
@@ -165,7 +198,7 @@ class OperatorConfig:
             sampling_target=effective_sampling_target,
             sampling_seed=sampling_seed,
             sampling_h3_resolution=sampling_h3_resolution,
-            sampling_version=sampling_version,
+            sampling_version=effective_sampling_version,
         )
         return cls(
             scope=canonical_scope,

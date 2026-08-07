@@ -19,7 +19,9 @@ to Afghanistan.
   target, deterministic H3/language/OSM-primary-tag strata, and nested
   proportional continuation for larger targets. V2 files are namespaced below
   `v2-worldwide/` on the dataset's existing `main` revision; the published
-  Afghanistan V1 artifact is unchanged.
+  Afghanistan V1 artifact is unchanged. V2 now uses one binary
+  `place_relevance` decision about visual or geographic place description and
+  stores first-token yes/no log-probability scores rather than generated JSON.
 - Added a durable asynchronous checkpoint mirror for Grid'5000 labeling. Each
   completed local batch can be staged to a run-specific
   `.pipeline/checkpoints/<run-id>/` path on Hugging Face `main`; failed uploads

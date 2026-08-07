@@ -32,8 +32,13 @@ This command preserves the V1 Afghanistan workflow. To start the worldwide
 V2 stratified label workflow, use:
 
 ```bash
-uv run osm-polygon-grid5000 run --scope all --stage label
+uv run osm-polygon-grid5000 run --scope all --stage all
 ```
+
+Use `--stage all` for a fresh worldwide run so the operator can first build
+the sentence table and then enrich it with area metadata from the pinned input
+revision. A V2 `--stage label` run is refused unless that enriched input already
+exists.
 
 The operator resolves the input dataset to an immutable revision, selects a
 compatible Grid'5000 site, stages a clean checkout, submits CUDA sentence
@@ -84,7 +89,13 @@ language, and OSM primary tag. Increase `--sampling-target` on `run` or
 run identity and checkpoints stay stable. The generated V2 card includes an H3
 hexagon map of labeled-sentence coverage and links to a separate worldwide
 Trackio dashboard. V1 root files and their Afghanistan dashboard are never
-overwritten by V2.
+overwritten by V2. V2 asks one question per sentence: whether the target place
+is described in visual or geographic terms, including landscape, land cover,
+soil, ecosystems, and visible features. Its only label is
+`place_relevance` (`yes` or `no`). The model emits one token and the release
+stores the first-token `yes` and `no` log-probabilities, their margin, and a
+relative two-class probability. V2 does not generate JSON explanations,
+reason codes, evidence excerpts, or uncertain labels.
 
 ## Current status
 

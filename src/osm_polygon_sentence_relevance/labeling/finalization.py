@@ -23,6 +23,7 @@ from .analytics import (
     render_h3_sentence_distribution,
 )
 from .checkpoint import CheckpointStore
+from .contracts import LabelRecord
 from .releases import (
     V1_TRACKIO_SPACE_ID,
     ReleaseLane,
@@ -591,18 +592,22 @@ def finalize_labeled_dataset(
             "finalization requires exactly one label per input sentence"
         )
     ordered = [by_id[value] for value in ids]
+    identity = store.identity.to_dict()
+    lane = release_lane(identity)
+    if len(ordered) != len(records) or not all(
+        isinstance(record, LabelRecord) for record in ordered
+    ):
+        raise LabelFinalizationError("publication requires two-question labels")
     additions = {
-        "landuse_relevance": [r.landuse_relevance.value for r in ordered],
-        "polygon_relevance": [r.polygon_relevance.value for r in ordered],
-        "landuse_reason": [r.landuse_reason for r in ordered],
-        "polygon_reason": [r.polygon_reason for r in ordered],
-        "label_evidence": [r.evidence for r in ordered],
+        "landuse_relevance": [record.landuse_relevance.value for record in ordered],
+        "polygon_relevance": [record.polygon_relevance.value for record in ordered],
+        "landuse_reason": [record.landuse_reason for record in ordered],
+        "polygon_reason": [record.polygon_reason for record in ordered],
+        "label_evidence": [record.evidence for record in ordered],
     }
     for name, values in additions.items():
         table = table.append_column(name, pa.array(values, type=pa.string()))
     output_dir = Path(output_dir)
-    identity = store.identity.to_dict()
-    lane = release_lane(identity)
     regions = (
         {
             str(value).strip().removesuffix("-latest")
@@ -639,7 +644,7 @@ def finalize_labeled_dataset(
         parquet_path = staging / "sentences.parquet"
         pq.write_table(table, parquet_path, compression="zstd")
         os.chmod(parquet_path, 0o600)
-        stats: dict[str, Any] = {
+        stats = {
             "row_count": table.num_rows,
             "landuse_relevance": _distribution(additions["landuse_relevance"]),
             "polygon_relevance": _distribution(additions["polygon_relevance"]),
@@ -667,14 +672,14 @@ def finalize_labeled_dataset(
                 ]
             ),
         }
-        analytics = build_label_analytics(_analytics_table(table))
-        stats["analytics"] = analytics.to_dict()
+        label_analytics = build_label_analytics(_analytics_table(table))
+        stats["analytics"] = label_analytics.to_dict()
         timing_path = store.root / "timing.json"
         timing = json.loads(timing_path.read_text()) if timing_path.is_file() else {}
         scope_label = _scope_label(table)
         publication_revision = _publication_revision(identity)
         _render_plots(table, staging / "assets", scope_label=scope_label)
-        render_analytics_assets(analytics, staging / "assets")
+        render_analytics_assets(label_analytics, staging / "assets")
         if lane is ReleaseLane.V2_WORLDWIDE:
             stats["h3_sentence_distribution"] = render_h3_sentence_distribution(
                 table,
@@ -683,11 +688,11 @@ def finalize_labeled_dataset(
                 scope_label=scope_label,
             )
         artifact_names = (
-            "sentences.parquet",
             "assets/label_distribution.png",
             "assets/positive_languages.png",
-            *(_ANALYTICS_ASSETS),
+            *_ANALYTICS_ASSETS,
         )
+        artifact_names = ("sentences.parquet", *artifact_names)
         if lane is ReleaseLane.V2_WORLDWIDE:
             artifact_names += (f"assets/{H3_MAP_ASSET_NAME}",)
         artifact_sha256 = {name: _sha256(staging / name) for name in artifact_names}
@@ -786,10 +791,9 @@ def validate_labeled_publication(directory: Path) -> ValidatedLabeledPublication
         "sentences.parquet",
         "assets/label_distribution.png",
         "assets/positive_languages.png",
-        *(_ANALYTICS_ASSETS),
+        *_ANALYTICS_ASSETS,
+        *((f"assets/{H3_MAP_ASSET_NAME}",) if lane is ReleaseLane.V2_WORLDWIDE else ()),
     )
-    if lane is ReleaseLane.V2_WORLDWIDE:
-        artifact_names += (f"assets/{H3_MAP_ASSET_NAME}",)
     for name in artifact_names:
         if artifact_sha256.get(name) != _sha256(directory / name):
             raise LabelFinalizationError("artifact SHA-256 mismatch")

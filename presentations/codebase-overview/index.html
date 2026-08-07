@@ -1,151 +1,2701 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Codebase overview</title>
-  <link rel="stylesheet" href="../shared/styles.css">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>How the sentence relevance pipeline works</title>
+
+<!-- KaTeX for LaTeX math -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.21/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.21/dist/katex.min.js"></script>
+
+<!-- Chart.js for inline charts -->
+<script defer src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+
+<!-- highlight.js for code syntax highlighting -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.11.1/build/styles/github.min.css">
+<script defer src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.11.1/build/highlight.min.js"></script>
+
+<style>
+/* Colloquium Default Theme */
+
+/* ===== Custom Properties ===== */
+:root {
+    --colloquium-bg: #ffffff;
+    --colloquium-text: #1a1a2e;
+    --colloquium-heading: #16213e;
+    --colloquium-accent: #0f3460;
+    --colloquium-link: #e94560;
+    --colloquium-code-bg: #f4f4f8;
+    --colloquium-code-text: #1a1a2e;
+    --colloquium-muted: #6b7280;
+    --colloquium-border: #e5e7eb;
+    --colloquium-progress-bg: #e5e7eb;
+    --colloquium-progress-fill: #0f3460;
+
+    --colloquium-font-body: "Inter", "Helvetica Neue", Arial, sans-serif;
+    --colloquium-font-heading: "Inter", "Helvetica Neue", Arial, sans-serif;
+    --colloquium-font-mono: "JetBrains Mono", "Fira Code", "Consolas", monospace;
+
+    /* 16:9 reference dimensions — slides are authored at this size and scaled */
+    --colloquium-slide-width: 1280;
+    --colloquium-slide-height: 720;
+    --colloquium-slide-padding: 60px;
+}
+
+/* ===== Reset & Base ===== */
+*, *::before, *::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+html, body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    font-family: var(--colloquium-font-body);
+    color: var(--colloquium-text);
+    background: #000;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+
+/* ===== Slide Container — 16:9 scaling ===== */
+/* The deck is a fixed 1280x720 canvas that gets CSS-transformed to fit the viewport */
+.colloquium-deck {
+    width: 1280px;
+    height: 720px;
+    position: absolute;
+    top: 0;
+    left: 0;
+    transform-origin: 0 0;
+    background: var(--colloquium-bg);
+    overflow: hidden;
+}
+
+.slide {
+    display: none;
+    flex-direction: column;
+    justify-content: flex-start;
+    width: 1280px;
+    height: 720px;
+    padding: var(--colloquium-slide-padding);
+    position: absolute;
+    top: 0;
+    left: 0;
+    overflow: visible;
+    font-size: 24px;
+    line-height: 1.5;
+    background: var(--colloquium-bg);
+}
+
+.slide.active {
+    display: flex;
+}
+
+/* ===== Typography ===== */
+.slide h1 {
+    font-family: var(--colloquium-font-heading);
+    font-size: 2.2em;
+    font-weight: 700;
+    color: var(--colloquium-heading);
+    margin-bottom: 0.4em;
+    line-height: 1.2;
+}
+
+.slide h2 {
+    font-family: var(--colloquium-font-heading);
+    font-size: 1.6em;
+    font-weight: 600;
+    color: var(--colloquium-heading);
+    margin-bottom: 0.5em;
+    line-height: 1.3;
+}
+
+.slide h3 {
+    font-family: var(--colloquium-font-heading);
+    font-size: 1.2em;
+    font-weight: 600;
+    color: var(--colloquium-heading);
+    margin-bottom: 0.4em;
+}
+
+.slide p {
+    margin-bottom: 0.8em;
+}
+
+.slide p:last-child {
+    margin-bottom: 0;
+}
+
+.slide strong {
+    font-weight: 600;
+}
+
+.slide em {
+    font-style: italic;
+}
+
+/* ===== Lists ===== */
+.slide ul, .slide ol {
+    margin-bottom: 0.8em;
+    padding-left: 1.4em;
+}
+
+.slide li {
+    margin-bottom: 0.3em;
+}
+
+.slide li::marker {
+    color: var(--colloquium-accent);
+}
+
+/* ===== Links ===== */
+.slide a {
+    color: var(--colloquium-link);
+    text-decoration: none;
+    border-bottom: 1px solid transparent;
+    transition: border-color 0.2s;
+}
+
+.slide a:hover {
+    border-bottom-color: var(--colloquium-link);
+}
+
+/* ===== Code ===== */
+.slide code {
+    font-family: var(--colloquium-font-mono);
+    font-size: 0.85em;
+    background: var(--colloquium-code-bg);
+    padding: 0.15em 0.4em;
+    border-radius: 4px;
+    white-space: nowrap;
+}
+
+.slide pre {
+    background: var(--colloquium-code-bg);
+    border-radius: 8px;
+    padding: 1em 1.2em;
+    margin-bottom: 0.8em;
+    overflow-x: hidden;
+    font-size: 0.75em;
+    line-height: 1.5;
+}
+
+.slide pre code {
+    background: none;
+    padding: 0;
+    font-size: inherit;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+}
+
+/* ===== Images ===== */
+.slide img {
+    max-width: 100%;
+    max-height: 100%;
+    border-radius: 4px;
+    object-fit: contain;
+}
+
+.slide .slide-content {
+    flex: 1;
+    min-height: 0;
+    overflow: visible;
+}
+
+.slide .slide-content img {
+    max-height: calc(720px - var(--colloquium-slide-padding) * 2 - 100px);
+    display: block;
+}
+
+.colloquium-iframe-container {
+    max-width: 100%;
+}
+
+.colloquium-iframe {
+    display: block;
+    max-width: 100%;
+}
+
+.align-center .slide-content > .colloquium-iframe-container {
+    margin-left: auto;
+    margin-right: auto;
+}
+
+.align-left .slide-content > .colloquium-iframe-container {
+    margin-right: auto;
+}
+
+.align-right .slide-content > .colloquium-iframe-container {
+    margin-left: auto;
+}
+
+.slide figure.colloquium-figure {
+    margin: 0 auto 0.8em;
+    max-width: 100%;
+    width: fit-content;
+}
+
+.slide figure.colloquium-figure > img {
+    display: block;
+}
+
+.slide figure.colloquium-figure > figcaption {
+    margin-top: 0.45em;
+    font-size: 0.6em;
+    line-height: 1.35;
+    color: var(--colloquium-muted);
+}
+
+.slide.figure-caption,
+.slide.figure-captions {
+    counter-reset: colloquium-figure;
+}
+
+.slide.figure-caption figure.colloquium-figure,
+.slide.figure-captions figure.colloquium-figure {
+    counter-increment: colloquium-figure;
+}
+
+.slide.figure-caption figure.colloquium-figure > figcaption::before,
+.slide.figure-captions figure.colloquium-figure > figcaption::before {
+    content: "Figure " counter(colloquium-figure) ": ";
+    color: var(--colloquium-heading);
+    font-weight: 600;
+}
+
+/* ===== Box ===== */
+.colloquium-box {
+    border-radius: 18px;
+    padding: 0.85em 1em;
+    width: 100%;
+    box-sizing: border-box;
+}
+
+.colloquium-box--accent {
+    background: var(--colloquium-accent);
+    color: white;
+}
+
+.colloquium-box--muted {
+    background: var(--colloquium-code-bg);
+    color: var(--colloquium-text);
+}
+
+.colloquium-box--surface {
+    background: color-mix(in srgb, var(--colloquium-bg) 85%, white 15%);
+    color: var(--colloquium-text);
+    border: 1px solid var(--colloquium-border);
+}
+
+.colloquium-box--align-center {
+    text-align: center;
+}
+
+.colloquium-box--align-right {
+    text-align: right;
+}
+
+.colloquium-box-title {
+    font-weight: 700;
+    margin-bottom: 0.35em;
+}
+
+.colloquium-box-content > :first-child {
+    margin-top: 0;
+}
+
+.colloquium-box-content > :last-child {
+    margin-bottom: 0;
+}
+
+.colloquium-box ul,
+.colloquium-box ol {
+    margin-bottom: 0;
+    padding-left: 1.25em;
+}
+
+.colloquium-box li::marker {
+    color: var(--colloquium-accent);
+}
+
+.colloquium-box--compact .colloquium-box-title {
+    margin-bottom: 0.25em;
+}
+
+.colloquium-box--compact .colloquium-box-content p {
+    margin: 0.3em 0;
+}
+
+.colloquium-box--compact ul,
+.colloquium-box--compact ol {
+    margin-top: 0.35em;
+    margin-bottom: 0;
+    padding-left: 1.2em;
+}
+
+.colloquium-box--compact li {
+    margin-bottom: 0.08em;
+    line-height: 1.14;
+}
+
+.colloquium-box--compact li + li {
+    margin-top: 0.02em;
+}
+
+.colloquium-box--accent li::marker {
+    color: white;
+}
+
+.colloquium-box--accent a,
+.colloquium-box--accent strong,
+.colloquium-box--accent em,
+.colloquium-box--accent code {
+    color: inherit;
+}
+
+.colloquium-box--accent code {
+    background: color-mix(in srgb, black 12%, transparent);
+}
+
+/* ===== Charts ===== */
+.colloquium-chart-container {
+    width: 100%;
+    height: 400px;
+    margin: 0.5em 0;
+}
+
+.slide .slide-content img.colloquium-chart-print {
+    display: none;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    max-height: none;
+}
+
+/* ===== Tables ===== */
+.slide table {
+    border-collapse: collapse;
+    margin-bottom: 0.8em;
+    font-size: 0.85em;
+    width: 100%;
+}
+
+.slide th, .slide td {
+    border: 1px solid var(--colloquium-border);
+    padding: 0.4em 0.7em;
+    text-align: left;
+}
+
+.slide th {
+    background: var(--colloquium-code-bg);
+    font-weight: 600;
+}
+
+/* ===== Blockquotes ===== */
+.slide blockquote {
+    border-left: 4px solid var(--colloquium-accent);
+    padding-left: 1em;
+    margin-bottom: 0.8em;
+    color: var(--colloquium-muted);
+    font-style: italic;
+}
+
+/* ===== Horizontal Rule ===== */
+.slide hr {
+    border: none;
+    border-top: 2px solid var(--colloquium-border);
+    margin: 1em 0;
+}
+
+/* ===== Math (KaTeX) ===== */
+.slide .katex-display {
+    margin: 0.8em 0;
+    overflow-x: hidden;
+    overflow-x: clip;
+    overflow-y: visible;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+    width: 100%;
+    touch-action: pan-y;
+    overscroll-behavior-x: none;
+}
+
+.slide .katex-display .katex {
+    max-width: 100%;
+    pointer-events: none;
+}
+
+.slide .katex-display::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+}
+
+/* ===== Layout: Title Slide ===== */
+.slide--title {
+    justify-content: center;
+    align-items: center;
+    text-align: center;
+}
+
+.slide--title.active {
+    display: flex;
+}
+
+.slide--title h1 {
+    font-size: 2.8em;
+    margin-bottom: 0.3em;
+}
+
+.slide--title .slide-content {
+    flex: 0 0 auto;
+}
+
+.slide--title .slide-content p {
+    font-size: 1.1em;
+    color: var(--colloquium-muted);
+}
+
+/* Shared title-slide components */
+.colloquium-title-eyebrow {
+    font-size: 0.72em;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--colloquium-accent);
+    margin-bottom: 1.1em;
+}
+
+.colloquium-title-rule {
+    width: 84px;
+    height: 4px;
+    border-radius: 999px;
+    background: var(--colloquium-accent);
+    margin-bottom: 1.4em;
+}
+
+.colloquium-title-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15em;
+}
+
+.colloquium-title-meta p {
+    margin: 0;
+    color: var(--colloquium-muted);
+}
+
+.colloquium-title-name {
+    font-size: 1.55em;
+    font-weight: 500;
+    color: var(--colloquium-heading);
+}
+
+.colloquium-title-note {
+    font-size: 0.9em;
+    line-height: 1.45;
+    color: var(--colloquium-muted);
+    max-width: 26em;
+}
+
+/* ===== Layout: Title Left ===== */
+.slide--title-left {
+    justify-content: center;
+    align-items: flex-start;
+    text-align: left;
+    padding: 72px 84px 60px;
+}
+
+.slide--title-left.active {
+    display: flex;
+}
+
+.slide--title-left h1 {
+    max-width: 980px;
+    font-size: 3em;
+    line-height: 1.02;
+    letter-spacing: -0.05em;
+    margin-bottom: 0.95em;
+}
+
+.slide--title-left .slide-content {
+    flex: 0 0 auto;
+    max-width: 560px;
+}
+
+.slide--title-left .slide-content > * + * {
+    margin-top: 1em;
+}
+
+/* ===== Layout: Title Sidebar ===== */
+.slide--title-sidebar {
+    padding: 72px 84px 60px;
+}
+
+.slide--title-sidebar.active {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 300px;
+    column-gap: 56px;
+    align-content: center;
+    align-items: start;
+}
+
+.slide--title-sidebar h1 {
+    grid-column: 1;
+    align-self: start;
+    max-width: 760px;
+    font-size: 2.9em;
+    line-height: 1.03;
+    letter-spacing: -0.045em;
+    text-align: left;
+    margin: 0;
+}
+
+.slide--title-sidebar .slide-content {
+    grid-column: 2;
+    align-self: start;
+    position: relative;
+    padding: 0 0 24px 28px;
+}
+
+.slide--title-sidebar .slide-content::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 24px;
+    left: 0;
+    width: 3px;
+    border-radius: 999px;
+    background: var(--colloquium-accent);
+}
+
+.slide--title-sidebar .slide-content > * + * {
+    margin-top: 1em;
+}
+
+.slide--title-sidebar.title-sidebar-rule-full .slide-content {
+    align-self: stretch;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+}
+
+.slide--title-sidebar.title-sidebar-rule-full .slide-content::before {
+    bottom: 0;
+}
+
+/* Title-sidebar uses grid, so vertical positioning maps to align-content. */
+.slide--title-sidebar.valign-top.active {
+    align-content: start;
+}
+
+.slide--title-sidebar.valign-center.active {
+    align-content: center;
+}
+
+.slide--title-sidebar.valign-bottom.active {
+    align-content: end;
+}
+
+/* ===== Layout: Title Banner ===== */
+.slide--title-banner {
+    justify-content: flex-start;
+    align-items: flex-start;
+    text-align: left;
+    padding: 72px 84px 60px;
+}
+
+.slide--title-banner.active {
+    display: flex;
+}
+
+.slide--title-banner h1 {
+    max-width: 980px;
+    font-size: 3em;
+    line-height: 1.02;
+    letter-spacing: -0.05em;
+    margin-bottom: 0.45em;
+}
+
+.slide--title-banner .slide-content {
+    flex: 1;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    max-width: 620px;
+}
+
+.slide--title-banner .slide-content > * + * {
+    margin-top: 1em;
+}
+
+/* ===== Layout: Section Break ===== */
+.slide--section-break {
+    justify-content: center;
+    align-items: center;
+    text-align: center;
+    background: var(--colloquium-accent);
+    color: #ffffff;
+}
+
+.slide--section-break.active {
+    display: flex;
+}
+
+.slide--section-break h2 {
+    color: #ffffff;
+    font-size: 2.2em;
+}
+
+.slide--section-break .slide-content {
+    color: rgba(255, 255, 255, 0.85);
+}
+
+/* ===== Layout: Two Column ===== */
+.slide--two-column .slide-content {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 2em;
+    align-items: start;
+    width: 100%;
+}
+
+/* ===== Layout: Image Left ===== */
+.slide--image-left .slide-content {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 2em;
+    align-items: center;
+    width: 100%;
+}
+
+.slide--image-left .slide-content img {
+    max-height: 500px;
+}
+
+/* ===== Layout: Image Right ===== */
+.slide--image-right .slide-content {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 2em;
+    align-items: center;
+    width: 100%;
+}
+
+.slide--image-right .slide-content img {
+    max-height: 500px;
+    order: 2;
+}
+
+/* ===== Layout: Code ===== */
+.slide--code pre {
+    font-size: 0.7em;
+    max-height: 500px;
+}
+
+/* ===== Utility: Title Position ===== */
+.title-top.active { justify-content: flex-start; }
+.title-center.active { justify-content: center; }
+.title-center.active > h1, .title-center.active > h2 { text-align: center; }
+.title-hidden h1, .title-hidden h2 { display: none; }
+
+/* ===== Utility: Text Alignment ===== */
+.align-left.active { text-align: left; }
+.align-center.active { text-align: center; }
+.align-right.active { text-align: right; }
+
+.align-center.active .slide-content > img,
+.align-center.active .slide-content > p > img {
+    display: block;
+    margin-left: auto;
+    margin-right: auto;
+}
+
+.align-left.active .slide-content > img,
+.align-left.active .slide-content > p > img {
+    display: block;
+    margin-right: auto;
+}
+
+.align-right.active .slide-content > img,
+.align-right.active .slide-content > p > img {
+    display: block;
+    margin-left: auto;
+}
+
+/* ===== Utility: Vertical Alignment ===== */
+.valign-top.active { justify-content: flex-start; }
+.valign-center.active { justify-content: center; }
+.valign-bottom.active { justify-content: flex-end; }
+
+/* ===== Utility: Columns ===== */
+.colloquium-grid {
+    display: grid;
+    gap: 2em;
+    align-items: stretch;
+    width: 100%;
+}
+
+/* ===== Utility: Rows ===== */
+.colloquium-rows {
+    display: grid;
+    gap: 0.9em;
+    width: 100%;
+    min-height: 0;
+    flex: 1;
+}
+
+.colloquium-row {
+    min-height: 0;
+}
+
+/* Images in grid layouts: fit within the available content height */
+.colloquium-grid img {
+    width: auto;
+    max-width: 100%;
+    height: auto;
+    max-height: calc(720px - var(--colloquium-slide-padding) * 2 - 100px);
+    object-fit: contain;
+}
+
+.colloquium-rows img {
+    width: auto;
+    max-width: 100%;
+    height: auto;
+    max-height: 100%;
+    object-fit: contain;
+}
+
+.colloquium-grid > .col,
+.colloquium-rows > .colloquium-row {
+    min-width: 0;
+    min-height: 0;
+    overflow: visible;
+}
+
+.slide .slide-content:has(> figure.colloquium-figure:first-child:last-child),
+.slide .colloquium-grid > .col:has(> figure.colloquium-figure:first-child:last-child),
+.slide .colloquium-row:has(> figure.colloquium-figure:first-child:last-child) {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-start;
+}
+
+.colloquium-grid > .col > :last-child,
+.colloquium-rows > .colloquium-row > :last-child {
+    margin-bottom: 0;
+}
+
+/* Standalone images inside grid cells should fit the cell by default. */
+.slide .colloquium-grid > .col > p:first-child:last-child:has(> img),
+.slide .colloquium-row > p:first-child:last-child:has(> img) {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    justify-content: center;
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    overflow: hidden;
+}
+
+.slide.img-valign-top .colloquium-grid > .col > p:first-child:last-child:has(> img),
+.slide.img-valign-top .colloquium-row > p:first-child:last-child:has(> img) {
+    align-items: flex-start;
+}
+
+.slide.img-valign-center .colloquium-grid > .col > p:first-child:last-child:has(> img),
+.slide.img-valign-center .colloquium-row > p:first-child:last-child:has(> img) {
+    align-items: center;
+}
+
+.slide.img-valign-bottom .colloquium-grid > .col > p:first-child:last-child:has(> img),
+.slide.img-valign-bottom .colloquium-row > p:first-child:last-child:has(> img) {
+    align-items: flex-end;
+}
+
+.slide.img-valign-center .slide-content:has(> figure.colloquium-figure:first-child:last-child),
+.slide.img-valign-center .colloquium-grid > .col:has(> figure.colloquium-figure:first-child:last-child),
+.slide.img-valign-center .colloquium-row:has(> figure.colloquium-figure:first-child:last-child) {
+    justify-content: center;
+}
+
+.slide.img-valign-bottom .slide-content:has(> figure.colloquium-figure:first-child:last-child),
+.slide.img-valign-bottom .colloquium-grid > .col:has(> figure.colloquium-figure:first-child:last-child),
+.slide.img-valign-bottom .colloquium-row:has(> figure.colloquium-figure:first-child:last-child) {
+    justify-content: flex-end;
+}
+
+.slide .slide-content > figure.colloquium-figure:first-child:last-child,
+.slide .colloquium-grid > .col > figure.colloquium-figure:first-child:last-child,
+.slide .colloquium-row > figure.colloquium-figure:first-child:last-child {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: flex-start;
+    justify-content: flex-start;
+    width: auto;
+    height: auto;
+    max-height: none;
+    margin: 0;
+    overflow: visible;
+}
+
+.slide .colloquium-grid > .col > p:first-child:last-child:has(> img) > img,
+.slide .colloquium-row > p:first-child:last-child:has(> img) > img {
+    width: 100%;
+    height: 100%;
+    flex: 1 1 auto;
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+    object-position: top center;
+    min-height: 0;
+}
+
+.slide .slide-content > figure.colloquium-figure:first-child:last-child > img,
+.slide .colloquium-grid > .col > figure.colloquium-figure:first-child:last-child > img,
+.slide .colloquium-row > figure.colloquium-figure:first-child:last-child > img {
+    width: auto;
+    height: auto;
+    flex: 0 0 auto;
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+    object-position: top center;
+    min-height: 0;
+}
+
+.slide.img-valign-top .colloquium-grid > .col > p:first-child:last-child:has(> img) > img,
+.slide.img-valign-top .colloquium-row > p:first-child:last-child:has(> img) > img,
+.slide.img-valign-top .slide-content > figure.colloquium-figure:first-child:last-child > img,
+.slide.img-valign-top .colloquium-grid > .col > figure.colloquium-figure:first-child:last-child > img,
+.slide.img-valign-top .colloquium-row > figure.colloquium-figure:first-child:last-child > img {
+    object-position: top center;
+}
+
+.slide.img-valign-center .colloquium-grid > .col > p:first-child:last-child:has(> img) > img,
+.slide.img-valign-center .colloquium-row > p:first-child:last-child:has(> img) > img,
+.slide.img-valign-center .slide-content > figure.colloquium-figure:first-child:last-child > img,
+.slide.img-valign-center .colloquium-grid > .col > figure.colloquium-figure:first-child:last-child > img,
+.slide.img-valign-center .colloquium-row > figure.colloquium-figure:first-child:last-child > img {
+    object-position: center center;
+}
+
+.slide.img-valign-bottom .colloquium-grid > .col > p:first-child:last-child:has(> img) > img,
+.slide.img-valign-bottom .colloquium-row > p:first-child:last-child:has(> img) > img,
+.slide.img-valign-bottom .slide-content > figure.colloquium-figure:first-child:last-child > img,
+.slide.img-valign-bottom .colloquium-grid > .col > figure.colloquium-figure:first-child:last-child > img,
+.slide.img-valign-bottom .colloquium-row > figure.colloquium-figure:first-child:last-child > img {
+    object-position: bottom center;
+}
+
+.img-overflow .colloquium-grid > .col,
+.img-overflow .colloquium-rows > .colloquium-row,
+.img-overflow .slide-content {
+    overflow: visible;
+}
+
+.slide.img-overflow .colloquium-grid > .col > p:first-child:last-child:has(> img),
+.slide.img-overflow .colloquium-row > p:first-child:last-child:has(> img),
+.slide.img-overflow .slide-content > figure.colloquium-figure:first-child:last-child,
+.slide.img-overflow .colloquium-grid > .col > figure.colloquium-figure:first-child:last-child,
+.slide.img-overflow .colloquium-row > figure.colloquium-figure:first-child:last-child {
+    overflow: visible;
+}
+
+.slide.img-overflow .colloquium-grid > .col > p:first-child:last-child:has(> img) > img,
+.slide.img-overflow .colloquium-row > p:first-child:last-child:has(> img) > img,
+.slide.img-overflow .slide-content > figure.colloquium-figure:first-child:last-child > img,
+.slide.img-overflow .colloquium-grid > .col > figure.colloquium-figure:first-child:last-child > img,
+.slide.img-overflow .colloquium-row > figure.colloquium-figure:first-child:last-child > img {
+    width: auto;
+    height: auto;
+    flex: 0 0 auto;
+    max-width: none;
+    max-height: none;
+}
+
+/* ===== Utility: Image Alignment (independent of title) ===== */
+.img-align-center .slide-content img,
+.img-align-left .slide-content img,
+.img-align-right .slide-content img {
+    display: block;
+}
+
+.img-align-center .slide-content img { margin-left: auto; margin-right: auto; }
+.img-align-left .slide-content img { margin-right: auto; }
+.img-align-right .slide-content img { margin-left: auto; }
+
+/* ===== Utility: Image Fill ===== */
+.img-fill .slide-content img {
+    max-height: none;
+    max-width: none;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+}
+.img-fill .slide-content {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 0;
+}
+
+/* ===== Utility: Padding ===== */
+.pad-compact.active { padding: 30px; }
+.pad-normal.active  { padding: 60px; }
+.pad-wide.active    { padding: 90px; }
+
+/* ===== Utility: Font Size (slide-level) ===== */
+.size-small.active  { font-size: 20px; }
+.size-normal.active { font-size: 24px; }
+.size-large.active  { font-size: 28px; }
+
+/* ===== Utility: Inline/Block Text Size ===== */
+.text-xs { font-size: 0.65em; }
+.text-sm { font-size: 0.8em; }
+.text-base { font-size: 1em; }
+.text-lg { font-size: 1.2em; }
+.text-xl { font-size: 1.4em; }
+.text-2xl { font-size: 1.7em; }
+.text-3xl { font-size: 2.2em; }
+.text-4xl { font-size: 2.8em; }
+
+/* ===== Utility: Spacing ===== */
+.colloquium-spacer-sm { height: 0.75em; }
+.colloquium-spacer-md { height: 1.25em; }
+.colloquium-spacer-lg { height: 2em; }
+
+/* ===== Utility: Footnotes ===== */
+.colloquium-footnote {
+    margin-top: 1em;
+    font-size: 0.68em;
+    line-height: 1.35;
+    color: var(--colloquium-muted);
+}
+
+.colloquium-footnote p {
+    margin: 0.35em 0 0;
+}
+
+.colloquium-footnote p:first-child {
+    margin-top: 0;
+}
+
+/* ===== Fragments (incremental reveal) ===== */
+.fragment[data-fragment-index] {
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.35s ease;
+}
+.fragment[data-fragment-index].visible {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+/* ===== Footer (inside each slide) ===== */
+.colloquium-footer {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 24px;
+    font-size: 13px;
+    color: var(--colloquium-muted);
+    user-select: none;
+}
+
+.colloquium-footer-left,
+.colloquium-footer-center,
+.colloquium-footer-right {
+    display: flex;
+    align-items: center;
+}
+
+.colloquium-footer-left   { justify-content: flex-start; }
+.colloquium-footer-center { justify-content: center; flex: 1; }
+.colloquium-footer-right  { justify-content: flex-end; }
+
+.colloquium-footer-nav {
+    cursor: pointer;
+}
+
+.slide .colloquium-footer-logo {
+    height: 24px;
+    width: auto;
+    border-radius: 0;
+    max-height: none;
+}
+
+.colloquium-counter {
+    cursor: pointer;
+    font-variant-numeric: tabular-nums;
+    opacity: 0.6;
+    transition: opacity 0.2s;
+}
+
+.colloquium-counter:hover {
+    opacity: 1;
+}
+
+.colloquium-footer-nav:hover {
+    color: var(--colloquium-accent);
+}
+
+/* Inverted footer on section breaks */
+.slide--section-break .colloquium-footer {
+    color: rgba(255, 255, 255, 0.6);
+}
+
+/* ===== Slide Picker Overlay ===== */
+.colloquium-picker-overlay {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 200;
+}
+
+.colloquium-picker-overlay.active {
+    display: block;
+}
+
+.colloquium-picker {
+    position: absolute;
+    bottom: 48px;
+    right: 24px;
+    background: #fff;
+    border-radius: 12px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+    max-height: 70vh;
+    overflow-y: auto;
+    width: 360px;
+    padding: 8px 0;
+}
+
+.colloquium-picker-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    padding: 10px 20px;
+    border: none;
+    background: none;
+    font-family: var(--colloquium-font-body);
+    font-size: 15px;
+    color: var(--colloquium-text);
+    cursor: pointer;
+    text-align: left;
+}
+
+.colloquium-picker-title {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.colloquium-picker-item:hover {
+    background: var(--colloquium-code-bg);
+}
+
+.colloquium-picker-item.current {
+    color: var(--colloquium-accent);
+    font-weight: 600;
+}
+
+.colloquium-picker-num {
+    min-width: 28px;
+    color: var(--colloquium-muted);
+    font-variant-numeric: tabular-nums;
+    font-size: 13px;
+    text-align: right;
+}
+
+.colloquium-picker-item.current .colloquium-picker-num {
+    color: var(--colloquium-accent);
+}
+
+/* ===== Picker Trigger ===== */
+.colloquium-picker-trigger {
+    position: fixed;
+    right: 16px;
+    bottom: 16px;
+    z-index: 155;
+    display: none;
+    align-items: center;
+    gap: 10px;
+    border: none;
+    border-radius: 999px;
+    padding: 10px 14px;
+    background: rgba(255, 255, 255, 0.92);
+    color: var(--colloquium-heading);
+    font-family: var(--colloquium-font-body);
+    cursor: pointer;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.18);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+}
+
+.colloquium-picker-trigger:hover {
+    background: #fff;
+}
+
+.colloquium-picker-trigger-label {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--colloquium-muted);
+}
+
+.colloquium-picker-trigger-count {
+    font-size: 14px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    color: var(--colloquium-accent);
+}
+
+body.colloquium-embedded .colloquium-picker-trigger {
+    display: none !important;
+}
+
+/* ===== Present Button ===== */
+.colloquium-present {
+    position: fixed;
+    top: 16px;
+    right: 16px;
+    z-index: 150;
+    width: 40px;
+    height: 40px;
+    border: none;
+    border-radius: 50%;
+    background: var(--colloquium-accent);
+    color: #fff;
+    font-size: 16px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    transition: opacity 0.3s;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+}
+
+body:hover .colloquium-present {
+    opacity: 0.7;
+}
+
+.colloquium-present:hover {
+    opacity: 1 !important;
+}
+
+/* Hide when already fullscreen */
+:fullscreen .colloquium-present {
+    display: none;
+}
+
+@media (hover: none) and (pointer: coarse) {
+    .colloquium-present {
+        display: none !important;
+    }
+
+    .colloquium-picker-trigger {
+        display: flex;
+        right: max(12px, env(safe-area-inset-right));
+        bottom: max(12px, env(safe-area-inset-bottom));
+        min-height: 52px;
+        padding: 12px 16px;
+        gap: 12px;
+        background: rgba(255, 255, 255, 0.96);
+        box-shadow: 0 6px 24px rgba(0,0,0,0.22);
+    }
+
+    .colloquium-picker-trigger-label {
+        font-size: 12px;
+    }
+
+    .colloquium-picker-trigger-count {
+        font-size: 16px;
+    }
+
+    .colloquium-picker {
+        right: 12px;
+        left: 12px;
+        bottom: 76px;
+        width: auto;
+        max-height: min(72vh, 560px);
+    }
+}
+
+/* ===== Overflow Warning ===== */
+.colloquium-overflow-warn {
+    position: absolute;
+    bottom: 40px;
+    left: 0;
+    right: 0;
+    height: 4px;
+    background: repeating-linear-gradient(
+        90deg, #e94560 0, #e94560 8px, transparent 8px, transparent 16px
+    );
+    opacity: 0.8;
+    pointer-events: none;
+}
+
+:fullscreen .colloquium-overflow-warn {
+    display: none;
+}
+
+/* ===== Progress Bar ===== */
+.colloquium-progress {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    height: 3px;
+    background: var(--colloquium-progress-bg);
+    z-index: 100;
+}
+
+.colloquium-progress-bar {
+    height: 100%;
+    background: var(--colloquium-progress-fill);
+    transition: width 0.3s ease;
+}
+
+/* ===== Conversation Bubbles ===== */
+.colloquium-conversation {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6em;
+    width: 100%;
+}
+
+.colloquium-message {
+    max-width: 80%;
+    border-radius: 12px;
+    padding: 0.5em 0.8em;
+}
+
+.colloquium-message--user {
+    align-self: flex-end;
+    background: var(--colloquium-accent);
+    color: #ffffff;
+}
+
+.colloquium-message--assistant {
+    align-self: flex-start;
+    background: var(--colloquium-code-bg);
+    color: var(--colloquium-text);
+}
+
+.colloquium-message--system {
+    align-self: center;
+    border: 1px solid var(--colloquium-border);
+    background: transparent;
+    color: var(--colloquium-muted);
+    font-style: italic;
+    font-size: 0.85em;
+    max-width: 90%;
+}
+
+.colloquium-message-role {
+    font-size: 0.65em;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 0.15em;
+    opacity: 0.75;
+}
+
+.colloquium-message--user .colloquium-message-role {
+    color: rgba(255, 255, 255, 0.85);
+}
+
+.colloquium-message-role-name {
+    display: inline;
+}
+
+.colloquium-message-model {
+    text-transform: none;
+    letter-spacing: normal;
+    font-weight: 500;
+    opacity: 0.9;
+}
+
+.colloquium-message-content p {
+    margin: 0 0 0.3em;
+    white-space: pre-line;
+}
+
+.colloquium-message-content p:last-child {
+    margin-bottom: 0;
+}
+
+.colloquium-message-content li {
+    white-space: pre-line;
+}
+
+.colloquium-message-content code {
+    font-size: 0.85em;
+}
+
+.colloquium-message--user .colloquium-message-content code {
+    background: rgba(255, 255, 255, 0.2);
+}
+
+/* ===== Built With Badge ===== */
+.slide a.colloquium-builtwith {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.75em;
+    max-width: 100%;
+    padding: 0.55em 0.8em;
+    border: 1px solid color-mix(in srgb, var(--colloquium-border) 75%, transparent);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--colloquium-code-bg) 75%, white 25%);
+    color: var(--colloquium-text);
+    text-decoration: none;
+    line-height: 1.1;
+}
+
+.slide a.colloquium-builtwith:hover {
+    border-color: color-mix(in srgb, var(--colloquium-accent) 55%, var(--colloquium-border) 45%);
+    color: var(--colloquium-heading);
+}
+
+.colloquium-builtwith-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.15em;
+    height: 1.15em;
+    flex: 0 0 auto;
+}
+
+.colloquium-builtwith-icon svg {
+    width: 100%;
+    height: 100%;
+    display: block;
+}
+
+.colloquium-builtwith-text {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.05em;
+}
+
+.colloquium-builtwith-label {
+    font-size: 0.6em;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--colloquium-muted);
+}
+
+.colloquium-builtwith-repo {
+    font-size: 0.82em;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.colloquium-builtwith-stars {
+    font-size: 0.72em;
+    color: var(--colloquium-muted);
+    white-space: nowrap;
+    flex: 0 0 auto;
+}
+
+/* ===== Citations ===== */
+.slide a.colloquium-cite {
+    color: var(--colloquium-accent);
+    text-decoration: none;
+    font-size: 0.85em;
+    white-space: nowrap;
+}
+
+.slide a.colloquium-cite:hover {
+    text-decoration: underline;
+}
+
+.colloquium-footnote-ref {
+    font-size: 0.65em;
+    line-height: 0;
+    vertical-align: super;
+}
+
+.slide .colloquium-footnote-ref a {
+    color: var(--colloquium-accent);
+    text-decoration: none;
+}
+
+.slide .colloquium-footnote-ref a:hover {
+    text-decoration: underline;
+}
+
+.colloquium-cite-missing {
+    color: #dc2626;
+    font-weight: 600;
+}
+
+/* ===== Per-Slide Footnote Area ===== */
+.colloquium-slide-meta {
+    position: absolute;
+    bottom: 40px;
+    font-size: 12px;
+    color: var(--colloquium-muted);
+    max-width: 40%;
+    display: flex;
+    flex-direction: column;
+    gap: 0.2em;
+    z-index: 4;
+}
+
+.colloquium-slide-meta--left {
+    left: 24px;
+    align-items: flex-start;
+    text-align: left;
+}
+
+.colloquium-slide-meta--right {
+    right: 24px;
+    align-items: flex-end;
+    text-align: right;
+}
+
+.colloquium-slide-cite,
+.colloquium-slide-footnote {
+    max-width: 100%;
+}
+
+.colloquium-slide-cite {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.colloquium-slide-cite a.colloquium-cite {
+    font-size: inherit;
+    color: var(--colloquium-accent);
+}
+
+.colloquium-slide-cite a.colloquium-cite:hover {
+    color: var(--colloquium-heading);
+}
+
+.colloquium-slide-footnote {
+    line-height: 1.35;
+}
+
+.colloquium-slide-footnote-item + .colloquium-slide-footnote-item {
+    margin-top: 0.15em;
+}
+
+.colloquium-slide-footnote-label {
+    font-weight: 600;
+}
+
+.colloquium-slide-footnote-text {
+    display: inline;
+}
+
+.colloquium-slide-footnote-text .colloquium-cite {
+    white-space: normal;
+}
+
+.colloquium-slide-footnote > :first-child {
+    margin-top: 0;
+}
+
+.colloquium-slide-footnote > :last-child {
+    margin-bottom: 0;
+}
+
+.colloquium-slide-meta--right .colloquium-slide-footnote ul,
+.colloquium-slide-meta--right .colloquium-slide-footnote ol {
+    padding-right: 1.2em;
+    padding-left: 0;
+    list-style-position: inside;
+}
+
+/* ===== References Slide ===== */
+.colloquium-references-slide {
+}
+
+.colloquium-reference {
+    padding-left: 2em;
+    text-indent: -2em;
+    margin-bottom: 0.6em;
+    font-size: 0.75em;
+    line-height: 1.5;
+}
+
+.colloquium-ref-url {
+    color: var(--colloquium-muted);
+    font-size: 0.9em;
+    text-decoration: none;
+}
+
+.colloquium-ref-url:hover {
+    color: var(--colloquium-accent);
+    text-decoration: underline;
+}
+
+/* ===== Print / PDF Styles ===== */
+@page {
+    size: 13.333in 7.5in;  /* 16:9 widescreen at 96 CSS px/in => 1280x720 */
+    margin: 0;
+}
+
+@media print {
+    html, body {
+        width: 13.333in;
+        height: auto;
+        overflow: visible;
+        background: #fff;
+        margin: 0;
+        padding: 0;
+    }
+
+    .colloquium-deck {
+        position: static;
+        transform: none !important;
+        width: auto;
+        height: auto;
+        background: none;
+    }
+
+    .slide {
+        display: flex !important;
+        position: relative;
+        width: 1280px;
+        height: 720px;
+        page-break-after: always;
+        page-break-inside: avoid;
+        break-after: page;
+        break-inside: avoid;
+        margin: 0;
+        font-size: 24px;
+        overflow: visible;
+    }
+
+    .slide:last-child {
+        page-break-after: auto;
+    }
+
+    /* Display equations can be clipped inside printed columns even when the
+       right side of the slide has free space available. */
+    .slide .katex-display {
+        overflow: visible !important;
+    }
+
+    /* Hidden slides never get the runtime figure fit pass, so printed grid/row
+       figures need an explicit container-sized fallback. */
+    .slide .slide-content > figure.colloquium-figure:first-child:last-child,
+    .slide .colloquium-grid > .col > figure.colloquium-figure:first-child:last-child,
+    .slide .colloquium-row > figure.colloquium-figure:first-child:last-child {
+        width: 100% !important;
+        max-width: 100% !important;
+    }
+
+    .slide .slide-content > figure.colloquium-figure:first-child:last-child > img,
+    .slide .colloquium-grid > .col > figure.colloquium-figure:first-child:last-child > img,
+    .slide .colloquium-row > figure.colloquium-figure:first-child:last-child > img {
+        width: 100% !important;
+        height: auto !important;
+        max-width: 100% !important;
+        max-height: calc(720px - var(--colloquium-slide-padding) * 2 - 100px) !important;
+    }
+
+    /* Printed slides are not .active, so re-apply layout/utility rules without that gate. */
+    .slide--title,
+    .slide--title-left,
+    .slide--title-banner,
+    .slide--section-break {
+        display: flex !important;
+    }
+
+    .slide--title-sidebar {
+        display: grid !important;
+        grid-template-columns: minmax(0, 1fr) 300px;
+        column-gap: 56px;
+        align-content: center;
+        align-items: start;
+    }
+
+    .slide--title-sidebar.valign-top {
+        align-content: start;
+    }
+
+    .slide--title-sidebar.valign-center {
+        align-content: center;
+    }
+
+    .slide--title-sidebar.valign-bottom {
+        align-content: end;
+    }
+
+    .title-top { justify-content: flex-start; }
+    .title-center { justify-content: center; }
+    .title-center > h1, .title-center > h2 { text-align: center; }
+
+    .align-left { text-align: left; }
+    .align-center { text-align: center; }
+    .align-right { text-align: right; }
+
+    .align-center .slide-content > img,
+    .align-center .slide-content > p > img {
+        display: block;
+        margin-left: auto;
+        margin-right: auto;
+    }
+
+    .align-left .slide-content > img,
+    .align-left .slide-content > p > img {
+        display: block;
+        margin-right: auto;
+    }
+
+    .align-right .slide-content > img,
+    .align-right .slide-content > p > img {
+        display: block;
+        margin-left: auto;
+    }
+
+    .valign-top { justify-content: flex-start; }
+    .valign-center { justify-content: center; }
+    .valign-bottom { justify-content: flex-end; }
+
+    .size-small { font-size: 20px; }
+    .size-normal { font-size: 24px; }
+    .size-large { font-size: 28px; }
+
+    .colloquium-progress,
+    .colloquium-picker-overlay,
+    .colloquium-present,
+    .colloquium-picker-trigger,
+    .colloquium-overflow-warn {
+        display: none !important;
+    }
+
+    .colloquium-counter {
+        cursor: default;
+    }
+
+    a {
+        color: inherit !important;
+        text-decoration: underline;
+    }
+
+    .slide a.colloquium-cite,
+    .colloquium-slide-cite a.colloquium-cite,
+    .slide a.colloquium-ref-url {
+        color: var(--colloquium-accent) !important;
+    }
+
+    /* Swap chart canvases for static images */
+    .colloquium-chart-container canvas {
+        display: none !important;
+    }
+
+    .colloquium-chart-print {
+        display: block !important;
+    }
+
+    /* Show all fragments in print */
+    .fragment[data-fragment-index] {
+        opacity: 1 !important;
+        pointer-events: auto !important;
+        transition: none !important;
+    }
+}
+
+/* ===== Toast (transient confirmation, e.g. "Copied slide markdown") ===== */
+.colloquium-toast {
+    position: fixed;
+    bottom: 24px;
+    left: 50%;
+    transform: translateX(-50%) translateY(8px);
+    z-index: 1000;
+    padding: 8px 16px;
+    border-radius: 6px;
+    background: rgba(20, 20, 20, 0.92);
+    color: #fff;
+    font-size: 14px;
+    font-family: var(--colloquium-font-body, sans-serif);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.15s ease, transform 0.15s ease;
+}
+
+.colloquium-toast.visible {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+}
+
+/* ===== Capture mode — hide UI chrome for headless screenshots ===== */
+.colloquium-capture .colloquium-present,
+.colloquium-capture .colloquium-progress,
+.colloquium-capture .colloquium-overflow-warn,
+.colloquium-capture .colloquium-picker-trigger,
+.colloquium-capture .colloquium-picker-overlay,
+.colloquium-capture .colloquium-toast {
+    display: none !important;
+}
+
+/* Show all fragments in capture mode */
+.colloquium-capture .fragment[data-fragment-index] {
+    opacity: 1 !important;
+    pointer-events: auto !important;
+    transition: none !important;
+}
+
+@import url("https://fonts.googleapis.com/css2?family=Rubik:wght@400;600;700&family=Poppins:wght@400;600;700&display=swap");
+:root {
+    --colloquium-font-heading: "Rubik", sans-serif;
+    --colloquium-font-body: "Poppins", sans-serif;
+}
+:root {
+  --template-accent: #176b87;
+  --template-accent-soft: #e7f3f5;
+  --colloquium-progress-fill: var(--template-accent);
+  --colloquium-link: #176b87;
+  --colloquium-font-body: "Poppins", "Helvetica Neue", Arial, sans-serif;
+  --colloquium-font-heading: "Rubik", "Helvetica Neue", Arial, sans-serif;
+}
+.slide--section-break { background: #176b87; color: #ffffff; }
+.slide--section-break h2 { color: #ffffff; }
+.colloquium-title-eyebrow { color: #176b87; letter-spacing: .14em; text-transform: uppercase; font-weight: 700; }
+.colloquium-title-rule { width: 180px; height: 6px; margin-top: 28px; background: #f2a65a; }
+.accent { color: #176b87; font-weight: 700; }
+.warm { color: #c86b25; font-weight: 700; }
+.small { color: #5b6472; font-size: .78em; line-height: 1.35; }
+.command { background: #eef4f5; border-left: 5px solid #176b87; padding: 18px 24px; font-family: "JetBrains Mono", Menlo, monospace; font-size: .78em; white-space: pre-wrap; }
+.state { color: #176b87; font-weight: 700; }
+.link-list a { color: #176b87; }
+</style>
 </head>
-<body data-title="Codebase overview">
-  <main class="deck">
-    <section class="slide active">
-      <div class="kicker"><span>Codebase overview</span><span>01</span></div>
-      <h1>A pipeline to label sentences<br>for landuse and polygon relevance</h1>
-      <p class="subtitle">Clean local control. Remote CUDA work. Validated public artifacts.</p>
-      <div class="rule"></div>
-      <p class="lead"><strong>One command</strong>, with safe stop and resume.</p>
-      <div class="footer">osm-polygon-wikidata-sentence-relevance · Python 3.12+ · uv-managed</div>
-    </section>
+<body>
+<div class="colloquium-deck">
+<section class="slide slide--title-sidebar active valign-bottom" data-index="0" data-colloquium-md="PCEtLSBsYXlvdXQ6IHRpdGxlLXNpZGViYXIgLS0+Cgo8IS0tIGNsYXNzOiB2YWxpZ24tYm90dG9tIC0tPgoKIyBPbmUgY29tbWFuZCBjb29yZGluYXRlcyBhIHJlcHJvZHVjaWJsZSByZW1vdGUgcGlwZWxpbmUKCjxkaXYgY2xhc3M9ImNvbGxvcXVpdW0tdGl0bGUtZXllYnJvdyI+Q29kZWJhc2Ugb3ZlcnZpZXc8L2Rpdj4KCjxkaXYgY2xhc3M9ImNvbGxvcXVpdW0tdGl0bGUtbWV0YSI+CjxwIGNsYXNzPSJjb2xsb3F1aXVtLXRpdGxlLW5hbWUiPk5vw6kgRmxhbmRyZTwvcD4KPHA+TG9jYWwgY29udHJvbCDCtyByZW1vdGUgQ1VEQSDCtyB2YWxpZGF0ZWQgcHVibGljYXRpb248L3A+CjwvZGl2PgoKPHAgY2xhc3M9ImNvbGxvcXVpdW0tdGl0bGUtbm90ZSI+VGhlIHJlcG9zaXRvcnkgc2VwYXJhdGVzIHNlbnRlbmNlIGNvbnN0cnVjdGlvbiwgbW9kZWwgbGFiZWxpbmcsIHJlbW90ZSBvcGVyYXRpb25zLCBhbmQgcHVibGljIHJlbGVhc2Ugc28gZWFjaCBib3VuZGFyeSBjYW4gYmUgdGVzdGVkIGluZGVwZW5kZW50bHkuPC9wPgoKPCEtLSBub3RlczogW1NvdXJjZXNdIFByb2plY3QgUkVBRE1FOyBkb2NzL2FyY2hpdGVjdHVyZS9vdmVydmlldy5tZDsgZG9jcy9yZWZlcmVuY2UvZ3JpZDUwMDAtb3BlcmF0b3IubWQuIC0tPg==">
+<h1>One command coordinates a reproducible remote pipeline</h1>
+<div class="slide-content"><div class="colloquium-title-eyebrow">Codebase overview</div>
+<div class="colloquium-title-meta">
+<p class="colloquium-title-name">Noé Flandre</p>
+<p>Local control · remote CUDA · validated publication</p>
+</div>
+<p class="colloquium-title-note">The repository separates sentence construction, model labeling, remote operations, and public release so each boundary can be tested independently.</p></div>
+<div class="colloquium-footer"><div class="colloquium-footer-left">OSM polygon sentence relevance</div><div class="colloquium-footer-center">Implementation overview</div><div class="colloquium-footer-right colloquium-footer-nav"><span class="colloquium-counter">1/11</span></div></div>
+</section>
 
-    <section class="slide">
-      <div class="kicker"><span>Codebase overview</span><span>02</span></div>
-      <h2>One command moves work from Mac to GPU and back</h2>
-      <p class="subtitle">The Mac owns identity, policy checks, monitoring, and publication. Grid’5000 owns inference.</p>
-      <div class="flow">
-        <div class="flow-step"><span class="num">01</span><h3>Mac operator</h3><p>Validate checkout, resolve immutable input, and create durable state.</p></div>
-        <div class="flow-step"><span class="num">02</span><h3>Grid’5000</h3><p>Select a policy-compliant site and submit a CUDA allocation.</p></div>
-        <div class="flow-step"><span class="num">03</span><h3>Remote runtime</h3><p>Run the pinned model and write validated batch checkpoints.</p></div>
-        <div class="flow-step"><span class="num">04</span><h3>Mac relay</h3><p>Read back the export, check it, and publish one Hub commit.</p></div>
-      </div>
-      <div class="panel" style="margin-top:7%;"><strong>Inference never falls back to the Mac.</strong> Ctrl-C stops monitoring only. Checkpoints and remote jobs remain.</div>
-      <div class="footer">Operator entry point: osm-polygon-grid5000 run --scope region --region afghanistan-latest --stage all</div>
-    </section>
+<section class="slide slide--title-banner" data-index="1" data-colloquium-md="PCEtLSBsYXlvdXQ6IHRpdGxlLWJhbm5lciAtLT4KCiMgVGhlIE1hYyBvcmNoZXN0cmF0ZXM7IEdyaWTigJk1MDAwIHBlcmZvcm1zIGluZmVyZW5jZTsgdGhlIEh1YiByZWNlaXZlcyB2YWxpZGF0ZWQgYXJ0aWZhY3RzCgo8ZGl2IGNsYXNzPSJjb2xsb3F1aXVtLXRpdGxlLWV5ZWJyb3ciPkV4ZWN1dGlvbiBtb2RlbDwvZGl2Pgo8ZGl2IGNsYXNzPSJjb2xsb3F1aXVtLXRpdGxlLXJ1bGUiPjwvZGl2PgoKVGhlIGxvY2FsIG9wZXJhdG9yIGZpeGVzIHRoZSBpZGVudGl0eSwgY2hlY2tzIHBvbGljeSBhbmQgc3RvcmFnZSwgc2VsZWN0cyBhIGNvbXBhdGlibGUgc2l0ZSwgbW9uaXRvcnMgdGhlIGpvYiwgYW5kIHB1Ymxpc2hlcyBvbmx5IGFmdGVyIHJlYWRiYWNrIHZhbGlkYXRpb24uIFRoZSByZW1vdGUgd29ya2VyIG5ldmVyIGZhbGxzIGJhY2sgdG8gbG9jYWwgaW5mZXJlbmNlLgoKPCEtLSBub3RlczogW1NvdXJjZXNdIFJFQURNRS5tZCBhbmQgZG9jcy9ndWlkZXMvZ3JpZDUwMDAubWQuIC0tPg==">
+<h1>The Mac orchestrates; Grid’5000 performs inference; the Hub receives validated artifacts</h1>
+<div class="slide-content"><div class="colloquium-title-eyebrow">Execution model</div>
+<div class="colloquium-title-rule"></div>
+<p>The local operator fixes the identity, checks policy and storage, selects a compatible site, monitors the job, and publishes only after readback validation. The remote worker never falls back to local inference.</p>
+</div>
+<div class="colloquium-footer"><div class="colloquium-footer-left">OSM polygon sentence relevance</div><div class="colloquium-footer-center">Implementation overview</div><div class="colloquium-footer-right colloquium-footer-nav"><span class="colloquium-counter">2/11</span></div></div>
+</section>
 
-    <section class="slide">
-      <div class="kicker"><span>Codebase overview</span><span>03</span></div>
-      <h2>The repository has clear layers</h2>
-      <p class="subtitle">Each layer owns one kind of decision, so the public flow stays small while contracts stay explicit.</p>
-      <div class="two-col equal" style="margin-top:7%;">
-        <div class="outline"><strong class="blue">contracts</strong><br><span class="muted">schemas, constants, errors</span></div>
-        <div class="outline"><strong class="blue">sentences</strong><br><span class="muted">SAT segmentation, boundaries, finalization</span></div>
-        <div class="outline"><strong class="blue">labeling</strong><br><span class="muted">prompt, engine, validation, checkpoints</span></div>
-        <div class="outline"><strong class="orange">application</strong><br><span class="muted">pipeline and restartable shard work</span></div>
-        <div class="outline"><strong class="blue">operator</strong><br><span class="muted">SSH, OAR, policy, state, resume</span></div>
-        <div class="outline"><strong class="blue">output / publishing</strong><br><span class="muted">manifest, card, plots, Hub commit</span></div>
-      </div>
-      <div class="footer">The package layout follows the architecture documented under docs/architecture/.</div>
-    </section>
+<section class="slide slide--content cols-25-25-25-25" data-index="2" data-colloquium-md="PCEtLSBjbGFzczogY29scy0yNS0yNS0yNS0yNSAtLT4KCiMjIEZvdXIgYm91bmRhcmllcyBrZWVwIHRoZSBwcm9kdWN0aW9uIHBhdGggdW5kZXJzdGFuZGFibGUKCiMjIyBJbnB1dAoKSW1tdXRhYmxlIEhGIHJldmlzaW9uLCBzaXgtdGFibGUgc2hhcmQgc2V0LCBzY2hlbWEgY2hlY2tzLgoKfHx8CgojIyMgU2VudGVuY2VzCgpKb2lucywgU2FUIHNlZ21lbnRhdGlvbiwgbm9ybWFsaXphdGlvbiwgYm91bmRhcnkgcmVwYWlyLCBkZWR1cGxpY2F0aW9uLgoKfHx8CgojIyMgTGFiZWxzCgpQcm9tcHQsIENVREEgbW9kZWwgcnVudGltZSwgc3RyaWN0IHBhcnNpbmcsIHJlcGFpciwgYmF0Y2ggY2hlY2twb2ludHMuCgp8fHwKCiMjIyBSZWxlYXNlCgpNYW5pZmVzdCwgZGF0YS1kZXJpdmVkIGNhcmQsIHBsb3RzLCBUcmFja2lvLCBvbmUgSHViIGNvbW1pdC4KCjwhLS0gbm90ZXM6IFtTb3VyY2VzXSBkb2NzL2FyY2hpdGVjdHVyZS9vdmVydmlldy5tZCwgZG9jcy9hcmNoaXRlY3R1cmUvcGFja2FnZXMvb3BlcmF0b3IubWQsIGFuZCBkb2NzL2d1aWRlcy9ncmlkNTAwMC5tZC4gLS0+">
+<h2>Four boundaries keep the production path understandable</h2>
+<div class="slide-content colloquium-grid" style="grid-template-columns: minmax(0, 25fr) minmax(0, 25fr) minmax(0, 25fr) minmax(0, 25fr);"><div class="col"><h3>Input</h3>
+<p>Immutable HF revision, six-table shard set, schema checks.</p></div><div class="col"><h3>Sentences</h3>
+<p>Joins, SaT segmentation, normalization, boundary repair, deduplication.</p></div><div class="col"><h3>Labels</h3>
+<p>Prompt, CUDA model runtime, strict parsing, repair, batch checkpoints.</p></div><div class="col"><h3>Release</h3>
+<p>Manifest, data-derived card, plots, Trackio, one Hub commit.</p></div></div>
+<div class="colloquium-footer"><div class="colloquium-footer-left">OSM polygon sentence relevance</div><div class="colloquium-footer-center">Implementation overview</div><div class="colloquium-footer-right colloquium-footer-nav"><span class="colloquium-counter">3/11</span></div></div>
+</section>
 
-    <section class="slide">
-      <div class="kicker"><span>Codebase overview</span><span>04</span></div>
-      <h2>Sentence generation is deterministic</h2>
-      <p class="subtitle">The split stage turns joined sections into clean, deduplicated sentence rows before labeling begins.</p>
-      <div class="flow" style="margin-top:4%;">
-        <div class="flow-step"><span class="num">01</span><h3>Discover</h3><p>Read the immutable six-table shard set for each region.</p></div>
-        <div class="flow-step"><span class="num">02</span><h3>Join</h3><p>Connect polygons to Wikipedia and Wikivoyage with integrity checks.</p></div>
-        <div class="flow-step"><span class="num">03</span><h3>Segment</h3><p>SaT infers boundaries. A conservative residual pass repairs clear punctuation boundaries.</p></div>
-        <div class="flow-step"><span class="num">04</span><h3>Finalize</h3><p>Trim, deduplicate, hash, validate, and export the stable schema.</p></div>
-      </div>
-      <div class="panel" style="margin-top:3%; padding:1.6% 3%;">Output keeps sentence text, neighbors, document metadata, polygon metadata, coordinates, and content hashes.</div>
-      <div class="footer">Core modules: ingestion, joins, sentences, finalization, and output validation.</div>
-    </section>
+<section class="slide slide--content rows-34-66" data-index="3" data-colloquium-md="PCEtLSBjbGFzczogcm93cy0zNC02NiAtLT4KCiMjIFNlbnRlbmNlIGNvbnN0cnVjdGlvbiBpcyBkZXRlcm1pbmlzdGljIGJlZm9yZSBhbnkgbW9kZWwgY2FsbAoKVGhlIHBpcGVsaW5lIHJlYWRzIHRoZSBpbW11dGFibGUgc291cmNlIHNuYXBzaG90IGFuZCBidWlsZHMgdGhlIHNhbWUgc2VudGVuY2UgdGFibGUgZnJvbSB0aGUgc2FtZSBpbnB1dHMuCgo9PT0KCjEuIERpc2NvdmVyIHRoZSBzaXggc291cmNlIHRhYmxlcyBmb3IgZWFjaCBzaGFyZC4KMi4gSm9pbiBwb2x5Z29ucyB0byBXaWtpcGVkaWEgYW5kIFdpa2l2b3lhZ2Ugc2VjdGlvbnMgd2l0aCBpbnRlZ3JpdHkgY2hlY2tzLgozLiBSdW4gdGhlIHBpbm5lZCBTYVQgc2VnbWVudGVyLCB0aGVuIGFwcGx5IGNvbnNlcnZhdGl2ZSByZXNpZHVhbC1ib3VuZGFyeSByZXBhaXIuCjQuIE5vcm1hbGl6ZSB0ZXh0LCByZW1vdmUgZXhhY3QgZHVwbGljYXRlcywgYW5kIGRlcml2ZSBzdGFibGUgc2VudGVuY2UgYW5kIGNvbnRlbnQgSURzLgo1LiBWYWxpZGF0ZSB0aGUgc2NoZW1hLCBoYXNoZXMsIGFuZCByb3cgYWNjb3VudGluZyBiZWZvcmUgbGFiZWxpbmcuCgo8cCBjbGFzcz0ic21hbGwiPlRoZSBsYWJlbGVyIHJlY2VpdmVzIGEgc3RhYmxlIHJvdy4gSXQgbmV2ZXIgcmV3cml0ZXMgdGhlIHNlbnRlbmNlIHRleHQuPC9wPgoKPCEtLSBub3RlczogW1NvdXJjZXNdIHNyYy9vc21fcG9seWdvbl9zZW50ZW5jZV9yZWxldmFuY2UvaW5nZXN0aW9uLCBqb2lucywgc2VudGVuY2VzLCBhbmQgb3V0cHV0IHBhY2thZ2VzOyBkb2NzL2FyY2hpdGVjdHVyZS9wYWNrYWdlcy9zZW50ZW5jZXMubWQuIC0tPg==">
+<h2>Sentence construction is deterministic before any model call</h2>
+<div class="slide-content colloquium-rows" style="grid-template-rows: minmax(0, 34fr) minmax(0, 66fr);"><div class="colloquium-row"><p>The pipeline reads the immutable source snapshot and builds the same sentence table from the same inputs.</p>
+</div><div class="colloquium-row"><ol>
+<li>Discover the six source tables for each shard.</li>
+<li>Join polygons to Wikipedia and Wikivoyage sections with integrity checks.</li>
+<li>Run the pinned SaT segmenter, then apply conservative residual-boundary repair.</li>
+<li>Normalize text, remove exact duplicates, and derive stable sentence and content IDs.</li>
+<li>Validate the schema, hashes, and row accounting before labeling.</li>
+</ol>
+<p class="small">The labeler receives a stable row. It never rewrites the sentence text.</p></div></div>
+<div class="colloquium-footer"><div class="colloquium-footer-left">OSM polygon sentence relevance</div><div class="colloquium-footer-center">Implementation overview</div><div class="colloquium-footer-right colloquium-footer-nav"><span class="colloquium-counter">4/11</span></div></div>
+</section>
 
-    <section class="slide">
-      <div class="kicker"><span>Codebase overview</span><span>05</span></div>
-      <h2>Labeling is a second, resumable stage</h2>
-      <p class="subtitle">It adds two decisions without changing the source sentence or polygon metadata.</p>
-      <div class="two-col equal">
-        <div class="panel"><div class="label">PROMPT CONTEXT</div><ul class="bullets"><li>Target, previous, and next sentence</li><li>Polygon name and country</li><li>Language, page, and section title</li><li>OSM primary tag plus all OSM tags</li><li>Strict JSON and closed reason codes</li></ul></div>
-        <div class="outline"><div class="label">RUNTIME CONTRACT</div><p style="margin-top:10%; font-size:clamp(19px,2.4vw,30px); font-weight:700;">Qwen3.6-27B-Q4_K_M.gguf</p><p class="muted">llama.cpp on remote CUDA</p><p class="blue" style="margin-top:12%; font-size:clamp(18px,2.2vw,28px); font-weight:700;">parse → validate → repair → checkpoint</p><p class="muted" style="margin-top:8%;">Every batch binds to input, model, prompt, source commit, and server configuration.</p></div>
-      </div>
-      <div class="footer">Core modules: labeling/prompt.py, runner.py, validation.py, checkpoint.py, finalization.py.</div>
-    </section>
+<section class="slide slide--content cols-50-50" data-index="4" data-colloquium-md="PCEtLSBjbGFzczogY29scy01MC01MCAtLT4KCiMjIFYxIGFuZCBWMiBzaGFyZSBhIHJ1bnRpbWUgYnV0IGV4cG9zZSBkaWZmZXJlbnQgbGFiZWwgY29udHJhY3RzCgojIyMgVjEgQWZnaGFuaXN0YW4KClR3byBpbmRlcGVuZGVudCBkZWNpc2lvbnM6IGxhbmQgdXNlIG9yIGxhbmQgY292ZXIsIGFuZCByZWxldmFuY2UgdG8gdGhlIHRhcmdldCBwb2x5Z29uLiBUaGUgcmVzdWx0IGluY2x1ZGVzIHJlYXNvbiBjb2RlcyBhbmQgZXhhY3QgZXZpZGVuY2UuCgojIyMgVjIgd29ybGR3aWRlCgpPbmUgZGVjaXNpb246IGRvZXMgdGhlIHRhcmdldCBzZW50ZW5jZSBkZXNjcmliZSB0aGUgcGxhY2UgaW4gdmlzdWFsIG9yIGdlb2dyYXBoaWMgdGVybXM/IFRoZSByZXN1bHQgaW5jbHVkZXMgYHBsYWNlX3JlbGV2YW5jZWAsIGEgcmVhc29uLCBhbmQgZXhhY3QgZXZpZGVuY2UuCgo8cCBjbGFzcz0ic21hbGwiPkJvdGggbGFuZXMgdXNlIHRoZSB0YXJnZXQgc2VudGVuY2UsIG5laWdoYm9yaW5nIHNlbnRlbmNlcywgcG9seWdvbiBtZXRhZGF0YSwgbGFuZ3VhZ2UsIHNlY3Rpb24gdGl0bGUsIHRoZSBPU00gcHJpbWFyeSB0YWcsIGFuZCBhbGwgT1NNIHRhZ3MgYXMgY29udGV4dC48L3A+Cgo8IS0tIG5vdGVzOiBbU291cmNlc10gc3JjL29zbV9wb2x5Z29uX3NlbnRlbmNlX3JlbGV2YW5jZS9sYWJlbGluZy9wcm9tcHQucHksIHJ1bnRpbWUucHksIHJ1bm5lci5weSwgdmFsaWRhdGlvbi5weSwgYW5kIGRvY3MvcmVmZXJlbmNlL2xhYmVsaW5nLm1kLiAtLT4=">
+<h2>V1 and V2 share a runtime but expose different label contracts</h2>
+<div class="slide-content colloquium-grid" style="grid-template-columns: minmax(0, 50fr) minmax(0, 50fr);"><div class="col"><h3>V1 Afghanistan</h3>
+<p>Two independent decisions: land use or land cover, and relevance to the target polygon. The result includes reason codes and exact evidence.</p>
+<h3>V2 worldwide</h3>
+<p>One decision: does the target sentence describe the place in visual or geographic terms? The result includes <code>place_relevance</code>, a reason, and exact evidence.</p>
+<p class="small">Both lanes use the target sentence, neighboring sentences, polygon metadata, language, section title, the OSM primary tag, and all OSM tags as context.</p></div></div>
+<div class="colloquium-footer"><div class="colloquium-footer-left">OSM polygon sentence relevance</div><div class="colloquium-footer-center">Implementation overview</div><div class="colloquium-footer-right colloquium-footer-nav"><span class="colloquium-counter">5/11</span></div></div>
+</section>
 
-    <section class="slide">
-      <div class="kicker"><span>Codebase overview</span><span>06</span></div>
-      <h2>Durable state makes walltime ordinary</h2>
-      <p class="subtitle">A run is a sequence of validated phases.</p>
-      <div class="state-row" style="margin-top:4%;">
-        <div class="state"><strong>created</strong><span>identity fixed</span></div><span class="state-arrow">→</span>
-        <div class="state"><strong>prepared</strong><span>assets staged</span></div><span class="state-arrow">→</span>
-        <div class="state"><strong>running</strong><span>OAR + logs</span></div><span class="state-arrow">→</span>
-        <div class="state"><strong>checkpointed</strong><span>batch safe</span></div><span class="state-arrow">→</span>
-        <div class="state"><strong>validated</strong><span>final files</span></div><span class="state-arrow">→</span>
-        <div class="state" style="background:#e7f5ff;"><strong class="blue">complete</strong><span>published</span></div>
-      </div>
-      <div class="panel" style="margin-top:3%; padding:1.6% 3%;"><strong>Resume rules</strong><br>Identity mismatch fails closed. Valid checkpoints are reused. Partial work is preserved. Remote jobs are reattached instead of duplicated when evidence says they are active.</div>
-      <div class="footer">State and checkpoint files live on the external data root with atomic writes and strict permissions.</div>
-    </section>
+<section class="slide slide--content cols-45-55" data-index="5" data-colloquium-md="PCEtLSBjbGFzczogY29scy00NS01NSAtLT4KCiMjIFJlbW90ZSB3b3JrIGlzIGEgcmVzdW1hYmxlIHN0YXRlIG1hY2hpbmUsIG5vdCBhIGxvbmcgc2hlbGwgc2Vzc2lvbgoKPGRpdiBjbGFzcz0ic3RhdGUiPmNyZWF0ZWQg4oaSIHByZXBhcmVkIOKGkiBzdWJtaXR0ZWQg4oaSIHJ1bm5pbmcg4oaSIGNoZWNrcG9pbnRlZCDihpIgdmFsaWRhdGVkIOKGkiBjb21wbGV0ZTwvZGl2PgoKVGhlIGR1cmFibGUgc3RhdGUgYmluZHMgc291cmNlIGNvbW1pdCwgaW5wdXQgcmV2aXNpb24sIG1vZGVsLCBwcm9tcHQsIGJhdGNoIHNldHRpbmdzLCBhbmQgcnVudGltZSBjb25maWd1cmF0aW9uLiBBIHZhbGlkIGNoZWNrcG9pbnQgaXMgcmV1c2VkIG9ubHkgd2hlbiBpdHMgaWRlbnRpdHkgYW5kIGhhc2hlcyBzdGlsbCBtYXRjaC4KCnx8fAoKIyMjIFRoZSBvcGVyYXRvciBib3VuZGFyeQoKLSBTU0ggdXNlcyBmaXhlZCBhcmd1bWVudHMgYW5kIGJvdW5kZWQgbG9nIHJlYWRzLgotIE9BUiBqb2JzIGFyZSBzdWJtaXR0ZWQgb25seSBhZnRlciB1c2FnZS1wb2xpY3kgYW5kIHN0b3JhZ2UgY2hlY2tzLgotIFNob3J0IGFsbG9jYXRpb25zIGFyZSBleHBlY3RlZDsgd2FsbHRpbWUgc3RvcHMgcHJlc2VydmUgY2hlY2twb2ludHMuCi0gQ3RybC1DIHN0b3BzIGxvY2FsIG1vbml0b3JpbmcsIG5vdCB0aGUgcmVtb3RlIGFsbG9jYXRpb24uCi0gUmVzdW1lIHJlYXR0YWNoZXMgdG8gZXZpZGVuY2UtYmFja2VkIGpvYnMgYmVmb3JlIHN1Ym1pdHRpbmcgYW5vdGhlciBvbmUuCgo8IS0tIG5vdGVzOiBbU291cmNlc10gZG9jcy9hcmNoaXRlY3R1cmUvcGFja2FnZXMvb3BlcmF0b3IubWQsIGRvY3MvcmVmZXJlbmNlL2dyaWQ1MDAwLW9wZXJhdG9yLm1kLCBhbmQgc3JjL29zbV9wb2x5Z29uX3NlbnRlbmNlX3JlbGV2YW5jZS9vcGVyYXRvci8uIC0tPg==">
+<h2>Remote work is a resumable state machine, not a long shell session</h2>
+<div class="slide-content colloquium-grid" style="grid-template-columns: minmax(0, 45fr) minmax(0, 55fr);"><div class="col"><div class="state">created → prepared → submitted → running → checkpointed → validated → complete</div>
+<p>The durable state binds source commit, input revision, model, prompt, batch settings, and runtime configuration. A valid checkpoint is reused only when its identity and hashes still match.</p></div><div class="col"><h3>The operator boundary</h3>
+<ul>
+<li>SSH uses fixed arguments and bounded log reads.</li>
+<li>OAR jobs are submitted only after usage-policy and storage checks.</li>
+<li>Short allocations are expected; walltime stops preserve checkpoints.</li>
+<li>Ctrl-C stops local monitoring, not the remote allocation.</li>
+<li>Resume reattaches to evidence-backed jobs before submitting another one.</li>
+</ul></div></div>
+<div class="colloquium-footer"><div class="colloquium-footer-left">OSM polygon sentence relevance</div><div class="colloquium-footer-center">Implementation overview</div><div class="colloquium-footer-right colloquium-footer-nav"><span class="colloquium-counter">6/11</span></div></div>
+</section>
 
-    <section class="slide">
-      <div class="kicker"><span>Codebase overview</span><span>07</span></div>
-      <h2>Safety is enforced at the boundaries</h2>
-      <p class="subtitle">The pipeline refuses unsafe shortcuts before remote work or publication can begin.</p>
-      <ul class="bullets" style="margin-top:7%;">
-        <li><strong>Policy.</strong> Usage-policy checks run before every OAR submission.</li>
-        <li><strong>Storage.</strong> Soft-quota headroom is checked. Only managed completed runs can be cleaned.</li>
-        <li><strong>Identity.</strong> Source commit, input revision, model, prompt, and batch settings must match.</li>
-        <li><strong>Execution.</strong> GPU inference stays on the allocated CUDA node. No Mac fallback.</li>
-        <li><strong>Publication.</strong> Schema, hashes, card, and asset allowlist are checked before one Hub commit.</li>
-      </ul>
-      <div class="footer">Safety is part of the public contract, not an operator checklist kept outside the code.</div>
-    </section>
+<section class="slide slide--section-break title-center" data-index="6" data-colloquium-md="PCEtLSBsYXlvdXQ6IHNlY3Rpb24tYnJlYWsgLS0+Cgo8IS0tIGNsYXNzOiB0aXRsZS1jZW50ZXIgLS0+CgojIyBTYWZldHkgaXMgcGFydCBvZiB0aGUgYXJjaGl0ZWN0dXJlCgo8IS0tIG5vdGVzOiBbU291cmNlc10gZG9jcy9hcmNoaXRlY3R1cmUvcGFja2FnZXMvb3BlcmF0b3IubWQgYW5kIGRvY3MvZ3VpZGVzL2dyaWQ1MDAwLm1kLiAtLT4=">
+<h2>Safety is part of the architecture</h2>
+<div class="colloquium-footer"><div class="colloquium-footer-left">OSM polygon sentence relevance</div><div class="colloquium-footer-center">Implementation overview</div><div class="colloquium-footer-right colloquium-footer-nav"><span class="colloquium-counter">7/11</span></div></div>
+</section>
 
-    <section class="slide">
-      <div class="kicker"><span>Codebase overview</span><span>08</span></div>
-      <h2>Public artifacts are validated before upload</h2>
-      <p class="subtitle">The final boundary turns a run into a small, inspectable release.</p>
-      <div class="flow" style="margin-top:4%;">
-        <div class="flow-step"><span class="num">01</span><h3>Finalize</h3><p>Merge validated checkpoints and write sentences.parquet.</p></div>
-        <div class="flow-step"><span class="num">02</span><h3>Measure</h3><p>Compute counts, hashes, languages, coordinates, and label breakdowns from the table.</p></div>
-        <div class="flow-step"><span class="num">03</span><h3>Render</h3><p>Generate manifest, concise README, and deterministic PNG assets.</p></div>
-        <div class="flow-step"><span class="num">04</span><h3>Publish</h3><p>Read back the committed tree and compare bytes, schema, and metadata.</p></div>
-      </div>
-      <div class="panel" style="margin-top:3%; padding:1.6% 3%;"><strong>Release contract.</strong> sentences.parquet, manifest.json, README.md, and the two PNG assets.</div>
-      <div class="footer">Output and publishing modules own schema, hashes, card equality, and the Hub commit.</div>
-    </section>
+<section class="slide slide--content cols-50-50" data-index="7" data-colloquium-md="PCEtLSBjbGFzczogY29scy01MC01MCAtLT4KCiMjIEV2ZXJ5IGV4cGVuc2l2ZSBvciBpcnJldmVyc2libGUgYm91bmRhcnkgZmFpbHMgY2xvc2VkCgojIyMgQmVmb3JlIHJlbW90ZSB3b3JrCgotIENsZWFuIHNvdXJjZSBjaGVja291dCBhbmQgaW1tdXRhYmxlIHJldmlzaW9ucy4KLSBHUFUgYW5kIENVREEgcHJlZmxpZ2h0IG9uIHRoZSB3b3JrZXIuCi0gTGl2ZSB1c2FnZS1wb2xpY3kgYW5kIHF1b3RhIGNoZWNrcy4KLSBNYW5hZ2VkIHN0b3JhZ2UgY2xlYW51cCBvbmx5IGZvciBlbGlnaWJsZSBydW4gZGlyZWN0b3JpZXMuCgojIyMgQmVmb3JlIHB1YmxpYyByZWxlYXNlCgotIENvbXBsZXRlIGNoZWNrcG9pbnQgc2V0IGFuZCBleGFjdCByb3cgYWNjb3VudGluZy4KLSBTY2hlbWEgYW5kIGNvbnRlbnQgaGFzaCB2YWxpZGF0aW9uLgotIERldGVybWluaXN0aWMgbWFuaWZlc3QsIGNhcmQsIGFuZCBQTkcgYXNzZXRzLgotIEh1YiByZWFkYmFjayBjb21wYXJpc29uIGFmdGVyIHRoZSBjb21taXQuCgo8IS0tIG5vdGVzOiBbU291cmNlc10gZG9jcy9ndWlkZXMvZ3JpZDUwMDAubWQsIGRvY3MvcmVmZXJlbmNlL2dyaWQ1MDAwLW9wZXJhdG9yLm1kLCBhbmQgc3JjL29zbV9wb2x5Z29uX3NlbnRlbmNlX3JlbGV2YW5jZS9vcGVyYXRvci8uIC0tPg==">
+<h2>Every expensive or irreversible boundary fails closed</h2>
+<div class="slide-content colloquium-grid" style="grid-template-columns: minmax(0, 50fr) minmax(0, 50fr);"><div class="col"><h3>Before remote work</h3>
+<ul>
+<li>Clean source checkout and immutable revisions.</li>
+<li>GPU and CUDA preflight on the worker.</li>
+<li>Live usage-policy and quota checks.</li>
+<li>Managed storage cleanup only for eligible run directories.</li>
+</ul>
+<h3>Before public release</h3>
+<ul>
+<li>Complete checkpoint set and exact row accounting.</li>
+<li>Schema and content hash validation.</li>
+<li>Deterministic manifest, card, and PNG assets.</li>
+<li>Hub readback comparison after the commit.</li>
+</ul></div></div>
+<div class="colloquium-footer"><div class="colloquium-footer-left">OSM polygon sentence relevance</div><div class="colloquium-footer-center">Implementation overview</div><div class="colloquium-footer-right colloquium-footer-nav"><span class="colloquium-counter">8/11</span></div></div>
+</section>
 
-    <section class="slide">
-      <div class="kicker"><span>Codebase overview</span><span>09</span></div>
-      <h2>The toolchain keeps changes reviewable</h2>
-      <p class="subtitle">The repository uses a short, explicit developer loop.</p>
-      <div class="metric-grid" style="grid-template-columns:repeat(5,1fr);">
-        <div class="metric"><strong>uv</strong><span>locked environments</span></div>
-        <div class="metric"><strong>Ruff</strong><span>format + lint</span></div>
-        <div class="metric"><strong>Ty</strong><span>static types</span></div>
-        <div class="metric"><strong>pytest</strong><span>regression suite</span></div>
-        <div class="metric"><strong>Just</strong><span>repeatable checks</span></div>
-      </div>
-      <div class="panel" style="margin-top:9%;"><strong>pre-commit · GitHub Actions · MkDocs Material</strong><br><span class="muted">One clean command path is documented, tested, and published with the same source revision.</span></div>
-      <div class="footer">See CONTRIBUTING.md, justfile, pyproject.toml, .pre-commit-config.yaml, and .github/workflows/.</div>
-    </section>
+<section class="slide slide--content cols-50-50" data-index="8" data-colloquium-md="PCEtLSBjbGFzczogY29scy01MC01MCAtLT4KCiMjIFB1YmxpY2F0aW9uIGlzIGEgZGF0YSBjb250cmFjdCwgbm90IGEgY29weSBvcGVyYXRpb24KCjEuIEZpbmFsaXplIHZhbGlkYXRlZCBjaGVja3BvaW50cyBpbnRvIGBzZW50ZW5jZXMucGFycXVldGAuCjIuIENvbXB1dGUgYWxsIHB1YmxpYyBtZXRyaWNzIGZyb20gdGhhdCB0YWJsZS4KMy4gUmVuZGVyIHRoZSBtYW5pZmVzdCwgY29uY2lzZSBkYXRhc2V0IGNhcmQsIGFuZCBkZXRlcm1pbmlzdGljIHBsb3RzLgo0LiBVcGxvYWQgdGhlIGNvcnJlY3QgcmVsZWFzZSBwcmVmaXggdG8gdGhlIGV4aXN0aW5nIEh1Z2dpbmcgRmFjZSBgbWFpbmAgdHJlZS4KNS4gUmVhZCBiYWNrIHRoZSBjb21taXR0ZWQgZmlsZXMgYW5kIHZlcmlmeSBieXRlcywgc2NoZW1hLCBhbmQgY2FyZCBlcXVhbGl0eS4KCjxwIGNsYXNzPSJzbWFsbCI+VjEgc3RheXMgYXQgdGhlIGRhdGFzZXQgcm9vdC4gVjIgdXNlcyA8c3BhbiBjbGFzcz0iYWNjZW50Ij52Mi13b3JsZHdpZGUvPC9zcGFuPi4gQ2hlY2twb2ludCBtaXJyb3JzIHVzZSBhIHByaXZhdGUgcnVuLXNjb3BlZCBwcmVmaXggYW5kIGFyZSBuZXZlciB0cmVhdGVkIGFzIGEgcmVsZWFzZS48L3A+Cgo8IS0tIG5vdGVzOiBbU291cmNlc10gc3JjL29zbV9wb2x5Z29uX3NlbnRlbmNlX3JlbGV2YW5jZS9sYWJlbGluZy9maW5hbGl6YXRpb24ucHksIHB1YmxpY2F0aW9uLnB5LCB0cmFja2luZy5weSwgYW5kIGRvY3MvcmVmZXJlbmNlL2xhYmVsaW5nLm1kLiAtLT4=">
+<h2>Publication is a data contract, not a copy operation</h2>
+<div class="slide-content colloquium-grid" style="grid-template-columns: minmax(0, 50fr) minmax(0, 50fr);"><div class="col"><ol>
+<li>Finalize validated checkpoints into <code>sentences.parquet</code>.</li>
+<li>Compute all public metrics from that table.</li>
+<li>Render the manifest, concise dataset card, and deterministic plots.</li>
+<li>Upload the correct release prefix to the existing Hugging Face <code>main</code> tree.</li>
+<li>Read back the committed files and verify bytes, schema, and card equality.</li>
+</ol>
+<p class="small">V1 stays at the dataset root. V2 uses <span class="accent">v2-worldwide/</span>. Checkpoint mirrors use a private run-scoped prefix and are never treated as a release.</p></div></div>
+<div class="colloquium-footer"><div class="colloquium-footer-left">OSM polygon sentence relevance</div><div class="colloquium-footer-center">Implementation overview</div><div class="colloquium-footer-right colloquium-footer-nav"><span class="colloquium-counter">9/11</span></div></div>
+</section>
 
-    <section class="slide">
-      <div class="kicker"><span>Codebase overview</span><span>10</span></div>
-      <h2>Start with the operator, then follow the contracts</h2>
-      <p class="subtitle">The fastest route for a new contributor is to read the public flow before implementation details.</p>
-      <div class="two-col equal" style="margin-top:3%;">
-        <div class="panel" style="padding:2% 3%;"><div class="label">RUN</div><div class="command" style="margin-top:4%; padding:3% 4%;">uv run osm-polygon-grid5000 run \
-  --scope region \
-  --region afghanistan-latest \
-  --stage all</div><p class="muted" style="margin-top:4%; margin-bottom:0;">Then read docs/reference/grid5000-operator.md and docs/architecture/overview.md.</p></div>
-        <div class="outline" style="padding:2% 3%;"><div class="label">PROJECT LINKS</div><p style="margin-top:4%; margin-bottom:0; font-size:clamp(15px,1.7vw,21px); line-height:1.55;"><a class="link" href="https://github.com/NoeFlandre/osm-polygon-wikidata-sentence-relevance">GitHub repository</a><br><span class="muted">Source, tests, and public docs</span><br><br><a class="link" href="https://huggingface.co/datasets/NoeFlandre/osm-polygon-wikidata-sentence-relevance">Hugging Face dataset</a><br><span class="muted">Published Afghanistan release</span></p></div>
-      </div>
-      <p class="lead muted" style="margin-top:2%; margin-bottom:0;">The Afghanistan release is the current proof of concept. The same contracts are designed to scale by region.</p>
-      <div class="footer">Public docs: https://noeflandre.github.io/osm-polygon-wikidata-sentence-relevance/</div>
-    </section>
-  </main>
-  <nav class="controls" aria-label="Presentation controls"><button data-action="prev" type="button">Previous</button><span class="counter">1 / 10</span><button data-action="next" type="button">Next</button></nav>
-  <script src="../shared/deck.js"></script>
+<section class="slide slide--content cols-50-50" data-index="9" data-colloquium-md="PCEtLSBjbGFzczogY29scy01MC01MCAtLT4KCiMjIFRoZSBkZXZlbG9wZXIgbG9vcCBpcyBpbnRlbnRpb25hbGx5IHNtYWxsIGFuZCByZXBlYXRhYmxlCgo8ZGl2IGNsYXNzPSJjb21tYW5kIj51diBzeW5jIC0tbG9ja2VkIC0tYWxsLWV4dHJhcyAtLWRldgpqdXN0IGNoZWNrCnByZS1jb21taXQgcnVuIC0tYWxsLWZpbGVzPC9kaXY+CgpUaGUgcmVwb3NpdG9yeSB1c2VzIGB1dmAgZm9yIGVudmlyb25tZW50cywgUnVmZiBmb3IgZm9ybWF0IGFuZCBsaW50LCBgdHlgIGZvciB0eXBlIGNoZWNraW5nLCBweXRlc3QgZm9yIGJlaGF2aW9yLCBwcmUtY29tbWl0IGZvciBsb2NhbCBnYXRlcywgSnVzdCBmb3IgcmVwZWF0YWJsZSBjb21tYW5kcywgYW5kIEdpdEh1YiBBY3Rpb25zIGZvciBDSSBhbmQgZG9jdW1lbnRhdGlvbi4KCjxwIGNsYXNzPSJzbWFsbCI+VGhlIHBhY2thZ2UgYW5kIGRvY3MgcmVtYWluIHB1YmxpYy1mYWNpbmcuIE9wZXJhdGlvbmFsIHNjcmlwdHMgc3RheSBleHBsaWNpdCBhbmQgYXJlIHRlc3RlZCBhcyBjb250cmFjdHMuPC9wPgoKPCEtLSBub3RlczogW1NvdXJjZXNdIHB5cHJvamVjdC50b21sLCBqdXN0ZmlsZSwgLnByZS1jb21taXQtY29uZmlnLnlhbWwsIC5naXRodWIvd29ya2Zsb3dzLywgYW5kIENPTlRSSUJVVElORy5tZC4gLS0+">
+<h2>The developer loop is intentionally small and repeatable</h2>
+<div class="slide-content colloquium-grid" style="grid-template-columns: minmax(0, 50fr) minmax(0, 50fr);"><div class="col"><div class="command">uv sync --locked --all-extras --dev
+just check
+pre-commit run --all-files</div>
+<p>The repository uses <code>uv</code> for environments, Ruff for format and lint, <code>ty</code> for type checking, pytest for behavior, pre-commit for local gates, Just for repeatable commands, and GitHub Actions for CI and documentation.</p>
+<p class="small">The package and docs remain public-facing. Operational scripts stay explicit and are tested as contracts.</p></div></div>
+<div class="colloquium-footer"><div class="colloquium-footer-left">OSM polygon sentence relevance</div><div class="colloquium-footer-center">Implementation overview</div><div class="colloquium-footer-right colloquium-footer-nav"><span class="colloquium-counter">10/11</span></div></div>
+</section>
+
+<section class="slide slide--title-banner" data-index="10" data-colloquium-md="PCEtLSBsYXlvdXQ6IHRpdGxlLWJhbm5lciAtLT4KCiMgRm9sbG93IHRoZSBjb250cmFjdHMgZnJvbSB0aGUgcHVibGljIGVudHJ5IHBvaW50cwoKPGRpdiBjbGFzcz0iY29sbG9xdWl1bS10aXRsZS1leWVicm93Ij5GdXJ0aGVyIHJlYWRpbmc8L2Rpdj4KPGRpdiBjbGFzcz0iY29sbG9xdWl1bS10aXRsZS1ydWxlIj48L2Rpdj4KCltHaXRIdWIgcmVwb3NpdG9yeV0oaHR0cHM6Ly9naXRodWIuY29tL05vZUZsYW5kcmUvb3NtLXBvbHlnb24td2lraWRhdGEtc2VudGVuY2UtcmVsZXZhbmNlKSAgwrcgIFtBcmNoaXRlY3R1cmUgZG9jc10oaHR0cHM6Ly9ub2VmbGFuZHJlLmdpdGh1Yi5pby9vc20tcG9seWdvbi13aWtpZGF0YS1zZW50ZW5jZS1yZWxldmFuY2UvYXJjaGl0ZWN0dXJlL292ZXJ2aWV3LykgIMK3ICBbT3BlcmF0b3IgZ3VpZGVdKGh0dHBzOi8vbm9lZmxhbmRyZS5naXRodWIuaW8vb3NtLXBvbHlnb24td2lraWRhdGEtc2VudGVuY2UtcmVsZXZhbmNlL3JlZmVyZW5jZS9ncmlkNTAwMC1vcGVyYXRvci8pCgpbVjEgSHVnZ2luZyBGYWNlIHJlbGVhc2VdKGh0dHBzOi8vaHVnZ2luZ2ZhY2UuY28vZGF0YXNldHMvTm9lRmxhbmRyZS9vc20tcG9seWdvbi13aWtpZGF0YS1zZW50ZW5jZS1yZWxldmFuY2UpICDCtyAgW1YxIFRyYWNraW9dKGh0dHBzOi8vaHVnZ2luZ2ZhY2UuY28vc3BhY2VzL05vZUZsYW5kcmUvYWZnaGFuaXN0YW4tbGFiZWxpbmctdHJhY2tpbykgIMK3ICBbVjIgVHJhY2tpb10oaHR0cHM6Ly9odWdnaW5nZmFjZS5jby9zcGFjZXMvTm9lRmxhbmRyZS93b3JsZHdpZGUtc3RyYXRpZmllZC1sYWJlbGluZy10cmFja2lvKQoKPHAgY2xhc3M9InNtYWxsIj5UaGUgY29kZWJhc2UgaXMgdGhlIHJlcHJvZHVjaWJpbGl0eSByZWNvcmQuIFRoZSBkYXRhc2V0IGNhcmQgaXMgdGhlIGRhdGEtZmFjaW5nIHJlY29yZC48L3A+Cgo8IS0tIG5vdGVzOiBbU291cmNlc10gQWxsIGxpbmtzIGFyZSBwdWJsaWMgcHJvamVjdCBlbmRwb2ludHMuIC0tPg==">
+<h1>Follow the contracts from the public entry points</h1>
+<div class="slide-content"><div class="colloquium-title-eyebrow">Further reading</div>
+<div class="colloquium-title-rule"></div>
+<p><a href="https://github.com/NoeFlandre/osm-polygon-wikidata-sentence-relevance">GitHub repository</a>  ·  <a href="https://noeflandre.github.io/osm-polygon-wikidata-sentence-relevance/architecture/overview/">Architecture docs</a>  ·  <a href="https://noeflandre.github.io/osm-polygon-wikidata-sentence-relevance/reference/grid5000-operator/">Operator guide</a></p>
+<p><a href="https://huggingface.co/datasets/NoeFlandre/osm-polygon-wikidata-sentence-relevance">V1 Hugging Face release</a>  ·  <a href="https://huggingface.co/spaces/NoeFlandre/afghanistan-labeling-trackio">V1 Trackio</a>  ·  <a href="https://huggingface.co/spaces/NoeFlandre/worldwide-stratified-labeling-trackio">V2 Trackio</a></p>
+<p class="small">The codebase is the reproducibility record. The dataset card is the data-facing record.</p></div>
+<div class="colloquium-footer"><div class="colloquium-footer-left">OSM polygon sentence relevance</div><div class="colloquium-footer-center">Implementation overview</div><div class="colloquium-footer-right colloquium-footer-nav"><span class="colloquium-counter">11/11</span></div></div>
+</section>
+</div>
+
+<button class="colloquium-present" title="Present (F)">&#9654;</button>
+
+<button class="colloquium-picker-trigger" title="Open slide picker">
+    <span class="colloquium-picker-trigger-label">Slides</span>
+    <span class="colloquium-picker-trigger-count">1 / 11</span>
+</button>
+
+<div class="colloquium-progress">
+    <div class="colloquium-progress-bar" style="width: 0%"></div>
+</div>
+
+<script>
+/**
+ * Colloquium Presentation Engine
+ * 16:9 scaled canvas, keyboard/click/touch navigation, hash routing, fullscreen
+ * Slide picker + per-slide footer
+ */
+class ColloquiumPresentation {
+    constructor() {
+        this.deck = document.querySelector('.colloquium-deck');
+        this.slides = Array.from(document.querySelectorAll('.slide'));
+        this.currentIndex = 0;
+        this.totalSlides = this.slides.length;
+        this._iframeKeyboardRelayDocuments = new WeakSet();
+
+        if (this._isEmbedded()) {
+            document.body.classList.add('colloquium-embedded');
+        }
+
+        // Fragment state: current revealed fragment index per slide (0 = none)
+        this.fragmentStates = this.slides.map(() => 0);
+        this.fragmentCounts = this.slides.map(
+            s => parseInt(s.getAttribute('data-fragment-count') || '0', 10)
+        );
+
+        // Reference dimensions (16:9)
+        this.width = 1280;
+        this.height = 720;
+
+        // Capture mode — hide UI chrome for headless screenshots
+        if (new URLSearchParams(location.search).has('capture')) {
+            document.body.classList.add('colloquium-capture');
+        }
+
+        if (this.totalSlides === 0) return;
+
+        this.deck.setAttribute('tabindex', '-1');
+        this.progressBar = document.querySelector('.colloquium-progress-bar');
+        this.pickerTrigger = document.querySelector('.colloquium-picker-trigger');
+        this.pickerTriggerCount = this.pickerTrigger
+            ? this.pickerTrigger.querySelector('.colloquium-picker-trigger-count')
+            : null;
+        this.pickerOpen = false;
+
+        this._scaleDeck();
+        window.addEventListener('resize', () => this._scaleDeck());
+
+        this._createPicker();
+        this._bindFooter();
+        this._bindPickerTrigger();
+        this._bindPresent();
+        this._bindKeyboard();
+        this._bindIframes();
+        this._bindClick();
+        this._bindTouch();
+        this._bindHashChange();
+
+        // Navigate to hash or first slide
+        const hash = parseInt(location.hash.replace('#', ''), 10);
+        if (hash >= 1 && hash <= this.totalSlides) {
+            this.goTo(hash - 1);
+        } else {
+            this.goTo(0);
+        }
+    }
+
+    _isEmbedded() {
+        try {
+            return window.self !== window.top;
+        } catch (_) {
+            return true;
+        }
+    }
+
+    /**
+     * Check each slide for content overflow and add a visual warning.
+     * Temporarily shows all slides to measure, then restores.
+     */
+    _checkOverflow() {
+        const origDisplay = this.slides.map(s => s.style.display);
+        this.slides.forEach(s => s.style.display = 'flex');
+
+        this.slides.forEach((slide, i) => {
+            if (slide.scrollHeight > slide.clientHeight + 2) {
+                const warn = document.createElement('div');
+                warn.className = 'colloquium-overflow-warn';
+                warn.title = `Slide ${i + 1} content overflows`;
+                slide.appendChild(warn);
+            }
+        });
+
+        this.slides.forEach((s, i) => s.style.display = origDisplay[i]);
+    }
+
+    /**
+     * Scale the 1280x720 deck to fit the viewport while maintaining 16:9 aspect ratio.
+     * Centers the deck with black letterbox/pillarbox bars.
+     */
+    _scaleDeck() {
+        const vw = window.innerWidth;
+        const vh = window.innerHeight;
+        const scale = Math.min(vw / this.width, vh / this.height);
+
+        const scaledW = this.width * scale;
+        const scaledH = this.height * scale;
+        const offsetX = (vw - scaledW) / 2;
+        const offsetY = (vh - scaledH) / 2;
+
+        this.deck.style.transform = `translate(${offsetX}px, ${offsetY}px) scale(${scale})`;
+
+        if (window.colloquiumFitCaptionedFiguresIn) {
+            requestAnimationFrame(() => {
+                window.colloquiumFitCaptionedFiguresIn(this.slides[this.currentIndex]);
+            });
+        }
+    }
+
+    goTo(index, showAllFragments = false) {
+        if (index < 0 || index >= this.totalSlides) return;
+
+        this.slides[this.currentIndex].classList.remove('active');
+        this.currentIndex = index;
+        this.slides[this.currentIndex].classList.add('active');
+
+        // Set fragment state
+        if (showAllFragments) {
+            this.fragmentStates[index] = this.fragmentCounts[index];
+        } else {
+            this.fragmentStates[index] = 0;
+        }
+        this._updateFragments(index);
+
+        if (window.colloquiumFitDisplayMathIn) {
+            requestAnimationFrame(() => {
+                window.colloquiumFitDisplayMathIn(this.slides[this.currentIndex]);
+            });
+        }
+        if (window.colloquiumFitCaptionedFiguresIn) {
+            requestAnimationFrame(() => {
+                window.colloquiumFitCaptionedFiguresIn(this.slides[this.currentIndex]);
+            });
+        }
+
+        // Update hash
+        history.replaceState(null, '', '#' + (this.currentIndex + 1));
+
+        // Update progress bar
+        if (this.progressBar) {
+            const progress = this.totalSlides > 1
+                ? (this.currentIndex / (this.totalSlides - 1)) * 100
+                : 100;
+            this.progressBar.style.width = progress + '%';
+        }
+
+        this._updatePickerTrigger();
+    }
+
+    next() {
+        const fc = this.fragmentCounts[this.currentIndex];
+        const fs = this.fragmentStates[this.currentIndex];
+        if (fc > 0 && fs < fc) {
+            this.fragmentStates[this.currentIndex] = fs + 1;
+            this._updateFragments(this.currentIndex);
+        } else {
+            this.goTo(this.currentIndex + 1);
+        }
+    }
+
+    prev() {
+        const fs = this.fragmentStates[this.currentIndex];
+        if (fs > 0) {
+            this.fragmentStates[this.currentIndex] = fs - 1;
+            this._updateFragments(this.currentIndex);
+        } else {
+            this.goTo(this.currentIndex - 1, true);
+        }
+    }
+
+    first() {
+        this.goTo(0);
+    }
+
+    last() {
+        this.goTo(this.totalSlides - 1, true);
+    }
+
+    // --- Fragment Management ---
+
+    _updateFragments(slideIndex) {
+        const slide = this.slides[slideIndex];
+        const currentStep = this.fragmentStates[slideIndex];
+        const fragments = slide.querySelectorAll('[data-fragment-index]');
+        fragments.forEach(el => {
+            const idx = parseInt(el.getAttribute('data-fragment-index'), 10);
+            el.classList.toggle('visible', idx <= currentStep);
+        });
+    }
+
+    // --- Slide Picker ---
+
+    _getSlideTitle(slide, i) {
+        const h1 = slide.querySelector('h1');
+        if (h1) return h1.textContent;
+        const h2 = slide.querySelector('h2');
+        if (h2) return h2.textContent;
+        const img = slide.querySelector('img[alt]');
+        if (img && img.alt) return img.alt;
+        const text = slide.textContent.trim();
+        if (text) return text.substring(0, 50) + (text.length > 50 ? '…' : '');
+        return 'Slide ' + (i + 1);
+    }
+
+    _createPicker() {
+        this.overlay = document.createElement('div');
+        this.overlay.className = 'colloquium-picker-overlay';
+
+        const picker = document.createElement('div');
+        picker.className = 'colloquium-picker';
+
+        this.pickerItems = [];
+
+        this.slides.forEach((slide, i) => {
+            const btn = document.createElement('button');
+            btn.className = 'colloquium-picker-item';
+            btn.innerHTML =
+                '<span class="colloquium-picker-num">' + (i + 1) + '</span>' +
+                '<span class="colloquium-picker-title">' + this._getSlideTitle(slide, i) + '</span>';
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.goTo(i);
+                this._closePicker();
+            });
+            this.pickerItems.push(btn);
+            picker.appendChild(btn);
+        });
+
+        this.overlay.appendChild(picker);
+        document.body.appendChild(this.overlay);
+
+        // Close on click outside the picker card
+        this.overlay.addEventListener('click', (e) => {
+            if (e.target === this.overlay) {
+                this._closePicker();
+            }
+        });
+    }
+
+    _openPicker() {
+        // Highlight current slide
+        this.pickerItems.forEach((btn, i) => {
+            btn.classList.toggle('current', i === this.currentIndex);
+        });
+        this.overlay.classList.add('active');
+        this.pickerOpen = true;
+
+        // Scroll current item into view
+        const current = this.pickerItems[this.currentIndex];
+        if (current) {
+            current.scrollIntoView({ block: 'center' });
+        }
+    }
+
+    _closePicker() {
+        this.overlay.classList.remove('active');
+        this.pickerOpen = false;
+    }
+
+    _togglePicker() {
+        if (this.pickerOpen) {
+            this._closePicker();
+        } else {
+            this._openPicker();
+        }
+    }
+
+    _updatePickerTrigger() {
+        if (!this.pickerTriggerCount) return;
+        this.pickerTriggerCount.textContent = (this.currentIndex + 1) + ' / ' + this.totalSlides;
+    }
+
+    _bindFooter() {
+        // The entire right footer zone is the picker trigger.
+        document.querySelectorAll('.colloquium-footer-nav').forEach((target) => {
+            target.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this._togglePicker();
+            });
+        });
+    }
+
+    _bindPickerTrigger() {
+        if (!this.pickerTrigger) return;
+        this.pickerTrigger.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this._togglePicker();
+        });
+    }
+
+    _bindPresent() {
+        const btn = document.querySelector('.colloquium-present');
+        if (btn) {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this._toggleFullscreen();
+            });
+        }
+    }
+
+    // --- Navigation Bindings ---
+
+    _bindKeyboard() {
+        document.addEventListener('keydown', (e) => {
+            if (this._isTextInputTarget(e.target)) return;
+            this._handleNavigationKey(e);
+        });
+    }
+
+    _isTextInputTarget(target) {
+        if (!target || !target.tagName) return false;
+        if (target.isContentEditable) return true;
+        return ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName);
+    }
+
+    _handleNavigationKey(e) {
+        switch (e.key) {
+            case 'ArrowRight':
+            case 'ArrowDown':
+            case ' ':
+            case 'PageDown':
+                e.preventDefault();
+                this.next();
+                break;
+            case 'ArrowLeft':
+            case 'ArrowUp':
+            case 'PageUp':
+                e.preventDefault();
+                this.prev();
+                break;
+            case 'Home':
+                e.preventDefault();
+                this.first();
+                break;
+            case 'End':
+                e.preventDefault();
+                this.last();
+                break;
+            case 'c':
+            case 'C':
+                // Plain 'c' copies the current slide's markdown source.
+                // Leave Cmd/Ctrl+C alone so the browser can copy selected text.
+                if (e.metaKey || e.ctrlKey || e.altKey) return;
+                e.preventDefault();
+                this._copyCurrentSlideMarkdown();
+                break;
+            case 'f':
+            case 'F':
+                e.preventDefault();
+                this._toggleFullscreen();
+                break;
+            case 'Escape':
+                if (this.pickerOpen) {
+                    this._closePicker();
+                } else if (document.fullscreenElement) {
+                    document.exitFullscreen();
+                }
+                break;
+        }
+    }
+
+    _bindIframes() {
+        document.querySelectorAll('iframe.colloquium-iframe').forEach((iframe) => {
+            this._bindIframeKeyboardRelay(iframe);
+            iframe.addEventListener('load', () => this._bindIframeKeyboardRelay(iframe));
+            iframe.addEventListener('focus', () => this._recoverFocusFromIframe(iframe));
+        });
+    }
+
+    _bindIframeKeyboardRelay(iframe) {
+        if (iframe.dataset.colloquiumPreserveKeyboard === 'false') return false;
+
+        try {
+            const iframeDocument = iframe.contentWindow && iframe.contentWindow.document;
+            if (!iframeDocument) return false;
+            if (this._iframeKeyboardRelayDocuments.has(iframeDocument)) return true;
+
+            iframeDocument.addEventListener('keydown', (e) => {
+                if (this._isTextInputTarget(e.target)) return;
+                this._handleNavigationKey(e);
+            });
+            this._iframeKeyboardRelayDocuments.add(iframeDocument);
+            return true;
+        } catch (_) {
+            // Cross-origin frames cannot expose their keyboard events to the parent deck.
+            return false;
+        }
+    }
+
+    _recoverFocusFromIframe(iframe) {
+        if (iframe.dataset.colloquiumPreserveKeyboard === 'false') return;
+        if (this._bindIframeKeyboardRelay(iframe)) return;
+
+        setTimeout(() => {
+            if (document.activeElement === iframe) {
+                iframe.blur();
+                window.focus();
+                this.deck.focus({ preventScroll: true });
+            }
+        }, 0);
+    }
+
+    _bindClick() {
+        // Track the pointer-down position so we can tell a click from a drag.
+        // A drag (mouse moved between down and up) means the user was selecting
+        // text or otherwise interacting, not trying to advance the slide.
+        let downX = 0;
+        let downY = 0;
+        const DRAG_THRESHOLD = 8; // px of movement that counts as a drag, not a click
+        document.addEventListener('mousedown', (e) => {
+            downX = e.clientX;
+            downY = e.clientY;
+        });
+
+        document.addEventListener('click', (e) => {
+            // Handle citation links — navigate to the slide containing the target ref
+            const citeLink = e.target.closest('a.colloquium-cite');
+            if (citeLink) {
+                e.preventDefault();
+                e.stopPropagation();
+                const href = citeLink.getAttribute('href');
+                if (href && href.startsWith('#')) {
+                    const target = document.getElementById(href.slice(1));
+                    if (target) {
+                        const slide = target.closest('.slide');
+                        if (slide) {
+                            const idx = this.slides.indexOf(slide);
+                            if (idx >= 0) this.goTo(idx);
+                        }
+                    }
+                }
+                return;
+            }
+
+            // Ignore clicks on links, interactive elements, footer, and picker
+            if (e.target.closest('a, button, input, textarea, select, .colloquium-footer, .colloquium-picker-overlay, .colloquium-present, .colloquium-picker-trigger')) return;
+
+            // Don't navigate if the user is highlighting/copying text. A drag
+            // (pointer moved between down and up) or a live text selection both
+            // mean "select", not "next slide".
+            const dragDistance = Math.hypot(e.clientX - downX, e.clientY - downY);
+            if (dragDistance > DRAG_THRESHOLD) return;
+            // A multi-click (double/triple) is a word/paragraph selection gesture,
+            // not navigation. This catches the later clicks of a multi-click; the
+            // very first click can't be distinguished without deferring all
+            // navigation, which we avoid so slide clicks stay snappy.
+            if (e.detail > 1) return;
+            const selection = window.getSelection();
+            if (selection && !selection.isCollapsed && selection.toString().trim()) return;
+
+            const x = e.clientX / window.innerWidth;
+            if (x < 0.33) {
+                this.prev();
+            } else {
+                this.next();
+            }
+        });
+    }
+
+    _bindTouch() {
+        let startX = 0;
+        let startY = 0;
+
+        document.addEventListener('touchstart', (e) => {
+            startX = e.touches[0].clientX;
+            startY = e.touches[0].clientY;
+        }, { passive: true });
+
+        document.addEventListener('touchend', (e) => {
+            const dx = e.changedTouches[0].clientX - startX;
+            const dy = e.changedTouches[0].clientY - startY;
+
+            // Only trigger on horizontal swipes (more horizontal than vertical, min 50px)
+            if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 50) {
+                if (dx < 0) {
+                    this.next();
+                } else {
+                    this.prev();
+                }
+            }
+        }, { passive: true });
+    }
+
+    _bindHashChange() {
+        window.addEventListener('hashchange', () => {
+            const hash = parseInt(location.hash.replace('#', ''), 10);
+            if (hash >= 1 && hash <= this.totalSlides && hash - 1 !== this.currentIndex) {
+                this.goTo(hash - 1);
+            }
+        });
+    }
+
+    _toggleFullscreen() {
+        if (document.fullscreenElement) {
+            document.exitFullscreen();
+        } else {
+            document.documentElement.requestFullscreen().catch(() => {});
+        }
+    }
+
+    // --- Copy slide as markdown ---
+
+    _decodeMarkdown(b64) {
+        // base64 (UTF-8) → string, so unicode math/symbols round-trip cleanly.
+        const binary = atob(b64);
+        const bytes = Uint8Array.from(binary, c => c.charCodeAt(0));
+        return new TextDecoder().decode(bytes);
+    }
+
+    _copyCurrentSlideMarkdown() {
+        const slide = this.slides[this.currentIndex];
+        const encoded = slide && slide.getAttribute('data-colloquium-md');
+        if (!encoded) {
+            this._showToast('No markdown source for this slide');
+            return;
+        }
+        let markdown;
+        try {
+            markdown = this._decodeMarkdown(encoded);
+        } catch (_) {
+            this._showToast('Could not read slide markdown');
+            return;
+        }
+        const done = () => this._showToast('Copied slide markdown');
+        const fail = () => this._showToast('Copy failed — clipboard blocked');
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(markdown).then(done, () => {
+                if (!this._copyViaTextarea(markdown)) fail();
+                else done();
+            });
+        } else if (this._copyViaTextarea(markdown)) {
+            done();
+        } else {
+            fail();
+        }
+    }
+
+    _copyViaTextarea(text) {
+        // Fallback for insecure contexts (file://, plain http) where the async
+        // Clipboard API is unavailable.
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.setAttribute('readonly', '');
+        ta.style.position = 'fixed';
+        ta.style.top = '-1000px';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        let ok = false;
+        try {
+            ok = document.execCommand('copy');
+        } catch (_) {
+            ok = false;
+        }
+        document.body.removeChild(ta);
+        return ok;
+    }
+
+    _showToast(message) {
+        if (!this._toast) {
+            this._toast = document.createElement('div');
+            this._toast.className = 'colloquium-toast';
+            document.body.appendChild(this._toast);
+        }
+        this._toast.textContent = message;
+        this._toast.classList.add('visible');
+        clearTimeout(this._toastTimer);
+        this._toastTimer = setTimeout(() => {
+            this._toast.classList.remove('visible');
+        }, 1500);
+    }
+}
+
+// Initialize when DOM is ready
+document.addEventListener('DOMContentLoaded', () => {
+    window.colloquium = new ColloquiumPresentation();
+});
+
+</script>
+
+<script>
+window.colloquiumFitDisplayMathIn = function(root) {
+    var scope = root || document;
+    scope.querySelectorAll(".katex-display").forEach(function(display) {
+        display.style.fontSize = "";
+        var katexNode = display.querySelector(".katex");
+        if (!katexNode) return;
+
+        var availableWidth = display.clientWidth;
+        var contentWidth = katexNode.scrollWidth;
+        if (!availableWidth || !contentWidth || contentWidth <= availableWidth) return;
+
+        var scale = availableWidth / contentWidth;
+        display.style.fontSize = (scale * 100) + "%";
+    });
+};
+
+window.colloquiumFitCaptionedFiguresIn = function(root) {
+    var scope = root || document;
+    var selector = [
+        ".slide-content > figure.colloquium-figure:first-child:last-child",
+        ".colloquium-grid > .col > figure.colloquium-figure:first-child:last-child",
+        ".colloquium-row > figure.colloquium-figure:first-child:last-child"
+    ].join(", ");
+
+    scope.querySelectorAll(selector).forEach(function(figure) {
+        var img = figure.querySelector("img");
+        var caption = figure.querySelector("figcaption");
+        if (!img || !caption) return;
+
+        var container = figure.parentElement;
+        if (!container) return;
+
+        figure.style.width = "";
+        img.style.width = "";
+        img.style.height = "";
+        img.style.maxWidth = "";
+        img.style.maxHeight = "";
+
+        var naturalWidth = img.naturalWidth || 0;
+        var naturalHeight = img.naturalHeight || 0;
+        if (!naturalWidth || !naturalHeight) {
+            img.addEventListener("load", function() {
+                window.colloquiumFitCaptionedFiguresIn(scope);
+            }, { once: true });
+            return;
+        }
+
+        var availableWidth = container.clientWidth;
+        var availableHeight = container.clientHeight;
+        if (!availableWidth || !availableHeight) return;
+
+        var scale = Math.min(
+            availableWidth / naturalWidth,
+            availableHeight / naturalHeight
+        );
+        if (!isFinite(scale) || scale <= 0) return;
+
+        var renderWidth = Math.max(1, Math.floor(naturalWidth * scale));
+        var renderHeight = Math.max(1, Math.floor(naturalHeight * scale));
+
+        figure.style.width = renderWidth + "px";
+        img.style.width = renderWidth + "px";
+        img.style.height = renderHeight + "px";
+        img.style.maxWidth = "none";
+        img.style.maxHeight = "none";
+    });
+};
+
+// Render KaTeX math elements and highlight code after deferred scripts load
+window.addEventListener("load", function() {
+    if (typeof katex !== "undefined") {
+        var mathEls = document.querySelectorAll(".math");
+        if (mathEls.length > 0) {
+            // Temporarily show all slides so KaTeX can measure container
+            // dimensions for delimiter sizing (e.g. tall parentheses)
+            var mathSlides = document.querySelectorAll(".slide");
+            var mathOrigDisplay = [];
+            var mathOrigVisibility = [];
+            mathSlides.forEach(function(s) {
+                mathOrigDisplay.push(s.style.display);
+                mathOrigVisibility.push(s.style.visibility);
+                s.style.display = "flex";
+                if (!s.classList.contains("active")) {
+                    s.style.visibility = "hidden";
+                }
+            });
+
+            mathEls.forEach(function(el) {
+                var displayMode = el.tagName === "DIV";
+                katex.render(el.textContent, el, {
+                    displayMode: displayMode,
+                    throwOnError: false
+                });
+            });
+            window.colloquiumFitDisplayMathIn(document);
+
+            // Restore original slide display and visibility
+            mathSlides.forEach(function(s, i) {
+                s.style.display = mathOrigDisplay[i];
+                s.style.visibility = mathOrigVisibility[i];
+            });
+        }
+
+        if (document.fonts && document.fonts.ready) {
+            document.fonts.ready.then(function() {
+                window.colloquiumFitDisplayMathIn(document);
+                window.colloquiumFitCaptionedFiguresIn(document);
+            });
+        }
+    }
+    if (typeof hljs !== "undefined") {
+        hljs.highlightAll();
+    }
+    window.colloquiumFitCaptionedFiguresIn(document);
+    // Initialize Chart.js charts — temporarily show all slides so canvases
+    // have dimensions, render charts, capture static print images, then restore.
+    if (typeof Chart !== "undefined") {
+        var chartCanvases = document.querySelectorAll("[data-chart-config]");
+        if (chartCanvases.length > 0) {
+            // Make all slides visible so Chart.js can measure canvas size
+            // Use visibility:hidden to avoid a visual flash
+            var slides = document.querySelectorAll(".slide");
+            var origDisplay = [];
+            slides.forEach(function(s) {
+                origDisplay.push(s.style.display);
+                s.style.display = "flex";
+                if (!s.classList.contains("active")) {
+                    s.style.visibility = "hidden";
+                }
+            });
+
+            chartCanvases.forEach(function(canvas) {
+                try {
+                    var config = JSON.parse(canvas.getAttribute("data-chart-config"));
+                    // Convert tick prefix/suffix strings into real callbacks
+                    var scales = config.options && config.options.scales;
+                    if (scales) {
+                        Object.keys(scales).forEach(function(axis) {
+                            var ticks = scales[axis].ticks;
+                            if (!ticks) return;
+                            var pre = ticks.prefix || "";
+                            var suf = ticks.suffix || "";
+                            if (pre || suf) {
+                                delete ticks.prefix;
+                                delete ticks.suffix;
+                                ticks.callback = function(v) { return pre + v + suf; };
+                            }
+                        });
+                    }
+                    new Chart(canvas, config);
+                } catch(e) {
+                    var slideEl = canvas.closest(".slide");
+                    var slideNum = slideEl ? (slideEl.getAttribute("data-index") || "?") : "?";
+                    var chartId = canvas.id || "unknown";
+                    console.error(
+                        "Colloquium: failed to render chart '" + chartId +
+                        "' on slide " + (parseInt(slideNum, 10) + 1) + ": " + e.message
+                    );
+                }
+            });
+
+            // After a frame, capture each chart as a static image for print,
+            // then always restore slide visibility (even if chart rendering failed).
+            requestAnimationFrame(function() {
+                chartCanvases.forEach(function(canvas) {
+                    try {
+                        var img = document.createElement("img");
+                        img.src = canvas.toDataURL("image/png");
+                        img.className = "colloquium-chart-print";
+                        canvas.parentNode.insertBefore(img, canvas.nextSibling);
+                    } catch(e) {}
+                });
+                // Restore original slide visibility
+                slides.forEach(function(s, i) {
+                    s.style.display = origDisplay[i];
+                    s.style.visibility = "";
+                });
+            });
+        }
+    }
+});
+</script>
 </body>
 </html>

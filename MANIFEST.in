@@ -21,6 +21,9 @@ include scripts/grid5000/_submit_gpu_job.sh
 include scripts/grid5000/run_afghanistan_labeling.sh
 include scripts/grid5000/run_afghanistan_labeling_job.sh
 include scripts/grid5000/submit_afghanistan_labeling.sh
+include scripts/grid5000/run_worldwide_labeling.sh
+include scripts/grid5000/run_worldwide_labeling_job.sh
+include scripts/grid5000/submit_worldwide_labeling.sh
 include scripts/grid5000/run_streaming_build.sh
 include scripts/grid5000/run_streaming_build_job.sh
 include scripts/grid5000/run_streaming_finalization.sh
