@@ -4,26 +4,23 @@ from __future__ import annotations
 
 import json
 import re
-import shlex
-import subprocess
 import sys
 import time
 from collections.abc import Mapping
 from datetime import datetime
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Annotated, Any, Final
 
 import click
 import typer
 
+from osm_polygon_sentence_relevance.operator import preflight as _preflight
 from osm_polygon_sentence_relevance.operator import recorded_job, relay
 from osm_polygon_sentence_relevance.operator.config import (
     DATA_ROOT,
     DEFAULT_SAMPLING_H3_RESOLUTION,
     DEFAULT_SAMPLING_SEED,
-    INPUT_DATASET_ID,
-    OUTPUT_DATASET_ID,
     OperatorConfig,
     Scope,
     Stage,
@@ -49,6 +46,18 @@ from osm_polygon_sentence_relevance.operator.oar import (
     JobState,
     OarClient,
     is_live_state,
+)
+from osm_polygon_sentence_relevance.operator.preflight import (
+    git_head as _git_head,
+)
+from osm_polygon_sentence_relevance.operator.preflight import (
+    remote_home as _remote_home,
+)
+from osm_polygon_sentence_relevance.operator.preflight import (
+    resolve_input_revision as _resolve_input_revision,
+)
+from osm_polygon_sentence_relevance.operator.preflight import (
+    usage_policy_preflight as _usage_policy_preflight,
 )
 from osm_polygon_sentence_relevance.operator.remote_completion import (
     assert_remote_exit_zero,
@@ -126,53 +135,6 @@ def _milestone(message: str) -> None:
 _ACTIVE_RUN_ID: str | None = None
 
 
-def _git_head() -> str:
-    result = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        capture_output=True,
-        text=True,
-        check=True,
-        timeout=10,
-    )
-    value = _result_text(result).strip()
-    if len(value) != 40:
-        raise RuntimeError("current source checkout has no immutable commit")
-    dirty = subprocess.run(
-        ["git", "status", "--porcelain"],
-        capture_output=True,
-        text=True,
-        check=True,
-        timeout=10,
-    )
-    if dirty.stdout:
-        raise RuntimeError("current source checkout must be clean")
-    return value
-
-
-def _resolve_input_revision(explicit: str | None, stage: str) -> str:
-    if explicit:
-        return explicit
-    try:
-        from huggingface_hub import HfApi
-    except ImportError as exc:
-        raise RuntimeError(
-            "the hub extra is required to resolve the input revision"
-        ) from exc
-    dataset_id = OUTPUT_DATASET_ID if stage == Stage.LABEL.value else INPUT_DATASET_ID
-    sha = HfApi().dataset_info(dataset_id, revision="main").sha
-    if not sha:
-        raise RuntimeError("input dataset main did not resolve to a commit")
-    return sha
-
-
-def _remote_home(ssh: SshClient) -> PurePosixPath:
-    result = ssh.run('printf "%s\\n" "$HOME"')
-    value = _result_text(result).strip()
-    if not value.startswith("/") or "\n" in value or ".." in value.split("/"):
-        raise RuntimeError("remote home path is invalid")
-    return PurePosixPath(value)
-
-
 def _result_text(result: Any) -> str:
     """Return ``result.text`` if available, else ``result.stdout``."""
 
@@ -182,17 +144,12 @@ def _result_text(result: Any) -> str:
     return getattr(result, "stdout", "")
 
 
-def _usage_policy_preflight(ssh: SshClient, site: str) -> None:
-    """Fail closed unless Grid'5000's live policy checks succeed."""
-
-    if re.fullmatch(r"[a-z][a-z0-9-]*", site) is None:
-        raise ValueError("Grid'5000 site name is invalid")
-    quoted_site = shlex.quote(site)
-    ssh.run(
-        "command -v usagepolicycheck >/dev/null && "
-        f"usagepolicycheck -l --sites {quoted_site} >/dev/null && "
-        "usagepolicycheck -t >/dev/null"
-    )
+# Keep the subprocess module visible through the CLI for existing test seams;
+# both modules intentionally reference the same module object.
+subprocess = _preflight.subprocess
+# Preserve the historical module-level constants for callers and tests.
+INPUT_DATASET_ID = _preflight.INPUT_DATASET_ID
+OUTPUT_DATASET_ID = _preflight.OUTPUT_DATASET_ID
 
 
 def _emit(progress: LiveProgress) -> None:

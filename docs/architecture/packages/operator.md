@@ -12,13 +12,20 @@ reattaches by durable run ID.
 
 ## Internal structure
 
-Configuration, state, SSH, scheduling, storage, relay, monitoring, sampling
-policy, and completion are separate modules under `operator/`. The stable
+Configuration, preflight, state, SSH, scheduling, storage, relay, monitoring,
+sampling policy, and completion are separate modules under `operator/`. The stable
 public `operator/config.py` facade delegates to `_config/`: `defaults.py` owns
 immutable defaults, `enums.py` owns scope and stage values, `validation.py`
 owns parsing and validation, and `models.py` owns the immutable configuration
 and run-identity dataclasses. Dependencies flow from models to those leaf
 modules, never back from validation into models.
+
+`operator/preflight.py` owns the checks that must happen before a run can
+mutate remote state: the local checkout must be a clean immutable commit, the
+Hub input revision is resolved once, the remote home path is validated, and
+Grid'5000 usage-policy checks fail closed. The CLI keeps compatibility aliases
+for these functions while the implementation remains isolated and directly
+tested.
 
 ## Invariants
 
