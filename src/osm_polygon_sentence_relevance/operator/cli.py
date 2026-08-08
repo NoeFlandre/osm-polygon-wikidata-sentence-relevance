@@ -1303,54 +1303,64 @@ def _resume_run(run_id: str, args: SimpleNamespace) -> int:
         stager = Stager(ssh)
         stager.prepare(config, layout)
         _stage_hf_token(stager, layout)
-        if config.prompt_version == V2_LOGIT_PROMPT_VERSION:
-            split_job_raw = durable.facts.get("split_output_job_id")
-            if type(split_job_raw) is not int:
-                raise RuntimeError("V2 continuation has no split output")
-            split_output = layout.logs / str(split_job_raw) / "output/sentences.parquet"
-            v2_input = stager.prepare_v2_input(config, layout, split_output)
-            assets = stager.prepare_label_assets(config, layout, download_input=False)
-            assets = replace(assets, input_parquet=v2_input)
+        active_stage = durable.facts.get("active_stage")
+        if active_stage == Stage.SPLIT.value:
+            job_id = controller.submit(component=Stage.SPLIT)
+            print(f"Submitted split continuation job {job_id}", flush=True)
+            candidate = (site_value, job_id)
         else:
-            assets = stager.prepare_label_assets(
-                config,
-                layout,
-                download_input=config.stage is Stage.LABEL,
-            )
-            if config.stage is Stage.ALL:
+            if config.prompt_version == V2_LOGIT_PROMPT_VERSION:
                 split_job_raw = durable.facts.get("split_output_job_id")
-                if type(split_job_raw) is not int or split_job_raw <= 0:
-                    raise RuntimeError("stage-all continuation has no split output")
-                input_parquet = (
+                if type(split_job_raw) is not int:
+                    raise RuntimeError("V2 continuation has no split output")
+                split_output = (
                     layout.logs / str(split_job_raw) / "output/sentences.parquet"
                 )
-                ssh.run(f"test -s {input_parquet}")
-                assets = replace(assets, input_parquet=input_parquet)
-        if not assets.llama_server_ready:
-            ensure_llama_server(ssh, oar, store, layout, args.poll_seconds)
-        relay_root_value = durable.facts.get("resume_relay_root")
-        if isinstance(relay_root_value, str):
-            _ensure_relay_at_destination(
-                store=store,
-                config=config,
-                site=site_value,
-                layout=layout,
-                relay_root=Path(relay_root_value),
-            )
-        job_id = controller.submit(
-            component=Stage.LABEL,
-            input_parquet=assets.input_parquet,
-            model_file=assets.model_file,
-            tokenizer_dir=assets.tokenizer_dir,
-            walltime_seconds=MICRO_LABEL_WALLTIME_SECONDS,
-            policy_type=policy_type_for(
-                datetime.now(tz=GRID5000_TZ),
+                v2_input = stager.prepare_v2_input(config, layout, split_output)
+                assets = stager.prepare_label_assets(
+                    config, layout, download_input=False
+                )
+                assets = replace(assets, input_parquet=v2_input)
+            else:
+                assets = stager.prepare_label_assets(
+                    config,
+                    layout,
+                    download_input=config.stage is Stage.LABEL,
+                )
+                if config.stage is Stage.ALL:
+                    split_job_raw = durable.facts.get("split_output_job_id")
+                    if type(split_job_raw) is not int or split_job_raw <= 0:
+                        raise RuntimeError("stage-all continuation has no split output")
+                    input_parquet = (
+                        layout.logs / str(split_job_raw) / "output/sentences.parquet"
+                    )
+                    ssh.run(f"test -s {input_parquet}")
+                    assets = replace(assets, input_parquet=input_parquet)
+            if not assets.llama_server_ready:
+                ensure_llama_server(ssh, oar, store, layout, args.poll_seconds)
+            relay_root_value = durable.facts.get("resume_relay_root")
+            if isinstance(relay_root_value, str):
+                _ensure_relay_at_destination(
+                    store=store,
+                    config=config,
+                    site=site_value,
+                    layout=layout,
+                    relay_root=Path(relay_root_value),
+                )
+            job_id = controller.submit(
+                component=Stage.LABEL,
+                input_parquet=assets.input_parquet,
+                model_file=assets.model_file,
+                tokenizer_dir=assets.tokenizer_dir,
                 walltime_seconds=MICRO_LABEL_WALLTIME_SECONDS,
-            ),
-            gpu_memory_mb=getattr(args, "gpu_memory_mb", 40_000),
-        )
-        print(f"Submitted continuation job {job_id}", flush=True)
-        candidate = (site_value, job_id)
+                policy_type=policy_type_for(
+                    datetime.now(tz=GRID5000_TZ),
+                    walltime_seconds=MICRO_LABEL_WALLTIME_SECONDS,
+                ),
+                gpu_memory_mb=getattr(args, "gpu_memory_mb", 40_000),
+            )
+            print(f"Submitted continuation job {job_id}", flush=True)
+            candidate = (site_value, job_id)
     if candidate is None:
         print(
             f"[operator] run {run_id} has no recorded live allocation; nothing "
