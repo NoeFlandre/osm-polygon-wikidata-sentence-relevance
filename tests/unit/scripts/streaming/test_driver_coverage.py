@@ -612,15 +612,18 @@ def test_download_shard_rejects_optional_pair_mismatch(tmp_path: Path) -> None:
         )
 
 
-def test_evict_local_state_removes_both_directories(tmp_path: Path) -> None:
+def test_evict_local_state_removes_all_shard_scratch(tmp_path: Path) -> None:
     driver = StreamDriver(**_good_args(tmp_path))
     inbox = tmp_path / "shards" / "inbox" / "a-latest"
     active = tmp_path / "shards" / "active" / "a-latest"
+    partial = tmp_path / "shards" / "partial" / "a-latest"
     inbox.mkdir(parents=True)
     active.mkdir(parents=True)
+    partial.mkdir(parents=True)
     driver._evict_local_shard_state("a-latest")
     assert not inbox.exists()
     assert not active.exists()
+    assert not partial.exists()
 
 
 def test_write_state_removes_failed_temporary_file(tmp_path: Path) -> None:

@@ -14,6 +14,7 @@ from osm_polygon_sentence_relevance.schemas import (
     SEGMENTED_SENTENCES_SCHEMA,
 )
 from osm_polygon_sentence_relevance.sentence_table import (
+    iter_segmented_batches,
     segment_joined_sections,
     validate_joined_sections_table,
 )
@@ -127,6 +128,35 @@ def _one_row(section_text_raw="Some text.", **overrides):
 
 
 class TestSegmentJoinedSections:
+    def test_iter_batches_resume_skips_prior_segmenter_calls(self):
+        rows = [
+            _row(
+                section_id=[f"sec-{index}"],
+                document_id=[f"doc-{index}"],
+                section_text_raw=[f"Text {index}."],
+                section_index=[index],
+            )
+            for index in range(2)
+        ]
+        segmenter = FakeSegmenter({"Text 0.": ["A."], "Text 1.": ["B."]})
+        batches = list(
+            iter_segmented_batches(
+                pa.concat_tables(rows), segmenter, batch_size=1, start_index=1
+            )
+        )
+        assert [(batch.start_index, batch.end_index) for batch in batches] == [(1, 2)]
+        assert segmenter.calls == 1
+
+    @pytest.mark.parametrize("start_index", [-1, 3])
+    def test_iter_batches_rejects_invalid_start_index(self, start_index):
+        segmenter = FakeSegmenter({"Some text.": ["A."]})
+        with pytest.raises(SegmentationError, match="start_index"):
+            list(
+                iter_segmented_batches(
+                    _one_row(), segmenter, batch_size=2, start_index=start_index
+                )
+            )
+
     def test_one_section_multiple_sentences(self):
         seg = FakeSegmenter({"Some text.": ["First.", "Second."]})
         result = segment_joined_sections(_one_row(), seg)

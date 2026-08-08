@@ -11,6 +11,7 @@ model adapter or finalization logic is present here.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any
 
@@ -97,6 +98,16 @@ class SegmentedTableResult:
     report: SegmentationReport
 
 
+@dataclass(frozen=True, slots=True)
+class SegmentedBatch:
+    """One deterministic section batch produced by the segmenter."""
+
+    start_index: int
+    end_index: int
+    table: pa.Table
+    report: SegmentationReport
+
+
 # Deterministic sort key applied before segmentation (ascending on each).
 _SORT_KEYS = [
     ("polygon_id", "ascending"),
@@ -145,95 +156,156 @@ def segment_joined_sections(
     PreprocessingError
         On malformed ``section_path_raw`` or ``osm_tags_raw`` JSON.
     """
-    validate_joined_sections_table(table)
-    _check_batch_size(batch_size)
-
-    if table.num_rows == 0:
+    batches = list(iter_segmented_batches(table, segmenter, batch_size=batch_size))
+    if not batches:
         return SegmentedTableResult(
             table=SEGMENTED_SENTENCES_SCHEMA.empty_table(),
-            report=SegmentationReport(
-                input_section_occurrence_count=0,
-                emitted_segment_count=0,
-                retained_sentence_occurrence_count=0,
-                dropped_empty_raw_count=0,
-                dropped_empty_normalized_count=0,
-                wikipedia_sentence_occurrence_count=0,
-                wikivoyage_sentence_occurrence_count=0,
-            ),
+            report=_empty_segmentation_report(),
         )
+    return SegmentedTableResult(
+        table=pa.concat_tables([batch.table for batch in batches]),
+        report=_merge_segmentation_reports(batch.report for batch in batches),
+    )
+
+
+def iter_segmented_batches(
+    table: pa.Table,
+    segmenter: SentenceSegmenter,
+    *,
+    batch_size: int = 128,
+    start_index: int = 0,
+) -> Iterator[SegmentedBatch]:
+    """Yield deterministic segmentation batches, optionally resuming at an index.
+
+    All validation and preflight parsing happens before the first segmenter
+    call. ``start_index`` is a section-row offset, not an output-row offset,
+    and must be aligned with ``batch_size`` unless it equals the table size.
+    Earlier batches are skipped without invoking the segmenter, allowing a
+    caller to resume after a durable batch checkpoint.
+    """
+    validate_joined_sections_table(table)
+    _check_batch_size(batch_size)
+    if isinstance(start_index, bool) or not isinstance(start_index, int):
+        raise SegmentationError(
+            "iter_segmented_batches: start_index must be an integer"
+        )
+    if start_index < 0 or start_index > table.num_rows:
+        raise SegmentationError(
+            "iter_segmented_batches: start_index must be within table bounds"
+        )
+    if start_index != table.num_rows and start_index % batch_size:
+        raise SegmentationError(
+            "iter_segmented_batches: start_index must align with batch_size"
+        )
+    if table.num_rows == 0 or start_index == table.num_rows:
+        return
 
     compute: Any = pc
     indices = compute.sort_indices(table, sort_keys=_SORT_KEYS)
-    sorted_table = table.take(indices)
-
-    # --- Preflight: convert to Python once, parse structured columns once,
-    # and validate sources before invoking the segmenter at all. This
-    # guarantees zero segmenter calls when preflight fails, even for rows
-    # that would fall in a later batch. ---
-    rows = _to_sorted_provenance_rows(sorted_table)
-
-    columns: dict[str, list] = {name: [] for name in SEGMENTED_SENTENCES_SCHEMA.names}
-    prepared_sections: list = []
-    sources: list[str] = []
-
-    num_sections = len(rows)
-    for start in range(0, num_sections, batch_size):
-        end = min(start + batch_size, num_sections)
+    rows = _to_sorted_provenance_rows(table.take(indices))
+    for start in range(start_index, len(rows), batch_size):
+        end = min(start + batch_size, len(rows))
         batch_rows = rows[start:end]
         texts = [row["section_text_raw"] for row in batch_rows]
         languages = [row["language"] for row in batch_rows]
         section_results = segment_sections_batch(texts, languages, segmenter)
-
+        columns: dict[str, list[Any]] = {
+            name: [] for name in SEGMENTED_SENTENCES_SCHEMA.names
+        }
+        sources: list[str] = []
+        prepared_sections: list[Any] = []
         for row, prepared in zip(batch_rows, section_results, strict=True):
             source = row["source"]
-            section_path = row["section_path"]
-            osm_tags = row["osm_tags"]
-
             for sentence in prepared.sentences:
-                columns["polygon_id"].append(row["polygon_id"])
-                columns["wikidata"].append(row["wikidata"])
-                columns["document_id"].append(row["document_id"])
-                columns["article_id"].append(row["article_id"])
-                columns["source"].append(source)
-                columns["language"].append(row["language"])
-                columns["site"].append(row["site"])
-                columns["page_title"].append(row["page_title"])
-                columns["url"].append(row["url"])
-                columns["page_id"].append(row["page_id"])
-                columns["revision_id"].append(row["revision_id"])
-                columns["revision_timestamp"].append(row["revision_timestamp"])
-                columns["document_content_hash"].append(row["document_content_hash"])
-                columns["section_id"].append(row["section_id"])
-                columns["section_index"].append(row["section_index"])
-                columns["section_path"].append(section_path)
-                columns["sentence_index"].append(sentence.sentence_index)
-                columns["sentence_text_raw"].append(sentence.sentence_text_raw)
-                columns["sentence_text_normalized"].append(
-                    sentence.sentence_text_normalized
-                )
-                columns["section_content_hash"].append(row["section_content_hash"])
-                columns["polygon_name"].append(row["polygon_name"])
-                columns["osm_primary_tag"].append(row["osm_primary_tag"])
-                columns["osm_tags"].append(osm_tags)
-                columns["region"].append(row["region"])
-                columns["lat"].append(row["lat"])
-                columns["lon"].append(row["lon"])
-
+                _append_sentence_row(columns, row, source, sentence)
             prepared_sections.append(prepared)
             sources.append(source)
+        yield SegmentedBatch(
+            start_index=start,
+            end_index=end,
+            table=pa.table(
+                {
+                    name: pa.array(
+                        columns[name],
+                        type=SEGMENTED_SENTENCES_SCHEMA.field(name).type,
+                    )
+                    for name in SEGMENTED_SENTENCES_SCHEMA.names
+                },
+                schema=SEGMENTED_SENTENCES_SCHEMA,
+            ),
+            report=build_segmentation_report(prepared_sections, sources),
+        )
 
-    out_table = pa.table(
-        {
-            name: pa.array(
-                columns[name], type=SEGMENTED_SENTENCES_SCHEMA.field(name).type
-            )
-            for name in SEGMENTED_SENTENCES_SCHEMA.names
-        },
-        schema=SEGMENTED_SENTENCES_SCHEMA,
+
+def _append_sentence_row(
+    columns: dict[str, list[Any]], row: dict[str, Any], source: str, sentence: Any
+) -> None:
+    """Append one prepared sentence while preserving the output schema order."""
+    columns["polygon_id"].append(row["polygon_id"])
+    columns["wikidata"].append(row["wikidata"])
+    columns["document_id"].append(row["document_id"])
+    columns["article_id"].append(row["article_id"])
+    columns["source"].append(source)
+    columns["language"].append(row["language"])
+    columns["site"].append(row["site"])
+    columns["page_title"].append(row["page_title"])
+    columns["url"].append(row["url"])
+    columns["page_id"].append(row["page_id"])
+    columns["revision_id"].append(row["revision_id"])
+    columns["revision_timestamp"].append(row["revision_timestamp"])
+    columns["document_content_hash"].append(row["document_content_hash"])
+    columns["section_id"].append(row["section_id"])
+    columns["section_index"].append(row["section_index"])
+    columns["section_path"].append(row["section_path"])
+    columns["sentence_index"].append(sentence.sentence_index)
+    columns["sentence_text_raw"].append(sentence.sentence_text_raw)
+    columns["sentence_text_normalized"].append(sentence.sentence_text_normalized)
+    columns["section_content_hash"].append(row["section_content_hash"])
+    columns["polygon_name"].append(row["polygon_name"])
+    columns["osm_primary_tag"].append(row["osm_primary_tag"])
+    columns["osm_tags"].append(row["osm_tags"])
+    columns["region"].append(row["region"])
+    columns["lat"].append(row["lat"])
+    columns["lon"].append(row["lon"])
+
+
+def _empty_segmentation_report() -> SegmentationReport:
+    return SegmentationReport(
+        input_section_occurrence_count=0,
+        emitted_segment_count=0,
+        retained_sentence_occurrence_count=0,
+        dropped_empty_raw_count=0,
+        dropped_empty_normalized_count=0,
+        wikipedia_sentence_occurrence_count=0,
+        wikivoyage_sentence_occurrence_count=0,
     )
 
-    report = build_segmentation_report(prepared_sections, sources)
-    return SegmentedTableResult(table=out_table, report=report)
+
+def _merge_segmentation_reports(
+    reports: Iterator[SegmentationReport],
+) -> SegmentationReport:
+    values = list(reports)
+    return SegmentationReport(
+        input_section_occurrence_count=sum(
+            report.input_section_occurrence_count for report in values
+        ),
+        emitted_segment_count=sum(report.emitted_segment_count for report in values),
+        retained_sentence_occurrence_count=sum(
+            report.retained_sentence_occurrence_count for report in values
+        ),
+        dropped_empty_raw_count=sum(
+            report.dropped_empty_raw_count for report in values
+        ),
+        dropped_empty_normalized_count=sum(
+            report.dropped_empty_normalized_count for report in values
+        ),
+        wikipedia_sentence_occurrence_count=sum(
+            report.wikipedia_sentence_occurrence_count for report in values
+        ),
+        wikivoyage_sentence_occurrence_count=sum(
+            report.wikivoyage_sentence_occurrence_count for report in values
+        ),
+    )
 
 
 # Fields copied verbatim from each joined row into the output row.

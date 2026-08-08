@@ -134,6 +134,11 @@ Parquet schema metadata, and the generated `README.md` dataset card via
 When `--work-dir` is supplied, the pipeline persists per-shard
 checkpoints and a factual progress heartbeat so a long build can be
 interrupted and resumed without re-running already-validated shards.
+The streaming worker also persists completed section batches under
+`shards/partial/<shard_key>/` before advancing its progress manifest. If a
+walltime limit interrupts a large shard, the next allocation resumes at the
+next validated section batch; it does not repeat completed batches. Partial
+state is removed only after the complete shard checkpoint has been validated.
 Layout:
 
 ```text

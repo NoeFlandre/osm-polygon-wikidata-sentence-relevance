@@ -6,13 +6,17 @@ new code; this module re-exports the stable public symbols.
 """
 
 from osm_polygon_sentence_relevance.sentences.table import (
+    SegmentedBatch,
     SegmentedTableResult,
+    iter_segmented_batches,
     segment_joined_sections,
     validate_joined_sections_table,
 )
 
 __all__ = [
+    "SegmentedBatch",
     "SegmentedTableResult",
+    "iter_segmented_batches",
     "segment_joined_sections",
     "validate_joined_sections_table",
 ]

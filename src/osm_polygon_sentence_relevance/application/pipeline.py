@@ -8,6 +8,14 @@ from typing import Any
 import pyarrow as pa
 
 from osm_polygon_sentence_relevance.application import checkpoint as _checkpoint
+from osm_polygon_sentence_relevance.application._checkpoint.partial import (
+    append_partial_batch,
+    create_partial_state,
+    discard_partial_state,
+    load_partial_state,
+    merge_partial_reports,
+    read_partial_table,
+)
 from osm_polygon_sentence_relevance.application.checkpoint import (
     SHARDS_ACTIVE_DIRNAME,
     CheckpointPublicationError,
@@ -44,7 +52,10 @@ from osm_polygon_sentence_relevance.sentences.segmentation import (
     SegmentationReport,
     SentenceSegmenter,
 )
-from osm_polygon_sentence_relevance.sentences.table import segment_joined_sections
+from osm_polygon_sentence_relevance.sentences.table import (
+    iter_segmented_batches,
+    segment_joined_sections,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -377,9 +388,44 @@ def process_single_shard(
         )
 
         joined = build_region_section_occurrences(shard)
-        segmented_res = segment_joined_sections(
-            joined.table, segmenter, batch_size=batch_size
+        partial = load_partial_state(
+            work_path,
+            shard_key=shard.shard_key,
+            source_commit=source_commit,
+            input_dataset_revision=input_dataset_revision,
+            pipeline_version=pipeline_version,
+            model_name=model_name,
+            batch_size=batch_size,
+            input_root=in_path,
+            source_files=initial_manifest,
+            total_sections=joined.table.num_rows,
         )
+        if partial is None:
+            partial = create_partial_state(
+                work_path,
+                shard_key=shard.shard_key,
+                source_commit=source_commit,
+                input_dataset_revision=input_dataset_revision,
+                pipeline_version=pipeline_version,
+                model_name=model_name,
+                batch_size=batch_size,
+                input_root=in_path,
+                source_files=initial_manifest,
+                total_sections=joined.table.num_rows,
+            )
+        for segmented_batch in iter_segmented_batches(
+            joined.table,
+            segmenter,
+            batch_size=batch_size,
+            start_index=partial.next_section_index,
+        ):
+            partial = append_partial_batch(partial, segmented_batch)
+        if partial.next_section_index != joined.table.num_rows:
+            raise CheckpointValidationError(
+                f"partial segmentation incomplete for {shard.shard_key!r}"
+            )
+        segmented_table = read_partial_table(partial)
+        segmented_report = merge_partial_reports(partial)
 
         verified_manifest = _verify_pre_publish_manifest(
             shard,
@@ -391,8 +437,8 @@ def process_single_shard(
             work_dir=work_path,
             shard=shard,
             input_root=in_path,
-            table=segmented_res.table,
-            report=segmented_res.report,
+            table=segmented_table,
+            report=segmented_report,
             input_dataset_revision=input_dataset_revision,
             pipeline_version=pipeline_version,
             source_commit=source_commit,
@@ -414,6 +460,7 @@ def process_single_shard(
             input_root=in_path,
             current_manifest=verified_manifest,
         )
+        discard_partial_state(work_path, shard.shard_key)
 
         return ShardCheckpointResult(
             shard_key=shard.shard_key,

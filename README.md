@@ -138,7 +138,12 @@ invocation with the same `--work-dir` resumes from the last valid
 checkpoint; invalid or mismatched checkpoints are moved (never deleted)
 into `${work_dir}/shards/quarantine/${shard_key}.${utc}.${hex8}/` with
 their original bytes preserved byte-for-byte. Each checkpoint carries
-a per-file source manifest: the six source files referenced by the
+a partial shard progress manifest under
+`${work_dir}/shards/partial/${shard_key}/`; completed section batches are
+validated before that manifest advances, so a walltime interruption resumes
+inside a large shard instead of repeating completed batches. Partial state
+is removed only after the complete shard checkpoint has been validated. Each
+checkpoint carries a per-file source manifest: the six source files referenced by the
 discovered `RegionShardSet` (paths, sizes, and SHA-256). On resume
 every source file is re-hashed; any change in bytes, presence or
 absence quarantines that shard's checkpoint. A run-level

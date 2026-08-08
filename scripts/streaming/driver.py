@@ -389,6 +389,7 @@ class StreamDriver:
         for path in (
             self.work_dir / "shards" / "inbox" / shard_key,
             self.work_dir / "shards" / "active" / shard_key,
+            self.work_dir / "shards" / "partial" / shard_key,
         ):
             if path.exists() or path.is_symlink():
                 safe_cleanup_scratch(path, prefix_requirement="shards")

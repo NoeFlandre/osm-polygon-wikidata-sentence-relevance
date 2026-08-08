@@ -9,7 +9,10 @@ must satisfy (GREEN).
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
+
+import pytest
 
 from osm_polygon_sentence_relevance.application.checkpoint import (
     load_shard_checkpoint,
@@ -32,7 +35,22 @@ VALID_INPUT_REVISION = "abcdefabcdefabcdefabcdefabcdefabcdefabcd"
 
 
 class _MockSegmenter:
+    def __init__(self) -> None:
+        self.calls = 0
+
     def split_batch(self, texts: list[str], languages: list[str]) -> list[list[str]]:
+        self.calls += 1
+        return [[s.strip() for s in t.split(".") if s.strip()] for t in texts]
+
+
+class _InterruptAfterFirstBatch:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def split_batch(self, texts: list[str], languages: list[str]) -> list[list[str]]:
+        self.calls += 1
+        if self.calls > 1:
+            raise RuntimeError("simulated walltime interruption")
         return [[s.strip() for s in t.split(".") if s.strip()] for t in texts]
 
 
@@ -42,6 +60,7 @@ def _write_region(
     *,
     wikidata_id: str = "Q1",
     text: str | None = None,
+    extra_section: bool = False,
 ) -> None:
     if text is None:
         text = f"First sentence. Second sentence ({region})."
@@ -77,18 +96,38 @@ def _write_region(
             )
         ],
         wikipedia_sections_rows=[
-            make_section_row(
-                section_id=f"sec-{region}",
-                document_id=f"doc-{region}",
-                article_id=f"art-{region}",
-                wikidata=wikidata_id,
-                project="wikipedia",
-                language="en",
-                site="en.wikipedia.org",
-                section_index=0,
-                heading="Introduction",
-                text=text,
-            )
+            *[
+                make_section_row(
+                    section_id=f"sec-{region}",
+                    document_id=f"doc-{region}",
+                    article_id=f"art-{region}",
+                    wikidata=wikidata_id,
+                    project="wikipedia",
+                    language="en",
+                    site="en.wikipedia.org",
+                    section_index=0,
+                    heading="Introduction",
+                    text=text,
+                )
+            ],
+            *(
+                [
+                    make_section_row(
+                        section_id=f"sec-{region}-2",
+                        document_id=f"doc-{region}",
+                        article_id=f"art-{region}",
+                        wikidata=wikidata_id,
+                        project="wikipedia",
+                        language="en",
+                        site="en.wikipedia.org",
+                        section_index=1,
+                        heading="Details",
+                        text="Third sentence.",
+                    )
+                ]
+                if extra_section
+                else []
+            ),
         ],
     )
 
@@ -220,6 +259,67 @@ def test_process_single_shard_writes_one_shard_checkpoint(tmp_path: Path) -> Non
         == (work / "shards" / "active" / "reg-a" / "segmented.parquet").stat().st_size
     )
     assert len(meta["segmented_schema_sha256"]) == 64
+
+
+def test_process_single_shard_resumes_after_intra_shard_interruption(
+    tmp_path: Path,
+) -> None:
+    root, _ = _fixture_two_shards(tmp_path)
+    _write_region(root, "reg-a", extra_section=True)
+    work = tmp_path / "work"
+    work.mkdir()
+    shard = sorted(discover_shards(root), key=lambda s: s.shard_key)[0]
+
+    with pytest.raises(Exception, match="segmenter raised an error"):
+        process_single_shard(
+            shard=shard,
+            input_root=root,
+            segmenter=_InterruptAfterFirstBatch(),
+            work_dir=work,
+            source_commit=VALID_SOURCE_COMMIT,
+            input_dataset_revision=VALID_INPUT_REVISION,
+            pipeline_version="v1",
+            model_name="mock",
+            batch_size=1,
+        )
+
+    progress = work / "shards" / "partial" / "reg-a" / "progress.json"
+    assert progress.exists()
+    payload = json.loads(progress.read_text())
+    assert payload["next_section_index"] == 1
+    assert len(payload["batches"]) == 1
+
+    resume_segmenter = _MockSegmenter()
+    result = process_single_shard(
+        shard=shard,
+        input_root=root,
+        segmenter=resume_segmenter,
+        work_dir=work,
+        source_commit=VALID_SOURCE_COMMIT,
+        input_dataset_revision=VALID_INPUT_REVISION,
+        pipeline_version="v1",
+        model_name="mock",
+        batch_size=1,
+    )
+
+    assert result.published is True
+    assert resume_segmenter.calls == 1
+    assert not progress.parent.exists()
+    table, _, _ = load_shard_checkpoint(
+        work,
+        "reg-a",
+        input_dataset_revision=VALID_INPUT_REVISION,
+        pipeline_version="v1",
+        source_commit=VALID_SOURCE_COMMIT,
+        model_name="mock",
+        batch_size=1,
+        input_root=root,
+    )
+    assert [row["sentence_text_raw"] for row in table.to_pylist()] == [
+        "First sentence",
+        "Second sentence (reg-a)",
+        "Third sentence",
+    ]
 
 
 # ---------------------------------------------------------------------------
