@@ -90,8 +90,10 @@ def list_remote_shard_keys(
     hub_api: Any,
     repo_id: str,
     revision: str,
+    directory: str = "polygons",
+    allow_empty: bool = False,
 ) -> list[str]:
-    """Return the deterministic shard-key inventory from ``polygons/``.
+    """Return a deterministic shard-key inventory from one table directory.
 
     ``HfApi.list_repo_tree`` owns pagination.  Only direct Parquet files
     under the pinned revision are accepted; folders and unrelated files
@@ -99,17 +101,20 @@ def list_remote_shard_keys(
     shard and therefore provides the authoritative streaming inventory.
     """
 
+    if not directory or directory.startswith("/") or ".." in directory.split("/"):
+        raise ValueError("directory must be a relative repository path")
+    directory = directory.rstrip("/")
     entries = hub_api.list_repo_tree(
         repo_id=repo_id,
         repo_type="dataset",
         revision=revision,
-        path_in_repo="polygons",
+        path_in_repo=directory,
         recursive=False,
     )
     keys: set[str] = set()
     for entry in entries:
         path = getattr(entry, "path", "") or ""
-        prefix = "polygons/"
+        prefix = f"{directory}/"
         if not path.startswith(prefix) or not path.endswith(".parquet"):
             continue
         filename = path[len(prefix) :]
@@ -118,9 +123,15 @@ def list_remote_shard_keys(
         key = filename.removesuffix(".parquet")
         if key:
             keys.add(key)
+    if not keys and allow_empty:
+        return []
     if not keys:
+        if directory == "polygons":
+            raise DriverError(
+                f"no polygon shard files found for {repo_id!r} at {revision!r}"
+            )
         raise DriverError(
-            f"no polygon shard files found for {repo_id!r} at {revision!r}"
+            f"no shard files found under {directory!r} for {repo_id!r} at {revision!r}"
         )
     return sorted(keys)
 
@@ -165,6 +176,7 @@ class StreamDriver:
         model_name: str = "sat-12l-sm",
         batch_size: int = 128,
         local_input_root: Path | None = None,
+        optional_shard_keys: frozenset[str] | set[str] | None = None,
     ) -> None:
         if not isinstance(repo_id, str) or "/" not in repo_id or not repo_id.strip():
             raise ValueError("repo_id must be a non-blank owner/name string")
@@ -201,6 +213,17 @@ class StreamDriver:
         if hub_api is None:
             raise ValueError("hub_api must be supplied")
         self.hub_api = hub_api
+        if optional_shard_keys is not None:
+            if any(
+                not isinstance(key, str) or not key.strip()
+                for key in optional_shard_keys
+            ):
+                raise ValueError("optional_shard_keys must contain non-blank strings")
+            self._optional_shard_keys: frozenset[str] | None = frozenset(
+                optional_shard_keys
+            )
+        else:
+            self._optional_shard_keys = None
 
         # OAR_JOB_ID guard: numeric string required
         oar_job_id = os.environ.get("OAR_JOB_ID")
@@ -401,31 +424,39 @@ class StreamDriver:
             resolved_revision=self.cfg.resolved_revision,
             target_dir=inbox,
             hub_api=self.hub_api,
+            # The upstream revision is immutable.  Let the Hub cache resume
+            # interrupted transfers instead of forcing a fresh copy after a
+            # short allocation ends.
+            force_download=False,
         )
-        optional: dict[str, bool] = {}
-        for subdir in ("wikivoyage/documents", "wikivoyage/sections"):
-            filename = f"{subdir}/{shard_key}.parquet"
-            try:
-                optional[subdir] = bool(
-                    self.hub_api.file_exists(
-                        repo_id=self.cfg.upstream_repo_id,
-                        filename=filename,
-                        revision=self.cfg.resolved_revision,
-                        repo_type="dataset",
+        if self._optional_shard_keys is None:
+            optional: dict[str, bool] = {}
+            for subdir in ("wikivoyage/documents", "wikivoyage/sections"):
+                filename = f"{subdir}/{shard_key}.parquet"
+                try:
+                    optional[subdir] = bool(
+                        self.hub_api.file_exists(
+                            repo_id=self.cfg.upstream_repo_id,
+                            filename=filename,
+                            revision=self.cfg.resolved_revision,
+                            repo_type="dataset",
+                        )
                     )
-                )
-            except Exception as exc:
+                except Exception as exc:
+                    raise DriverError(
+                        f"could not determine whether optional file exists: {filename}"
+                    ) from exc
+            if len(set(optional.values())) != 1:
                 raise DriverError(
-                    f"could not determine whether optional file exists: {filename}"
-                ) from exc
-        if len(set(optional.values())) != 1:
-            raise DriverError(
-                "wikivoyage documents and sections must either both exist or both be absent"
-            )
+                    "wikivoyage documents and sections must either both exist or both be absent"
+                )
+            has_optional = optional["wikivoyage/documents"]
+        else:
+            has_optional = shard_key in self._optional_shard_keys
 
         download_paths: list[str] = []
         for subdir, fname in _DOWNLOAD_LAYOUT:
-            if subdir.startswith("wikivoyage") and not optional[subdir]:
+            if subdir.startswith("wikivoyage") and not has_optional:
                 continue
             upstream_rel = f"{subdir}/{fname.replace('<shard>', shard_key)}"
             download_paths.append(upstream_rel)
@@ -520,6 +551,31 @@ def main(argv: list[str] | None = None) -> int:
     import huggingface_hub
 
     hub_api = huggingface_hub.HfApi()
+    optional_shard_keys: frozenset[str] | None = None
+    if args.command == "stream-build":
+        document_keys = frozenset(
+            list_remote_shard_keys(
+                hub_api=hub_api,
+                repo_id=args.upstream_repo_id,
+                revision=args.resolved_revision,
+                directory="wikivoyage/documents",
+                allow_empty=True,
+            )
+        )
+        section_keys = frozenset(
+            list_remote_shard_keys(
+                hub_api=hub_api,
+                repo_id=args.upstream_repo_id,
+                revision=args.resolved_revision,
+                directory="wikivoyage/sections",
+                allow_empty=True,
+            )
+        )
+        if document_keys != section_keys:
+            raise DriverError(
+                "wikivoyage documents and sections must have identical shard inventories"
+            )
+        optional_shard_keys = document_keys
     driver = StreamDriver(
         repo_id=args.repo_id,
         resolved_revision=args.resolved_revision,
@@ -535,6 +591,7 @@ def main(argv: list[str] | None = None) -> int:
         pipeline_version=args.pipeline_version,
         model_name=args.model_name,
         batch_size=args.batch_size,
+        optional_shard_keys=optional_shard_keys,
     )
 
     from osm_polygon_sentence_relevance.sentences.sat import SaTSentenceSegmenter

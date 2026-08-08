@@ -463,6 +463,68 @@ def _apply_classification(
     raise RuntimeError(f"unhandled exit class: {classification}")
 
 
+def _finalize_split_checkpointed(
+    *,
+    store: StateStore,
+    config: OperatorConfig,
+    ssh: SshClient,
+    layout: RemoteLayout,
+    oar: OarClient,
+    poll_seconds: float,
+) -> int:
+    """Finalize a complete split checkpoint set and continue the workflow.
+
+    This is shared by a fresh run and a resumed run.  For ``stage=split`` it
+    publishes the validated split release.  For ``stage=all`` it preserves the
+    finalized split output and reopens the durable state for label submission.
+    """
+
+    final_job = oar.submit(split_finalization_submission(config, layout))
+    store.transition(
+        expected=RunPhase.CHECKPOINTED,
+        target=RunPhase.FINALIZING,
+        facts={"finalization_job_id": final_job},
+    )
+    print(f"Submitted finalization job {final_job}", flush=True)
+    monitor_job_with_log(
+        ssh,
+        oar,
+        layout,
+        final_job,
+        "finalize.stdout.log",
+        poll_seconds,
+        sleeper=time.sleep,
+    )
+    assert_remote_exit_zero(ssh, layout, final_job, "finalize.exit_code")
+    store.transition(
+        expected=RunPhase.FINALIZING,
+        target=RunPhase.VALIDATED,
+        facts={"split_output_job_id": final_job},
+    )
+    if config.stage is Stage.SPLIT:
+        output_dir = layout.logs / str(final_job) / "output"
+        hub_commit = publish_split(
+            ssh,
+            layout,
+            output_dir,
+            config.output_dataset_id,
+        )
+        store.transition(
+            expected=RunPhase.VALIDATED,
+            target=RunPhase.COMPLETE,
+            facts={"published": True, "hub_commit": hub_commit},
+        )
+        print(f"Sentence splitting complete: run {config.run_id}", flush=True)
+        mark_remote_status(ssh, layout, "complete")
+    else:
+        store.transition(
+            expected=RunPhase.VALIDATED,
+            target=RunPhase.REMOTE_PREPARED,
+            facts={"active_stage": Stage.SPLIT.value},
+        )
+    return final_job
+
+
 def _classify_or_continue(
     args: SimpleNamespace,
     store: StateStore,
@@ -594,6 +656,28 @@ def _classify_or_continue(
         resume_artifact_path=relay_artifact_path,
         failure_reason_token=failure_reason_token,
     )
+
+    if classification is ExitClass.COMPLETE and not is_label:
+        _finalize_split_checkpointed(
+            store=store,
+            config=config,
+            ssh=ssh,
+            layout=layout,
+            oar=oar,
+            poll_seconds=args.poll_seconds,
+        )
+        if config.stage is Stage.ALL:
+            # The split output is now durable and the state is reopened at
+            # REMOTE_PREPARED. Re-enter the persisted continuation path so
+            # label assets and the next bounded GPU allocation are staged
+            # without requiring a second local command.
+            _resume_run(config.run_id, args)
+            return (
+                ExitClass.COMPLETE
+                if store.load().phase is RunPhase.COMPLETE
+                else ExitClass.CONTINUE
+            )
+        return ExitClass.COMPLETE
 
     if classification is not ExitClass.CONTINUE:
         return classification
@@ -1436,40 +1520,15 @@ def _run(args: SimpleNamespace) -> int:
             target=RunPhase.CHECKPOINTED,
             facts={"split_job_id": job_id},
         )
-        final_job = oar.submit(split_finalization_submission(config, layout))
-        store.transition(
-            expected=RunPhase.CHECKPOINTED,
-            target=RunPhase.FINALIZING,
-            facts={"finalization_job_id": final_job},
-        )
-        print(f"Submitted finalization job {final_job}", flush=True)
-        monitor_job_with_log(
-            ssh,
-            oar,
-            layout,
-            final_job,
-            "finalize.stdout.log",
-            args.poll_seconds,
-            sleeper=time.sleep,
-        )
-        assert_remote_exit_zero(ssh, layout, final_job, "finalize.exit_code")
-        store.transition(
-            expected=RunPhase.FINALIZING,
-            target=RunPhase.VALIDATED,
-            facts={"split_output_job_id": final_job},
+        _finalize_split_checkpointed(
+            store=store,
+            config=config,
+            ssh=ssh,
+            layout=layout,
+            oar=oar,
+            poll_seconds=args.poll_seconds,
         )
         if config.stage is Stage.SPLIT:
-            output_dir = layout.logs / str(final_job) / "output"
-            hub_commit = publish_split(
-                ssh, layout, output_dir, config.output_dataset_id
-            )
-            store.transition(
-                expected=RunPhase.VALIDATED,
-                target=RunPhase.COMPLETE,
-                facts={"published": True, "hub_commit": hub_commit},
-            )
-            print(f"Sentence splitting complete: run {config.run_id}", flush=True)
-            mark_remote_status(ssh, layout, "complete")
             return 0
 
     if config.stage in {Stage.LABEL, Stage.ALL}:

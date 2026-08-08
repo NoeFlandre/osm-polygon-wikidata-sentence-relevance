@@ -461,6 +461,88 @@ def test_remote_inventory_is_sorted_and_unique() -> None:
     ]
 
 
+def test_remote_inventory_supports_another_table_directory() -> None:
+    hub = mock.Mock()
+    hub.list_repo_tree.return_value = [
+        mock.Mock(path="wikivoyage/documents/b.parquet"),
+        mock.Mock(path="wikivoyage/documents/a.parquet"),
+        mock.Mock(path="wikivoyage/documents/ignored.txt"),
+    ]
+
+    assert list_remote_shard_keys(
+        hub_api=hub,
+        repo_id="o/r",
+        revision="r",
+        directory="wikivoyage/documents",
+    ) == ["a", "b"]
+
+
+@pytest.mark.parametrize("directory", ["", "/absolute", "tables/../polygons"])
+def test_remote_inventory_rejects_unsafe_directory(directory: str) -> None:
+    with pytest.raises(ValueError, match="relative repository path"):
+        list_remote_shard_keys(
+            hub_api=mock.Mock(),
+            repo_id="o/r",
+            revision="r",
+            directory=directory,
+        )
+
+
+def test_remote_inventory_allows_absent_optional_directory() -> None:
+    hub = mock.Mock()
+    hub.list_repo_tree.return_value = []
+
+    assert (
+        list_remote_shard_keys(
+            hub_api=hub,
+            repo_id="o/r",
+            revision="r",
+            directory="wikivoyage/documents",
+            allow_empty=True,
+        )
+        == []
+    )
+
+
+def test_remote_inventory_rejects_empty_required_non_polygon_directory() -> None:
+    hub = mock.Mock()
+    hub.list_repo_tree.return_value = []
+    with pytest.raises(DriverError, match="no shard files found under"):
+        list_remote_shard_keys(
+            hub_api=hub,
+            repo_id="o/r",
+            revision="r",
+            directory="wikivoyage/documents",
+        )
+
+
+def test_ctor_rejects_blank_optional_shard_key(tmp_path: Path) -> None:
+    args = _good_args(tmp_path)
+    args["optional_shard_keys"] = {""}
+    with pytest.raises(ValueError, match="optional_shard_keys"):
+        StreamDriver(**args)
+
+
+def test_download_shard_uses_precomputed_optional_inventory(
+    tmp_path: Path,
+) -> None:
+    args = _good_args(tmp_path)
+    args["optional_shard_keys"] = {"a-latest"}
+    driver = StreamDriver(**args)
+    inbox = tmp_path / "shards" / "inbox" / "a-latest"
+
+    with (
+        mock.patch("scripts.streaming.driver.discover_shards", return_value=[]),
+        mock.patch("scripts.streaming.driver.PerFileHubDownloader") as downloader,
+    ):
+        driver._download_shard(shard_key="a-latest", inbox=inbox)
+
+    downloader.return_value.download_many.assert_called_once()
+    paths = downloader.return_value.download_many.call_args.args[0]
+    assert len(paths) == 6
+    args["hub_api"].file_exists.assert_not_called()
+
+
 def test_ctor_rejects_missing_allocation_work_dir(monkeypatch, tmp_path: Path) -> None:
     args = _good_args(tmp_path)
     allocation = tmp_path / "allocation-12345"

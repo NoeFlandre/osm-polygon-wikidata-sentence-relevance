@@ -286,7 +286,7 @@ def test_download_propagates_metadata_failure(tmp_path: Path) -> None:
     """If get_hf_file_metadata raises, a DownloadError is raised."""
     d = _make(tmp_path)
     hub = mock.MagicMock()
-    hub.hf_hub_download = _fake_dl_for(b"hi")
+    hub.hf_hub_download = mock.Mock(side_effect=_fake_dl_for(b"hi"))
 
     def _bad_meta(*a, **k):
         raise RuntimeError("meta fail")
@@ -316,6 +316,39 @@ def test_download_propagates_hf_hub_download_failure(tmp_path: Path) -> None:
         pytest.raises(DownloadError, match="hf_hub_download"),
     ):
         d.download("polygons/foo.parquet")
+
+
+def test_download_can_reuse_pinned_revision_cache(tmp_path: Path) -> None:
+    """Immutable stream inputs may reuse Hub's verified local cache."""
+
+    hub = mock.MagicMock()
+    hub.hf_hub_download = mock.Mock(side_effect=_fake_dl_for(b"hi"))
+    downloader = PerFileHubDownloader(
+        repo_id="owner/repo",
+        resolved_revision="a" * 40,
+        target_dir=tmp_path,
+        hub_api=hub,
+        force_download=False,
+    )
+    meta = _fake_meta(commit="a" * 40, etag='"x"', location="https://hub/foo")
+    with mock.patch(
+        "scripts.streaming.downloader._import_huggingface_hub",
+        return_value=(hub, lambda *_a, **_kw: meta),
+    ):
+        downloader.download("polygons/a-latest.parquet")
+
+    assert hub.hf_hub_download.call_args.kwargs["force_download"] is False
+
+
+def test_ctor_rejects_non_boolean_force_download(tmp_path: Path) -> None:
+    with pytest.raises(TypeError, match="force_download"):
+        PerFileHubDownloader(
+            repo_id="owner/repo",
+            resolved_revision="a" * 40,
+            target_dir=tmp_path,
+            hub_api=mock.Mock(),
+            force_download=1,  # type: ignore[arg-type]
+        )
 
 
 def test_download_raises_when_local_file_missing_after_dl(tmp_path: Path) -> None:

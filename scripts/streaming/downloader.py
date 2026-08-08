@@ -101,6 +101,7 @@ class PerFileHubDownloader:
         resolved_revision: str,
         target_dir: Path,
         hub_api: Any,
+        force_download: bool = True,
     ) -> None:
         if not isinstance(repo_id, str) or not repo_id.strip() or "/" not in repo_id:
             raise ValueError("repo_id must be a non-blank owner/name string")
@@ -116,11 +117,14 @@ class PerFileHubDownloader:
             raise TypeError("target_dir must be a Path")
         if hub_api is None:
             raise ValueError("hub_api must be supplied (typically HfApi())")
+        if not isinstance(force_download, bool):
+            raise TypeError("force_download must be a boolean")
         self.repo_id = repo_id
         self.resolved_revision = resolved_revision.lower()
         self.target_dir = _phys(target_dir)
         self.target_dir.mkdir(parents=True, exist_ok=True)
         self.hub_api = hub_api
+        self.force_download = force_download
 
     # ------------------------------------------------------------------
     # Public API
@@ -201,7 +205,7 @@ class PerFileHubDownloader:
                 revision=self.resolved_revision,
                 repo_type="dataset",
                 local_dir=str(self.target_dir),
-                force_download=True,
+                force_download=self.force_download,
             )
         except Exception as exc:
             self._safe_unlink(local_path)

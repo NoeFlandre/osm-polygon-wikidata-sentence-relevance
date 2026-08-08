@@ -150,11 +150,11 @@ def test_typer_run_delegates_current_defaults(
         "sampling_h3_resolution": 3,
         "sampling_seed": "sentence-relevance-v2",
         "sampling_target": None,
-            "scope": "region",
-            "site": list(cli.DEFAULT_SITES),
-            "stage": "label",
-            "optimize_continuations": True,
-        }
+        "scope": "region",
+        "site": list(cli.DEFAULT_SITES),
+        "stage": "label",
+        "optimize_continuations": True,
+    }
 
 
 def test_sampling_target_defaults_to_v2_only_for_all_label_runs() -> None:
@@ -518,6 +518,56 @@ def test_run_split_finalizes_publishes_and_marks_complete(
     assert state.phase is RunPhase.COMPLETE
     assert state.facts["published"] is True
     assert state.facts["hub_commit"] == "abcdef123456"
+
+
+def test_finalize_split_checkpointed_publishes_and_marks_complete(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A resumed split run must finalize and publish after checkpoints complete."""
+
+    config = OperatorConfig.build(
+        scope="all",
+        stage="split",
+        source_commit="a" * 40,
+        input_revision="b" * 40,
+    )
+    store = _FakeStore(Path("/state"))
+    store.value = SimpleNamespace(phase=RunPhase.CHECKPOINTED, facts={})
+    ssh = _FakeSsh(target="grenoble")
+    oar = _FakeOar(ssh)
+    layout = cli.RemoteLayout(PurePosixPath("/run"))
+    events: list[str] = []
+    monkeypatch.setattr(cli, "split_finalization_submission", lambda *_: object())
+    monkeypatch.setattr(
+        cli,
+        "monitor_job_with_log",
+        lambda *_args, **_kwargs: events.append("monitored"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "assert_remote_exit_zero",
+        lambda *_args, **_kwargs: events.append("validated"),
+    )
+    monkeypatch.setattr(cli, "publish_split", lambda *_args: "c" * 40)
+    monkeypatch.setattr(
+        cli,
+        "mark_remote_status",
+        lambda *_args: events.append("marked"),
+    )
+
+    cli._finalize_split_checkpointed(
+        store=store,
+        config=config,
+        ssh=ssh,
+        layout=layout,
+        oar=oar,
+        poll_seconds=0.0,
+    )
+
+    assert store.value.phase is RunPhase.COMPLETE
+    assert store.value.facts["hub_commit"] == "c" * 40
+    assert events == ["monitored", "validated", "marked"]
     assert "Sentence splitting complete" in capsys.readouterr().out
 
 
@@ -1344,6 +1394,68 @@ def test_reattach_graceful_deadline_exit_zero_with_valid_checkpoints_is_resumabl
     final = store.load_returns
     assert final.phase is RunPhase.REMOTE_PREPARED
     assert final.facts["continued_after_job"] == 2895249
+
+
+def test_reattach_complete_split_runs_finalization(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A resumed split run must not stop at CHECKPOINTED."""
+
+    config = OperatorConfig.build(
+        scope="all",
+        stage="split",
+        source_commit="a" * 40,
+        input_revision="b" * 40,
+    )
+    store = _FakeStore(Path("/state"))
+    store.value = SimpleNamespace(
+        phase=RunPhase.QUEUED,
+        facts={"active_stage": "split", "site": "sophia", "job_id": 42},
+    )
+    ssh = _FakeSsh(target="sophia")
+    oar = _FakeOar(ssh)
+    monkeypatch.setattr(
+        cli,
+        "_attach_to_site",
+        lambda *_args, **_kwargs: (
+            ssh,
+            cli.RemoteLayout(PurePosixPath("/run")),
+            oar,
+            _FakeController(state=store),
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "inspect_split_resume",
+        lambda **_kwargs: SimpleNamespace(
+            exit_code=0,
+            checkpoint_count=1,
+            total_shards=1,
+            identity_matches=True,
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "classify_split_terminal",
+        lambda *_args, **_kwargs: ExitClass.COMPLETE,
+    )
+    monkeypatch.setattr(cli, "monitor_job_with_log", lambda *_a, **_k: None)
+    monkeypatch.setattr(cli, "assert_remote_exit_zero", lambda *_a, **_k: None)
+    monkeypatch.setattr(cli, "publish_split", lambda *_a: "c" * 40)
+    monkeypatch.setattr(cli, "mark_remote_status", lambda *_a: None)
+
+    result = cli._classify_or_continue(
+        _run_args(stage="split"),
+        store,
+        config,
+        "sophia",
+        42,
+        destination_site="sophia",
+    )
+
+    assert result is ExitClass.COMPLETE
+    assert store.value.phase is RunPhase.COMPLETE
+    assert store.value.facts["hub_commit"] == "c" * 40
 
 
 def test_reattach_missing_job_raises_without_resubmitting(
