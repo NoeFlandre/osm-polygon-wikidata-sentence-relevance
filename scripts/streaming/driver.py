@@ -433,7 +433,7 @@ class StreamDriver:
             # Metadata is not consumed by this driver: the strict source
             # manifest is computed after staging.  Skipping the extra Hub
             # metadata request and transferring independent parquets in
-            # parallel removes twelve network round trips per shard while
+            # parallel removes up to six extra metadata requests per shard while
             # preserving the same byte verification and checkpoint rules.
             dl.download_many(
                 download_paths,
