@@ -64,7 +64,12 @@ def should_seek_replacement(
     forecast = _forecast_datetime(status.scheduled_start)
     if forecast is None:
         return False
-    return forecast > now.astimezone(GRID5000_TZ) + immediate_start_limit
+    local_now = now.astimezone(GRID5000_TZ)
+    # A forecast in the past means the scheduler has rolled the estimate
+    # without starting the job. Treat that as stale and try another site.
+    if forecast <= local_now:
+        return True
+    return forecast > local_now + immediate_start_limit
 
 
 def policy_type_for(now: datetime, *, walltime_seconds: int) -> str:

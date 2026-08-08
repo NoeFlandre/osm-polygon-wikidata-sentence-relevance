@@ -72,13 +72,13 @@ def test_nonqueued_or_unknown_forecast_never_seeks_replacement() -> None:
     assert not should_seek_replacement(_status(start=None), now=now)
 
 
-def test_invalid_or_past_forecast_never_seeks_replacement() -> None:
+def test_invalid_forecast_never_seeks_replacement_but_stale_forecast_does() -> None:
     now = datetime(2026, 7, 29, 14, 0, tzinfo=GRID5000_TZ)
     assert not should_seek_replacement(
         _status(start="not-a-timestamp"),
         now=now,
     )
-    assert not should_seek_replacement(
+    assert should_seek_replacement(
         _status(start="2026-07-29 13:00:00"),
         now=now,
     )
