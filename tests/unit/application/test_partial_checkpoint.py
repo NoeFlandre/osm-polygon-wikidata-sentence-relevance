@@ -427,6 +427,23 @@ def test_load_rejects_extra_entry(tmp_path: Path) -> None:
         )
 
 
+def test_load_removes_interrupted_atomic_temporary_files(tmp_path: Path) -> None:
+    """A killed atomic write must not make durable partial progress unusable."""
+    state = _create(tmp_path)
+    progress_tmp = state.directory / ".progress.json.interrupted.tmp"
+    batch_tmp = state.directory / ".batch-000000000-000000001.parquet.interrupted.tmp"
+    progress_tmp.write_bytes(b"incomplete")
+    batch_tmp.write_bytes(b"incomplete")
+    os.chmod(progress_tmp, 0o600)
+    os.chmod(batch_tmp, 0o600)
+
+    loaded = _load(tmp_path)
+
+    assert loaded is not None
+    assert not progress_tmp.exists()
+    assert not batch_tmp.exists()
+
+
 def test_load_rejects_noncontiguous_progress(tmp_path: Path) -> None:
     state = _create(tmp_path)
     payload = json.loads((state.directory / "progress.json").read_text())

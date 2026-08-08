@@ -133,6 +133,7 @@ def load_partial_state(
         raise CheckpointValidationError("partial next_section_index must be an integer")
     _validate_batch_sequence(batches, next_index, total_sections)
 
+    _remove_interrupted_atomic_temporary_files(directory)
     expected_names = {PARTIAL_PROGRESS_NAME} | {batch.filename for batch in batches}
     names = {path.name for path in directory.iterdir()}
     if names != expected_names:
@@ -431,6 +432,31 @@ def _ensure_regular(path: Path, expected_mode: int) -> None:
         raise CheckpointValidationError(f"partial file is not regular: {path}")
     if info.st_mode & 0o777 != expected_mode:
         raise CheckpointValidationError(f"partial file has unsafe mode: {path}")
+
+
+def _remove_interrupted_atomic_temporary_files(directory: Path) -> None:
+    """Remove only our incomplete atomic-write files after a hard stop.
+
+    A scheduler can kill a process between ``mkstemp`` and ``os.replace``.
+    The durable manifest and batch files remain authoritative, so these
+    temporary files are safe to discard before strict directory validation.
+    """
+    removed = False
+    for path in directory.iterdir():
+        name = path.name
+        is_progress_temp = name.startswith(
+            f".{PARTIAL_PROGRESS_NAME}."
+        ) and name.endswith(".tmp")
+        is_batch_temp = (
+            name.startswith(".batch-") and ".parquet." in name and name.endswith(".tmp")
+        )
+        if not (is_progress_temp or is_batch_temp):
+            continue
+        _ensure_regular(path, _FILE_MODE)
+        path.unlink()
+        removed = True
+    if removed:
+        _fsync_dir_strict(directory)
 
 
 __all__ = [
