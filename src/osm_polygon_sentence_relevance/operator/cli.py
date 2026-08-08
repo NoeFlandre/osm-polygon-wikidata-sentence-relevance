@@ -1271,6 +1271,14 @@ def _resume_run(run_id: str, args: SimpleNamespace) -> int:
         raise RuntimeError(
             "persisted run identity does not reproduce the requested run ID"
         )
+    # Checkpoint identity remains pinned to the original data-producing
+    # source commit, while a resumed split/all run may execute a newer,
+    # behavior-preserving checkout.  This lets performance fixes reuse
+    # validated partial and remote checkpoints without changing the run ID.
+    if config.stage in {Stage.SPLIT, Stage.ALL}:
+        current_execution_commit = _git_head()
+        if current_execution_commit != config.source_commit:
+            config = replace(config, execution_commit=current_execution_commit)
     store = StateStore(DATA_ROOT)
     store.load_or_create(config.run_identity)
     _sync_sampling_target(store, config)

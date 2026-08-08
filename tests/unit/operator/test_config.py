@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import replace
 
 import pytest
 
@@ -621,3 +622,13 @@ def test_default_row_limit_is_preserved_for_split_and_excluded_from_identity() -
     )
     assert defaulted.run_identity.row_limit is None
     assert defaulted.requirements.row_limit == DEFAULT_ROW_LIMIT
+
+
+def test_execution_commit_can_advance_without_changing_checkpoint_identity() -> None:
+    config = OperatorConfig.build(**_base_kwargs())
+    advanced = replace(config, execution_commit="c" * 40)
+    assert advanced.execution_commit == "c" * 40
+    assert advanced.run_id == config.run_id
+    assert (
+        advanced.run_identity.checkpoint_dict() == config.run_identity.checkpoint_dict()
+    )

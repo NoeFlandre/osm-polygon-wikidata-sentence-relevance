@@ -61,6 +61,10 @@ class Stager:
             sort_keys=True,
             separators=(",", ":"),
         )
+        # ``source_commit`` is the immutable data/checkpoint identity.  The
+        # executable checkout may be a newer behavior-preserving revision
+        # when resuming a run, so keep the two contracts separate here.
+        checkout_commit = config.execution_commit or config.source_commit
         script = f"""
 set -euo pipefail
 umask 077
@@ -78,8 +82,8 @@ else
   reused=true
 fi
 git -C "$repo" fetch --no-tags origin main
-git -C "$repo" cat-file -e {_q(config.source_commit)}^{{commit}}
-git -C "$repo" checkout --detach {_q(config.source_commit)}
+git -C "$repo" cat-file -e {_q(checkout_commit)}^{{commit}}
+git -C "$repo" checkout --detach {_q(checkout_commit)}
 test -z "$(git -C "$repo" status --porcelain)"
 UV_BIN="$(command -v uv || true)"
 if [ -z "$UV_BIN" ]; then UV_BIN="$HOME/.local/bin/uv"; fi

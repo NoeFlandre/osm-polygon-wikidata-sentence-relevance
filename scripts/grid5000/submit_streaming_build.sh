@@ -4,8 +4,8 @@
 set -euo pipefail
 umask 077
 
-if [ "$#" -ne 11 ]; then
-    echo "submit_streaming_build: exactly eleven positional arguments are required" >&2
+if [ "$#" -ne 12 ]; then
+    echo "submit_streaming_build: exactly twelve positional arguments are required" >&2
     exit 2
 fi
 
@@ -20,6 +20,7 @@ RUN_ID="$8"; readonly RUN_ID
 BATCH_SIZE="$9"; readonly BATCH_SIZE
 MAX_SHARDS="${10}"; readonly MAX_SHARDS
 SHARD_KEY="${11}"; readonly SHARD_KEY
+DATA_SOURCE_COMMIT="${12}"; readonly DATA_SOURCE_COMMIT
 
 for path in "${REPO_ROOT}" "${HF_HOME}" "${LOG_ROOT}"; do
     case "${path}" in /*) ;; *) echo "submit_streaming_build: persistent path must be absolute" >&2; exit 2 ;; esac
@@ -29,6 +30,7 @@ for path in "${REPO_ROOT}" "${HF_HOME}" "${LOG_ROOT}"; do
     fi
 done
 if ! [[ "${EXPECTED_SOURCE_COMMIT}" =~ ^[0-9a-f]{40}$ ]] || \
+   ! [[ "${DATA_SOURCE_COMMIT}" =~ ^[0-9a-f]{40}$ ]] || \
    ! [[ "${INPUT_REVISION}" =~ ^[0-9a-f]{40}$ ]]; then
     echo "submit_streaming_build: revisions must be 40 lowercase hex characters" >&2
     exit 2

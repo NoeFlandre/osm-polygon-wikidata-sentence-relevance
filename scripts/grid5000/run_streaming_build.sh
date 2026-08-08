@@ -4,8 +4,8 @@
 set -euo pipefail
 umask 077
 
-if [ "$#" -ne 11 ]; then
-    echo "run_streaming_build: exactly eleven positional arguments are required" >&2
+if [ "$#" -ne 12 ]; then
+    echo "run_streaming_build: exactly twelve positional arguments are required" >&2
     exit 2
 fi
 
@@ -20,6 +20,12 @@ RUN_ID="$8"; readonly RUN_ID
 BATCH_SIZE="$9"; readonly BATCH_SIZE
 MAX_SHARDS="${10}"; readonly MAX_SHARDS
 SHARD_KEY="${11}"; readonly SHARD_KEY
+DATA_SOURCE_COMMIT="${12}"; readonly DATA_SOURCE_COMMIT
+
+if ! [[ "${DATA_SOURCE_COMMIT}" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "run_streaming_build: data source commit must be 40 lowercase hex characters" >&2
+    exit 2
+fi
 
 PYTHON="${REPO_ROOT}/.venv/bin/python"
 if [ ! -x "${PYTHON}" ]; then
@@ -42,7 +48,7 @@ args=(
     --repo-id "${OUTPUT_REPO_ID}"
     --upstream-repo-id "${INPUT_REPO_ID}"
     --resolved-revision "${INPUT_REVISION}"
-    --source-commit "${EXPECTED_SOURCE_COMMIT}"
+    --source-commit "${DATA_SOURCE_COMMIT}"
     --work-dir "${WORK_DIR}"
     --batch-size "${BATCH_SIZE}"
     --pipeline-version "0.1.0"

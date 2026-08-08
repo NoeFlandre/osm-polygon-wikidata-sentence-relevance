@@ -76,12 +76,13 @@ def split_submission(config: OperatorConfig, layout: RemoteLayout) -> Submission
         str(layout.logs),
         config.output_dataset_id,
         config.input_dataset_id,
-        config.source_commit,
+        config.execution_commit or config.source_commit,
         revision,
         config.run_id,
         str(config.requirements.batch_size),
         "0",
         shard,
+        config.source_commit,
     )
     return SubmissionRequest(command)
 
@@ -159,6 +160,7 @@ def label_submission(
         str(requirements.sampling_target or 0),
         requirements.sampling_seed,
         str(requirements.sampling_h3_resolution),
+        config.execution_commit or config.source_commit,
     )
     if walltime_seconds == DEFAULT_LABEL_WALLTIME_SECONDS and policy_type is None:
         return SubmissionRequest(

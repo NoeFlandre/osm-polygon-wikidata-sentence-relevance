@@ -213,6 +213,7 @@ def test_resume_prepared_stage_all_reuses_finalized_split_output(
         stage="all",
     )
     monkeypatch.setattr(cli, "DATA_ROOT", tmp_path)
+    monkeypatch.setattr(cli, "_git_head", lambda: config.source_commit)
     calls: list[object] = []
 
     class FakeStager:

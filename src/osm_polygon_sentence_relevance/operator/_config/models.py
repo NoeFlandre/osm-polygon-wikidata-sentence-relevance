@@ -59,6 +59,10 @@ class OperatorConfig:
     stage: Stage
     source_commit: str
     requirements: Grid5000Requirements
+    # The checkout used to execute the pipeline.  This is deliberately not
+    # part of RunIdentity: source_commit identifies the data contract, while
+    # execution_commit may advance for behavior-preserving runtime fixes.
+    execution_commit: str | None = None
     data_root: Path = DATA_ROOT
     input_dataset_id: str = INPUT_DATASET_ID
     output_dataset_id: str = OUTPUT_DATASET_ID
@@ -206,6 +210,7 @@ class OperatorConfig:
             scope=canonical_scope,
             stage=canonical_stage,
             source_commit=validated_source_commit,
+            execution_commit=validated_source_commit,
             requirements=requirements,
             region=canonical_region,
             input_dataset_revision=validated_input_revision,
@@ -375,6 +380,8 @@ class OperatorConfig:
         return self.run_identity.canonical_json
 
     def __post_init__(self) -> None:
+        if self.execution_commit is None:
+            object.__setattr__(self, "execution_commit", self.source_commit)
         is_split = self.stage in (Stage.SPLIT, Stage.ALL)
         is_label = self.stage in (Stage.LABEL, Stage.ALL)
 

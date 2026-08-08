@@ -9,8 +9,8 @@ if ! [[ "${OAR_JOB_ID}" =~ ^[0-9]+$ ]]; then
     echo "run_streaming_build_job: OAR_JOB_ID must be numeric" >&2
     exit 2
 fi
-if [ "$#" -ne 11 ]; then
-    echo "run_streaming_build_job: exactly eleven positional arguments are required" >&2
+if [ "$#" -ne 12 ]; then
+    echo "run_streaming_build_job: exactly twelve positional arguments are required" >&2
     exit 2
 fi
 
@@ -25,6 +25,7 @@ RUN_ID="$8"; readonly RUN_ID
 BATCH_SIZE="$9"; readonly BATCH_SIZE
 MAX_SHARDS="${10}"; readonly MAX_SHARDS
 SHARD_KEY="${11}"; readonly SHARD_KEY
+DATA_SOURCE_COMMIT="${12}"; readonly DATA_SOURCE_COMMIT
 
 RUN_ROOT="$(cd "${REPO_ROOT}/.." && pwd -P)"; readonly RUN_ROOT
 case "${RUN_ROOT}" in
@@ -116,7 +117,7 @@ deadline_helper_run 20m 10m "${PAYLOAD}" \
     "${REPO_ROOT}" "${HF_HOME}" "${WORK_DIR}" \
     "${OUTPUT_REPO_ID}" "${INPUT_REPO_ID}" "${EXPECTED_SOURCE_COMMIT}" \
     "${INPUT_REVISION}" "${RUN_ID}" "${BATCH_SIZE}" "${MAX_SHARDS}" \
-    "${SHARD_KEY}" \
+    "${SHARD_KEY}" "${DATA_SOURCE_COMMIT}" \
     >"${JOB_LOG_DIR}/build.stdout.log" \
     2>"${JOB_LOG_DIR}/build.stderr.log"
 build_rc=$?

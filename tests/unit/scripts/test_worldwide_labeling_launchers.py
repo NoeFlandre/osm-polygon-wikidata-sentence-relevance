@@ -49,7 +49,7 @@ def test_payload_revalidates_immutable_identity_and_pinned_model() -> None:
 
 def test_wrapper_keeps_twenty_argument_front_contract_and_resumable_lock() -> None:
     wrapper = _text("run_worldwide_labeling_job.sh")
-    assert "exactly twenty arguments are required" in wrapper
+    assert "exactly twenty-one arguments are required" in wrapper
     assert "validate_clean_checkout" in wrapper
     assert "flock -n" in wrapper
     assert "labeling.exit_code" in wrapper
@@ -71,11 +71,13 @@ def test_wrapper_rebuilds_environment_on_compute_node_and_marks_failure() -> Non
     assert 'HF_TOKEN_FILE="${RUN_ROOT}/.hf-token"' in wrapper
     assert 'export HF_TOKEN="$(cat -- "${HF_TOKEN_FILE}")"' in wrapper
     assert 'stat -c %a -- "${HF_TOKEN_FILE}"' in wrapper
+    assert 'EXECUTION_COMMIT="${21}"' in wrapper
+    assert 'rev-parse HEAD)" != "${EXECUTION_COMMIT}' in wrapper
 
 
 def test_submitter_uses_shared_policy_helper_and_single_submission() -> None:
     submit = _text("submit_worldwide_labeling.sh")
-    assert "exactly twenty arguments are required" in submit
+    assert "exactly twenty-one arguments are required" in submit
     assert '"40000" "00:55:00"' in submit
     assert '"${command_string}"' in submit
     assert '"${HELPER}"' in submit

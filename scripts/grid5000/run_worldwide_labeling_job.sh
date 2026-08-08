@@ -5,10 +5,10 @@ set -euo pipefail
 umask 077
 : "${OAR_JOB_ID:?OAR_JOB_ID is required}"
 if ! [[ "${OAR_JOB_ID}" =~ ^[0-9]+$ ]]; then echo "run_worldwide_labeling_job: OAR_JOB_ID must be numeric" >&2; exit 2; fi
-if [ "$#" -ne 20 ]; then echo "run_worldwide_labeling_job: exactly twenty arguments are required" >&2; exit 2; fi
+if [ "$#" -ne 21 ]; then echo "run_worldwide_labeling_job: exactly twenty-one arguments are required" >&2; exit 2; fi
 REPO_ROOT="$(cd "$1" && pwd -P)"; readonly REPO_ROOT
-LOG_ROOT="$3"; EXPECTED_SOURCE_COMMIT="${11}"; WORK_DIR="$5"
-readonly LOG_ROOT EXPECTED_SOURCE_COMMIT WORK_DIR
+LOG_ROOT="$3"; DATA_SOURCE_COMMIT="${11}"; WORK_DIR="$5"; EXECUTION_COMMIT="${21}"
+readonly LOG_ROOT DATA_SOURCE_COMMIT WORK_DIR EXECUTION_COMMIT
 RUN_ROOT="$(cd "${REPO_ROOT}/.." && pwd -P)"; readonly RUN_ROOT
 . "$(dirname "${BASH_SOURCE[0]}")/_checkout_guard.sh"
 mark_failed_on_exit() {
@@ -25,7 +25,7 @@ if [ ! -f "${HF_TOKEN_FILE}" ] || [ -L "${HF_TOKEN_FILE}" ] || \
 fi
 export HF_TOKEN="$(cat -- "${HF_TOKEN_FILE}")"
 [ -n "${HF_TOKEN}" ] || { echo "run_worldwide_labeling_job: Hugging Face credential is empty" >&2; exit 1; }
-if [ "$(git -C "${REPO_ROOT}" rev-parse HEAD)" != "${EXPECTED_SOURCE_COMMIT}" ] || \
+if [ "$(git -C "${REPO_ROOT}" rev-parse HEAD)" != "${EXECUTION_COMMIT}" ] || \
    ! validate_clean_checkout "${REPO_ROOT}" "${RUN_ROOT}"; then
     echo "run_worldwide_labeling_job: strict checkout guard failed" >&2
     exit 1

@@ -47,6 +47,17 @@ def test_job_keeps_work_dir_in_persistent_run_root() -> None:
     assert "export HF_HUB_OFFLINE" not in text
 
 
+def test_streaming_split_separates_checkout_and_data_source_commits() -> None:
+    for name in (
+        "submit_streaming_build.sh",
+        "run_streaming_build_job.sh",
+        "run_streaming_build.sh",
+    ):
+        text = _text(name)
+        assert "DATA_SOURCE_COMMIT" in text
+        assert "twelve" in text or '"$#" -ne 12' in text
+
+
 def test_job_rebuilds_environment_on_compute_node() -> None:
     text = _text("run_streaming_build_job.sh")
     assert "_checkout_guard.sh" in text

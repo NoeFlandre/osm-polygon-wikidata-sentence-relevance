@@ -71,6 +71,23 @@ class OarJobIdRequired(DriverError):
     """Raised when the driver is invoked outside an OAR allocation."""
 
 
+def sat_split_kwargs(batch_size: int) -> dict[str, int]:
+    """Return the bounded SaT batching profile used by streaming runs.
+
+    ``process_single_shard`` already bounds the number of sections presented
+    to the segmenter.  Matching SaT's internal batch size to that bound avoids
+    an unnecessary second layer of 32-item micro-batches while preserving the
+    exact input order and segmentation model decisions.
+    """
+    if (
+        isinstance(batch_size, bool)
+        or not isinstance(batch_size, int)
+        or batch_size <= 0
+    ):
+        raise ValueError("batch_size must be a positive integer")
+    return {"batch_size": batch_size, "outer_batch_size": 1000}
+
+
 # Per-shard inbox layout mirrors the production layout under
 # ``input_root``. The six required parquet dirs use ``<shard_key>.parquet``
 # filenames so ``process_single_shard`` and ``discover_shards``
@@ -599,6 +616,7 @@ def main(argv: list[str] | None = None) -> int:
 
     segmenter = SaTSentenceSegmenter(
         model_name=args.model_name,
+        split_kwargs=sat_split_kwargs(args.batch_size),
         device=args.device,
     )
 
@@ -652,4 +670,5 @@ __all__ = [
     "StreamDriver",
     "list_remote_shard_keys",
     "main",
+    "sat_split_kwargs",
 ]

@@ -35,10 +35,20 @@ from scripts.streaming.driver import (  # noqa: E402
     DriverError,
     OarJobIdRequired,
     StreamDriver,
+    sat_split_kwargs,
 )
 
 VALID_REVISION = "abcdef0123456789abcdef0123456789abcdef01"
 VALID_COMMIT = "0123456789abcdef0123456789abcdef01234567"
+
+
+def test_streaming_sat_batching_matches_pipeline_batch_bound() -> None:
+    assert sat_split_kwargs(128) == {"batch_size": 128, "outer_batch_size": 1000}
+
+
+def test_streaming_sat_batching_rejects_invalid_batch_size() -> None:
+    with pytest.raises(ValueError, match="positive integer"):
+        sat_split_kwargs(0)
 
 
 # ---------------------------------------------------------------------------

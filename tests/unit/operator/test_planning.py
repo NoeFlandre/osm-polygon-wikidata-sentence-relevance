@@ -226,8 +226,9 @@ def test_region_split_serializes_exact_shard() -> None:
     request = split_submission(
         _config(stage="split"), RemoteLayout(PurePosixPath("/r"))
     )
-    assert request.command[-1] == "afghanistan-latest"
-    assert request.command[-2] == "0"
+    assert request.command[-1] == "a" * 40
+    assert request.command[-2] == "afghanistan-latest"
+    assert request.command[-3] == "0"
 
 
 def test_label_serializes_context_and_concurrency() -> None:
@@ -238,13 +239,14 @@ def test_label_serializes_context_and_concurrency() -> None:
         model_file=PurePosixPath("/r/model.gguf"),
         tokenizer_dir=PurePosixPath("/r/tokenizer"),
     )
-    assert request.command[-6:] == (
+    assert request.command[-7:] == (
         "8",
         "8192",
         "8",
         "0",
         "sentence-relevance-v2",
         "3",
+        "a" * 40,
     )
 
 
