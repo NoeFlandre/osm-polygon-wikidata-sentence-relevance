@@ -347,19 +347,21 @@ def _prepare_destination_for_resume(
             target=RunPhase.REMOTE_PREPARED,
             facts={"site": site, "job_id": current.facts.get("job_id")},
         )
+    ssh = SshClient(target=site, command_timeout=1800)
+    home = _remote_home(ssh)
+    layout = RemoteLayout(home / "osm-polygon-operator" / config.run_id)
+    _usage_policy_preflight(ssh, site)
+    ensure_home_headroom(
+        ssh,
+        protected_root=layout.root,
+        minimum_headroom_bytes=LABEL_STAGING_HEADROOM_BYTES,
+    )
+    # Refresh the managed checkout even for same-site continuation.  A
+    # resumed run may carry a newer behavior-preserving execution commit.
+    stager = Stager(ssh)
+    stager.prepare(config, layout)
+    _stage_hf_token(stager, layout)
     if relay_root is not None:
-        ssh = SshClient(target=site, command_timeout=1800)
-        home = _remote_home(ssh)
-        layout = RemoteLayout(home / "osm-polygon-operator" / config.run_id)
-        _usage_policy_preflight(ssh, site)
-        ensure_home_headroom(
-            ssh,
-            protected_root=layout.root,
-            minimum_headroom_bytes=LABEL_STAGING_HEADROOM_BYTES,
-        )
-        stager = Stager(ssh)
-        stager.prepare(config, layout)
-        _stage_hf_token(stager, layout)
         assets = stager.prepare_label_assets(config, layout, download_input=True)
         if not assets.llama_server_ready:
 

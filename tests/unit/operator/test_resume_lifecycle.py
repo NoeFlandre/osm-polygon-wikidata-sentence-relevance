@@ -708,6 +708,7 @@ def test_resume_same_site_avoids_relay(
         )
 
     monkeypatch.setattr(cli.recorded_job, "inspect_remote_resume", fake_inspect)
+    monkeypatch.setattr(cli, "_prepare_destination_for_resume", lambda **_kwargs: None)
 
     config = OperatorConfig.build(
         scope="region",
@@ -1043,6 +1044,7 @@ def test_resume_failed_with_valid_partial_checkpoints_recovers_and_submits_one_c
         )
 
     monkeypatch.setattr(cli.recorded_job, "inspect_remote_resume", fake_inspect)
+    monkeypatch.setattr(cli, "_prepare_destination_for_resume", lambda **_kwargs: None)
     monkeypatch.setattr(cli, "label_publication_commit", lambda *a, **kw: "a" * 40)
 
     # Drive the full recovery + continuation path.

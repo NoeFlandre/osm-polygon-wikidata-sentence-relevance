@@ -387,6 +387,48 @@ def test_prepare_cross_site_runs_build_when_binary_is_missing(
     assert llama_calls[0]["poll_seconds"] == 0
 
 
+def test_prepare_same_site_refreshes_execution_checkout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Same-site continuation must install the current execution commit."""
+    config, store = _store_at(
+        tmp_path,
+        RunPhase.REMOTE_PREPARED,
+        facts={"site": "sophia", "active_stage": "split"},
+        stage="split",
+    )
+    calls: list[str] = []
+    fake_ssh = object()
+
+    class FakeStager:
+        def __init__(self, ssh: object) -> None:
+            assert ssh is fake_ssh
+
+        def prepare(self, _config: Any, _layout: Any) -> None:
+            calls.append("prepare")
+
+    monkeypatch.setattr(cli, "SshClient", lambda **_kw: fake_ssh)
+    monkeypatch.setattr(cli, "_remote_home", lambda _ssh: Path("/home/u"))
+    monkeypatch.setattr(
+        cli, "_usage_policy_preflight", lambda *_a: calls.append("policy")
+    )
+    monkeypatch.setattr(
+        cli, "ensure_home_headroom", lambda *_a, **_kw: calls.append("quota")
+    )
+    monkeypatch.setattr(cli, "Stager", FakeStager)
+    monkeypatch.setattr(cli, "_stage_hf_token", lambda *_a: calls.append("token"))
+
+    cli._prepare_destination_for_resume(
+        store=store,
+        config=config,
+        site="sophia",
+        relay_root=None,
+        poll_seconds=0,
+    )
+
+    assert calls == ["policy", "quota", "prepare", "token"]
+
+
 def test_ensure_relay_refuses_disappeared_generation(tmp_path: Path) -> None:
     with pytest.raises(RuntimeError, match="disappeared"):
         cli._ensure_relay_at_destination(
