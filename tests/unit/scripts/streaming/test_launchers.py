@@ -33,13 +33,15 @@ def test_payload_uses_locked_python_real_inventory_and_explicit_cuda() -> None:
     assert "export TRANSFORMERS_OFFLINE=1" not in text
 
 
-def test_job_uses_allocation_bound_scratch_and_never_bare_python() -> None:
+def test_job_keeps_work_dir_in_persistent_run_root() -> None:
     text = _text("run_streaming_build_job.sh")
     assert (
         'SCRATCH_BASE="${LOCALSCRATCH:-${OAR_JOB_SCRATCH_DIR:-/tmp/oar-${OAR_JOB_ID}}}"'
         in text
     )
-    assert 'WORK_DIR="${SCRATCH_BASE}/osm_streaming_${RUN_ID}"' in text
+    assert 'WORK_DIR="${RUN_ROOT}/work"' in text
+    assert 'mkdir -p -m 0700 -- "${WORK_DIR}"' in text
+    assert 'WORK_DIR="${SCRATCH_BASE}/osm_streaming_${RUN_ID}"' not in text
     assert 'PYTHON="${REPO_ROOT}/.venv/bin/python"' in text
     assert "python3" not in text
     assert "export HF_HUB_OFFLINE" not in text

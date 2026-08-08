@@ -85,8 +85,16 @@ case "${SCRATCH_BASE}" in
     *) echo "run_streaming_build_job: scratch path is not allocation-bound" >&2; exit 1 ;;
 esac
 mkdir -p -m 0700 -- "${SCRATCH_BASE}"
-WORK_DIR="${SCRATCH_BASE}/osm_streaming_${RUN_ID}"
-mkdir -m 0700 -- "${WORK_DIR}"
+# Partial shard checkpoints must survive this allocation ending. Keep the
+# work directory in the managed persistent run root; allocation scratch is
+# reserved for disposable caches and scheduler-local temporary files.
+WORK_DIR="${RUN_ROOT}/work"
+if [ -L "${WORK_DIR}" ] || { [ -e "${WORK_DIR}" ] && [ ! -d "${WORK_DIR}" ]; }; then
+    echo "run_streaming_build_job: persistent work directory is unsafe" >&2
+    exit 1
+fi
+mkdir -p -m 0700 -- "${WORK_DIR}"
+chmod 0700 -- "${WORK_DIR}"
 
 JOB_LOG_DIR="${LOG_ROOT}/${OAR_JOB_ID}"
 mkdir -m 0700 -- "${JOB_LOG_DIR}"
