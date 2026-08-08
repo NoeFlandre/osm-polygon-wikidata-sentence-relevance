@@ -11,6 +11,7 @@ from typing import cast
 import pytest
 
 from osm_polygon_sentence_relevance.operator.supervisor import (
+    _CLI_ENTRYPOINT,
     SupervisorLaunch,
     _find_run_id,
     _read_phase,
@@ -229,6 +230,36 @@ def test_supervise_retries_until_durable_run_is_complete(tmp_path: Path) -> None
         ("run", "--scope", "all", "--stage", "all"),
         ("resume", "a" * 20),
     ]
+
+
+def test_supervise_keeps_executable_when_rebuilding_child_resume_command(
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / "runs" / ("a" * 20) / "state.json"
+    state_path.parent.mkdir(parents=True)
+    prefix = ("python", "-c", _CLI_ENTRYPOINT)
+    attempts: list[tuple[str, ...]] = []
+
+    def run_process(
+        command: tuple[str, ...], **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        attempts.append(command)
+        phase = "remote_prepared" if len(attempts) == 1 else "complete"
+        state_path.write_text(json.dumps({"phase": phase}), encoding="utf-8")
+        return subprocess.CompletedProcess(command, 1 if len(attempts) == 1 else 0)
+
+    assert (
+        supervise(
+            (*prefix, "run", "--scope", "all", "--stage", "all"),
+            data_root=tmp_path,
+            log_path=tmp_path / "supervisor.log",
+            run_id="a" * 20,
+            run_process=run_process,
+            sleep=lambda _: None,
+        )
+        == 0
+    )
+    assert attempts[1] == (*prefix, "resume", "a" * 20)
 
 
 def test_supervise_stops_after_split_checkpoint(tmp_path: Path) -> None:

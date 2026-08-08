@@ -120,6 +120,18 @@ def _child_command(arguments: Sequence[str], python_executable: str) -> tuple[st
     return (python_executable, "-c", _CLI_ENTRYPOINT, *arguments)
 
 
+def _child_resume_command(command: Sequence[str], run_id: str) -> tuple[str, ...]:
+    """Build a resume child command without dropping its executable prefix."""
+
+    try:
+        entrypoint_index = command.index(_CLI_ENTRYPOINT)
+    except ValueError:
+        return build_resume_arguments(command, run_id)
+    prefix = tuple(command[: entrypoint_index + 1])
+    cli_arguments = command[entrypoint_index + 1 :]
+    return (*prefix, *build_resume_arguments(cli_arguments, run_id))
+
+
 def _supervisor_command(
     arguments: Sequence[str],
     *,
@@ -276,7 +288,7 @@ def supervise(
             return result.returncode if result.returncode else 1
         if attempt == max_attempts:
             return 1
-        current = build_resume_arguments(current, current_run_id)
+        current = _child_resume_command(current, current_run_id)
         sleep(retry_seconds)
     return 1
 
