@@ -52,9 +52,17 @@ def test_complete_split_inventory_is_complete() -> None:
 
 
 def test_nonzero_split_payload_failure_is_not_retried() -> None:
-    result = classify_split_terminal(_status(), _inspection(23), exit_code=1)
+    result = classify_split_terminal(_status(), _inspection(0), exit_code=1)
     assert result is ExitClass.FAILED
-    assert split_failure_reason(_inspection(23), exit_code=1) == "nonzero-exit"
+    assert split_failure_reason(_inspection(0), exit_code=1) == "nonzero-exit"
+
+
+def test_nonzero_split_exit_with_valid_partial_inventory_is_resumable() -> None:
+    """A killed worker can report nonzero after durable shard checkpoints."""
+    assert (
+        classify_split_terminal(_status(), _inspection(23), exit_code=256)
+        is ExitClass.CONTINUE
+    )
 
 
 def test_missing_split_checkpoints_fail_safely() -> None:

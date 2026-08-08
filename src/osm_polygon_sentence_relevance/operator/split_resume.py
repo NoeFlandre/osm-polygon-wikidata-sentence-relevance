@@ -125,12 +125,16 @@ def classify_split_terminal(
 
     if not inspection.identity_matches:
         return ExitClass.FAILED
-    if exit_code is not None and exit_code not in {0, 130}:
-        return ExitClass.FAILED
     if inspection.checkpoint_count >= inspection.total_shards > 0:
         return ExitClass.COMPLETE if exit_code in {None, 0, 130} else ExitClass.FAILED
-    if inspection.strictly_partial and exit_code in {None, 130}:
+    # A validated partial inventory is the durable source of truth even when
+    # the worker was killed after writing its last checkpoint and therefore
+    # reported a nonzero process exit.  Resume from the next missing shard;
+    # never discard already verified checkpoints because of that exit code.
+    if inspection.strictly_partial:
         return ExitClass.CONTINUE
+    if exit_code is not None and exit_code not in {0, 130}:
+        return ExitClass.FAILED
     if status.message.casefold().find("cancel") >= 0:
         return ExitClass.CANCELLED
     return ExitClass.FAILED
