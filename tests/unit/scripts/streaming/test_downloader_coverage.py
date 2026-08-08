@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import dataclasses
+import threading
+import time
 from pathlib import Path
 from unittest import mock
 
@@ -121,6 +123,75 @@ def test_ctor_rejects_none_hub_api(tmp_path: Path) -> None:
             target_dir=tmp_path,
             hub_api=None,
         )
+
+
+def test_download_many_is_bounded_concurrent_and_keeps_input_order(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    downloader = _make(tmp_path)
+    lock = threading.Lock()
+    active = 0
+    peak = 0
+
+    def fake_download(path_in_repo: str, **_kwargs: object) -> DownloadReceipt:
+        nonlocal active, peak
+        with lock:
+            active += 1
+            peak = max(peak, active)
+        time.sleep(0.02)
+        with lock:
+            active -= 1
+        return DownloadReceipt(
+            path=tmp_path / path_in_repo,
+            repo_id="owner/repo",
+            path_in_repo=path_in_repo,
+            hub_commit_hash="a" * 40,
+            hub_etag=None,
+            hub_url="https://example",
+            size=None,
+            local_sha256="b" * 64,
+            expected_sha256=None,
+        )
+
+    monkeypatch.setattr(downloader, "download", fake_download)
+    paths = [f"polygons/{index}.parquet" for index in range(4)]
+    receipts = downloader.download_many(paths, max_workers=4, fetch_metadata=False)
+
+    assert [receipt.path_in_repo for receipt in receipts] == paths
+    assert peak > 1
+
+
+@pytest.mark.parametrize("max_workers", [0, -1, True, "2"])
+def test_download_many_rejects_invalid_worker_count(
+    tmp_path: Path, max_workers: object
+) -> None:
+    with pytest.raises(ValueError, match="max_workers"):
+        _make(tmp_path).download_many(  # type: ignore[arg-type]
+            ["a"], max_workers=max_workers
+        )
+
+
+def test_download_many_rejects_duplicate_paths(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="duplicates"):
+        _make(tmp_path).download_many(["a", "a"])
+
+
+def test_download_many_empty_input_returns_empty_tuple(tmp_path: Path) -> None:
+    assert _make(tmp_path).download_many([]) == ()
+
+
+def test_download_can_skip_metadata_lookup(tmp_path: Path, monkeypatch) -> None:
+    downloader = _make(tmp_path)
+    hub = _make_hub_module(b"bytes")
+    monkeypatch.setattr(
+        "scripts.streaming.downloader._import_huggingface_hub",
+        lambda: (hub, mock.Mock(side_effect=AssertionError("metadata lookup"))),
+    )
+
+    receipt = downloader.download("polygons/foo.parquet", fetch_metadata=False)
+
+    assert receipt.hub_commit_hash == "a" * 40
+    assert receipt.hub_etag is None
 
 
 # ---------------------------------------------------------------------------

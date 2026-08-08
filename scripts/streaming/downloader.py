@@ -20,8 +20,10 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -130,6 +132,7 @@ class PerFileHubDownloader:
         *,
         expected_sha256: str | None = None,
         url: str | None = None,
+        fetch_metadata: bool = True,
     ) -> DownloadReceipt:
         """Download one file with a fresh fetch, verify SHA-256, and
         produce a ``DownloadReceipt``.
@@ -163,33 +166,33 @@ class PerFileHubDownloader:
         except OSError:
             pass
 
-        # Lazy imports: keep huggingface_hub out of sys.modules for
-        # tests that import this module without invoking ``download``.
-        huggingface_hub, get_hf_file_metadata = _import_huggingface_hub()
-
         metadata_url = (
             url
             if url is not None
             else _synthesized_url(self.repo_id, self.resolved_revision, path_in_repo)
         )
-        try:
-            meta = get_hf_file_metadata(metadata_url)
-        except Exception as exc:
-            raise DownloadError(
-                f"get_hf_file_metadata failed for {path_in_repo!r}: {exc}",
-                partial_path=None,
-            ) from exc
+        # Lazy imports: keep huggingface_hub out of sys.modules for
+        # tests that import this module without invoking ``download``.
+        huggingface_hub, get_hf_file_metadata = _import_huggingface_hub()
+        hub_commit_hash = self.resolved_revision
+        hub_etag: str | None = None
+        hub_url = metadata_url
+        hub_size: int | None = None
+        if fetch_metadata:
+            try:
+                meta = get_hf_file_metadata(metadata_url)
+            except Exception as exc:
+                raise DownloadError(
+                    f"get_hf_file_metadata failed for {path_in_repo!r}: {exc}",
+                    partial_path=None,
+                ) from exc
 
-        hub_commit_hash: str = (
-            getattr(meta, "commit_hash", None) or self.resolved_revision
-        )
-        if not isinstance(hub_commit_hash, str) or len(hub_commit_hash) != 40:
-            hub_commit_hash = self.resolved_revision
-        hub_commit_hash = hub_commit_hash.lower()
-
-        hub_etag = getattr(meta, "etag", None)
-        hub_url = getattr(meta, "location", None) or metadata_url
-        hub_size = getattr(meta, "size", None)
+            candidate_commit = getattr(meta, "commit_hash", None)
+            if isinstance(candidate_commit, str) and len(candidate_commit) == 40:
+                hub_commit_hash = candidate_commit.lower()
+            hub_etag = getattr(meta, "etag", None)
+            hub_url = getattr(meta, "location", None) or metadata_url
+            hub_size = getattr(meta, "size", None)
 
         try:
             local_path_str = huggingface_hub.hf_hub_download(
@@ -244,6 +247,37 @@ class PerFileHubDownloader:
             local_sha256=computed,
             expected_sha256=expected,
         )
+
+    def download_many(
+        self,
+        paths_in_repo: Sequence[str],
+        *,
+        max_workers: int = 6,
+        fetch_metadata: bool = True,
+    ) -> tuple[DownloadReceipt, ...]:
+        """Download independent files concurrently in deterministic order.
+
+        Each path still goes through :meth:`download`, including the same
+        byte-hash verification and cleanup rules.  The worker count is
+        bounded because this is used on shared Grid'5000 storage and Hub
+        connections.  Results retain the input order even when transfers
+        finish in a different order.
+        """
+        paths = tuple(paths_in_repo)
+        if not paths:
+            return ()
+        if (
+            isinstance(max_workers, bool)
+            or not isinstance(max_workers, int)
+            or max_workers < 1
+        ):
+            raise ValueError("max_workers must be a positive integer")
+        if len(set(paths)) != len(paths):
+            raise ValueError("paths_in_repo must not contain duplicates")
+        worker_count = min(max_workers, len(paths))
+        download = partial(self.download, fetch_metadata=fetch_metadata)
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+            return tuple(executor.map(download, paths))
 
     # ------------------------------------------------------------------
     # Helpers

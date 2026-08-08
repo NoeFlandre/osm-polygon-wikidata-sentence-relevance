@@ -268,3 +268,37 @@ def test_v2_engine_private_shape_helpers_reject_wrong_types() -> None:
         v2_engine._mapping([])
     with pytest.raises(V2EngineError, match="non-list"):
         v2_engine._sequence("not-a-list")
+
+
+def test_v2_engine_reuses_worker_pool_until_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created: list[object] = []
+
+    class _Executor:
+        def __init__(self, *, max_workers: int) -> None:
+            self.max_workers = max_workers
+            self.shutdown_calls: list[bool] = []
+            created.append(self)
+
+        def map(self, function, values):
+            return [function(value) for value in values]
+
+        def shutdown(self, *, wait: bool, cancel_futures: bool) -> None:
+            self.shutdown_calls.append(wait and cancel_futures)
+
+    monkeypatch.setattr(v2_engine, "ThreadPoolExecutor", _Executor)
+    engine = V2LogitEngine(
+        endpoint="unused",
+        model="model",
+        concurrency=2,
+        transport=lambda _payload, _timeout: _response(),
+    )
+
+    messages = [[{"role": "user", "content": "classify"}]]
+    engine.generate(messages)
+    engine.generate(messages)
+
+    assert len(created) == 1
+    engine.close()
+    assert created[0].shutdown_calls == [True]

@@ -26,6 +26,10 @@ to Afghanistan.
   completed local batch can be staged to a run-specific
   `.pipeline/checkpoints/<run-id>/` path on Hugging Face `main`; failed uploads
   remain queued for the next resume and never replace a final release lane.
+- Reduced production latency without changing labels: independent streaming
+  input files download through a bounded worker pool, unused per-file Hub
+  metadata requests are skipped, and labeling request workers are reused for
+  the lifetime of an allocation.
 
 ### Added
 

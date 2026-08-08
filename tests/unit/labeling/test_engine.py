@@ -10,6 +10,7 @@ import pytest
 from osm_polygon_sentence_relevance.labeling.engine import (
     EngineError,
     OpenAICompatibleEngine,
+    _http_transport,
 )
 from osm_polygon_sentence_relevance.labeling.prompt import (
     LABEL_RESPONSE_JSON_SCHEMA,
@@ -121,3 +122,105 @@ def test_rejects_invalid_timeout() -> None:
         OpenAICompatibleEngine(
             endpoint="http://localhost", model="m", timeout_seconds=0
         )
+
+
+def test_engine_reuses_worker_pool_until_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created: list[object] = []
+
+    class _Executor:
+        def __init__(self, *, max_workers: int) -> None:
+            self.max_workers = max_workers
+            self.shutdown_calls: list[bool] = []
+            created.append(self)
+
+        def map(self, function, values):
+            return [function(value) for value in values]
+
+        def shutdown(self, *, wait: bool, cancel_futures: bool) -> None:
+            self.shutdown_calls.append(wait and cancel_futures)
+
+    monkeypatch.setattr(
+        "osm_polygon_sentence_relevance.labeling.engine.ThreadPoolExecutor",
+        _Executor,
+    )
+    engine = OpenAICompatibleEngine(
+        endpoint="unused",
+        model="model",
+        concurrency=2,
+        transport=lambda payload, _timeout: {
+            "choices": [{"message": {"content": payload["messages"][0]["content"]}}]
+        },
+    )
+    messages = [_messages("classify")]
+    engine.generate(messages)
+    engine.generate(messages)
+
+    assert len(created) == 1
+    engine.close()
+    assert created[0].shutdown_calls == [True]
+
+
+def test_engine_close_is_idempotent_and_rejects_future_work() -> None:
+    engine = OpenAICompatibleEngine(
+        endpoint="unused",
+        model="model",
+        transport=lambda payload, _timeout: {
+            "choices": [{"message": {"content": payload["messages"][0]["content"]}}]
+        },
+    )
+    engine.close()
+    engine.close()
+    with pytest.raises(EngineError, match="closed"):
+        engine.generate([_messages("classify")])
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        {"choices": [{}]},
+        {"choices": [{"message": []}]},
+        {"choices": [{"message": {"content": None}}]},
+    ],
+)
+def test_engine_rejects_invalid_choice_shapes(response: Mapping[str, object]) -> None:
+    engine = OpenAICompatibleEngine(
+        endpoint="unused",
+        model="model",
+        transport=lambda _payload, _timeout: response,
+    )
+    with pytest.raises(EngineError, match="response"):
+        engine.generate([_messages("classify")])
+
+
+def test_http_transport_rejects_non_object_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Response:
+        def __enter__(self) -> _Response:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return b"[]"
+
+    monkeypatch.setattr(
+        "osm_polygon_sentence_relevance.labeling.engine.urllib.request.urlopen",
+        lambda *_args, **_kwargs: _Response(),
+    )
+    with pytest.raises(EngineError, match="invalid response"):
+        _http_transport("http://unused", {}, 1.0)
+
+
+def test_http_transport_wraps_network_and_json_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "osm_polygon_sentence_relevance.labeling.engine.urllib.request.urlopen",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("network")),
+    )
+    with pytest.raises(EngineError, match="request failed"):
+        _http_transport("http://unused", {}, 1.0)

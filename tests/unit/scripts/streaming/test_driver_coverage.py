@@ -361,7 +361,7 @@ def test_download_shard_cleans_corrupt_partial(monkeypatch, tmp_path: Path) -> N
     (inbox / "stray").write_text("hi")
     with mock.patch("scripts.streaming.driver.PerFileHubDownloader") as m_dl:
         m_inst = m_dl.return_value
-        m_inst.download = mock.Mock(side_effect=Exception("noop"))
+        m_inst.download_many = mock.Mock(side_effect=Exception("noop"))
         with pytest.raises(Exception, match="noop"):
             sd._download_shard(shard_key="italy-latest", inbox=inbox)
 

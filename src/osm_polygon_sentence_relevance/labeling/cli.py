@@ -420,6 +420,14 @@ def _trackio_space_for_output(output_dir: Path) -> str:
     return trackio_space_id(ReleaseLane.V1_AFGHANISTAN)
 
 
+def _close_engine(engine: object) -> None:
+    """Close an engine's reusable request workers when it exposes them."""
+
+    close = getattr(engine, "close", None)
+    if callable(close):
+        close()
+
+
 def _probe(args: argparse.Namespace, engine: LabelEngine | V2LogitEngine) -> int:
     v2 = args.release_lane == ReleaseLane.V2_WORLDWIDE.value
     table = _load_input(Path(args.input_parquet), v2=v2)
@@ -528,7 +536,11 @@ def main(
             return 0
         plan = _resolve_runtime_plan(args)
         if args.command == "probe":
-            return _probe(args, engine_factory(args))
+            engine = engine_factory(args)
+            try:
+                return _probe(args, engine)
+            finally:
+                _close_engine(engine)
         input_path = Path(args.input_parquet)
         identity = _identity(args, input_path, plan)
         is_v2 = args.release_lane == ReleaseLane.V2_WORLDWIDE.value
@@ -593,6 +605,7 @@ def main(
             run_store = store
         mirror = _checkpoint_mirror(args, run_store)
         tracker = _batch_tracker(args, run_store)
+        engine: LabelEngine | V2LogitEngine | None = None
         try:
             if mirror is not None:
                 mirror.start()
@@ -601,9 +614,9 @@ def main(
             if is_v2:
                 if store_v2 is None:
                     raise RuntimeError("V2 checkpoint store was not initialized")
-                v2_engine = engine_factory(args)
+                engine = engine_factory(args)
                 result = V2LogitRunner(
-                    engine=cast(V2Engine, v2_engine),
+                    engine=cast(V2Engine, engine),
                     store=store_v2,
                     batch_size=args.batch_size,
                     stop_requested=stop,
@@ -614,8 +627,9 @@ def main(
                 if store is None:
                     raise RuntimeError("V1 checkpoint store was not initialized")
                 repair = BoundedRepair(max_attempts=3)
+                engine = engine_factory(args)
                 result = LabelingRunner(
-                    engine=cast(LabelEngine, engine_factory(args)),
+                    engine=cast(LabelEngine, engine),
                     store=store,
                     batch_size=args.batch_size,
                     stop_requested=stop,
@@ -625,6 +639,8 @@ def main(
                     batch_tracker=(tracker.enqueue if tracker is not None else None),
                 ).run(table)
         finally:
+            if engine is not None:
+                _close_engine(engine)
             if mirror is not None:
                 mirror.close(wait=True, timeout=args.checkpoint_drain_seconds)
             if tracker is not None:

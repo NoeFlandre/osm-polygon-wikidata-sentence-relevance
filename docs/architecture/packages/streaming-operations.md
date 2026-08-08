@@ -16,8 +16,11 @@ separate modules.
 
 ## Invariants
 
-No full mirror is required. Scratch is evicted only after authoritative
-readback verifies hash and identity. Publication is a separate validated step.
+No full mirror is required. Independent files for the current shard are
+downloaded with a bounded worker pool, while each file keeps the same
+hash-verification and cleanup contract. Scratch is evicted only after
+authoritative readback verifies hash and identity. Publication is a separate
+validated step.
 
 ## Tests
 

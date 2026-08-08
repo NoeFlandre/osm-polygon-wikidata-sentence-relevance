@@ -423,16 +423,28 @@ class StreamDriver:
                 "wikivoyage documents and sections must either both exist or both be absent"
             )
 
+        download_paths: list[str] = []
         for subdir, fname in _DOWNLOAD_LAYOUT:
             if subdir.startswith("wikivoyage") and not optional[subdir]:
                 continue
             upstream_rel = f"{subdir}/{fname.replace('<shard>', shard_key)}"
-            try:
-                dl.download(upstream_rel)
-            except Exception as exc:
-                raise DriverError(
-                    f"failed to download required file {upstream_rel}: {exc}"
-                ) from exc
+            download_paths.append(upstream_rel)
+        try:
+            # Metadata is not consumed by this driver: the strict source
+            # manifest is computed after staging.  Skipping the extra Hub
+            # metadata request and transferring independent parquets in
+            # parallel removes twelve network round trips per shard while
+            # preserving the same byte verification and checkpoint rules.
+            dl.download_many(
+                download_paths,
+                max_workers=min(6, len(download_paths)),
+                fetch_metadata=False,
+            )
+        except Exception as exc:
+            failed_path = download_paths[0] if download_paths else shard_key
+            raise DriverError(
+                f"failed to download required file {failed_path}: {exc}"
+            ) from exc
 
     def _write_state(self, *, updated: bool) -> None:
         state_path = self.work_dir / "state.json"
