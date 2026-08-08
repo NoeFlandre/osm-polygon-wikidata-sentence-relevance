@@ -96,6 +96,11 @@ from osm_polygon_sentence_relevance.operator.sites import (
     SiteRequirements,
     select_site,
 )
+from osm_polygon_sentence_relevance.operator.split_resume import (
+    classify_split_terminal,
+    inspect_split_resume,
+    split_failure_reason,
+)
 from osm_polygon_sentence_relevance.operator.ssh import SshClient
 from osm_polygon_sentence_relevance.operator.staging import Stager
 from osm_polygon_sentence_relevance.operator.state import RunPhase, StateStore
@@ -518,14 +523,52 @@ def _classify_or_continue(
     # MISSING jobs with at least some durable evidence are classified from
     # those artifacts alone (exit file, manifest, checkpoints, progress).
 
-    inspection = recorded_job.inspect_remote_resume(
-        ssh,
-        label_work_root=str(layout.label_work),
-        label_output_root=str(layout.label_output),
-        expected_identity=config.run_identity.checkpoint_dict(),
-        exit_file=str(layout.logs / str(job_id) / "labeling.exit_code"),
-    )
-    classification = recorded_job.classify_terminal(status, inspection)
+    if active == Stage.SPLIT.value:
+        split_inspection = inspect_split_resume(
+            ssh=ssh,
+            repo_id=config.output_dataset_id,
+            input_repo_id=config.input_dataset_id,
+            input_revision=config.input_dataset_revision or "",
+            run_id=config.run_id,
+            source_commit=config.source_commit,
+            pipeline_version=config.pipeline_version,
+            model_name=config.split_model,
+            batch_size=config.requirements.batch_size,
+            staging_revision=f"checkpoints/{config.run_id}",
+            exit_file=str(layout.logs / str(job_id) / "build.exit_code"),
+            cache_dir=config.data_root
+            / "runs"
+            / config.run_id
+            / "split-checkpoint-cache",
+        )
+        classification = classify_split_terminal(
+            status,
+            split_inspection,
+            exit_code=split_inspection.exit_code,
+        )
+        inspection: recorded_job.ResumeInspection | None = None
+        failure_reason_token = (
+            split_failure_reason(
+                split_inspection,
+                exit_code=split_inspection.exit_code,
+            )
+            if classification is ExitClass.FAILED
+            else None
+        )
+    else:
+        inspection = recorded_job.inspect_remote_resume(
+            ssh,
+            label_work_root=str(layout.label_work),
+            label_output_root=str(layout.label_output),
+            expected_identity=config.run_identity.checkpoint_dict(),
+            exit_file=str(layout.logs / str(job_id) / "labeling.exit_code"),
+        )
+        classification = recorded_job.classify_terminal(status, inspection)
+        failure_reason_token = (
+            recorded_job.failure_reason(status, inspection)
+            if classification is ExitClass.FAILED
+            else None
+        )
 
     relay_artifact_path: str | None = None
     if (
@@ -539,10 +582,6 @@ def _classify_or_continue(
             source_site=site,
             destination_site=destination_site,
         )
-
-    failure_reason_token: str | None = None
-    if classification is ExitClass.FAILED:
-        failure_reason_token = recorded_job.failure_reason(status, inspection)
 
     _apply_classification(
         store=store,
@@ -611,18 +650,23 @@ def _classify_or_continue(
                 layout=layout_d,
                 relay_root=relay_root,
             )
-        new_job_id = controller_d.submit(
-            component=Stage.LABEL,
-            input_parquet=layout_d.root / "input/sentences.parquet",
-            model_file=layout_d.root / "model" / config.label_model_file,
-            tokenizer_dir=layout_d.root / "tokenizer",
-            walltime_seconds=MICRO_LABEL_WALLTIME_SECONDS,
-            policy_type=policy_type_for(
-                datetime.now(tz=GRID5000_TZ),
+        if is_label:
+            new_job_id = controller_d.submit(
+                component=Stage.LABEL,
+                input_parquet=layout_d.root / "input/sentences.parquet",
+                model_file=layout_d.root / "model" / config.label_model_file,
+                tokenizer_dir=layout_d.root / "tokenizer",
                 walltime_seconds=MICRO_LABEL_WALLTIME_SECONDS,
-            ),
-            gpu_memory_mb=getattr(args, "gpu_memory_mb", 40_000),
-        )
+                policy_type=policy_type_for(
+                    datetime.now(tz=GRID5000_TZ),
+                    walltime_seconds=MICRO_LABEL_WALLTIME_SECONDS,
+                ),
+                gpu_memory_mb=getattr(args, "gpu_memory_mb", 40_000),
+            )
+            continuation_log_name = "labeling.stdout.log"
+        else:
+            new_job_id = controller_d.submit(component=Stage.SPLIT)
+            continuation_log_name = "build.stdout.log"
         # Controller.submit atomically persists SUBMITTED and the job ID
         # before returning. Do not duplicate that state transition here.
         current = store.load()
@@ -637,21 +681,55 @@ def _classify_or_continue(
             f"Submitted continuation job {new_job_id} (allocation {_iteration})",
             flush=True,
         )
-        terminal = controller_d.monitor(new_job_id, log_name="labeling.stdout.log")
+        terminal = controller_d.monitor(new_job_id, log_name=continuation_log_name)
         if not _is_terminal_allocation(terminal):
             raise RuntimeError("continuation allocation failed")
         status_d = oar_d.status(new_job_id)
-        inspection_d = recorded_job.inspect_remote_resume(
-            ssh_d,
-            label_work_root=str(layout_d.label_work),
-            label_output_root=str(layout_d.label_output),
-            expected_identity=config.run_identity.checkpoint_dict(),
-            exit_file=str(layout_d.logs / str(new_job_id) / "labeling.exit_code"),
-        )
-        classification_d = recorded_job.classify_terminal(status_d, inspection_d)
-        failure_reason_token_d: str | None = None
-        if classification_d is ExitClass.FAILED:
-            failure_reason_token_d = recorded_job.failure_reason(status_d, inspection_d)
+        if is_label:
+            inspection_d = recorded_job.inspect_remote_resume(
+                ssh_d,
+                label_work_root=str(layout_d.label_work),
+                label_output_root=str(layout_d.label_output),
+                expected_identity=config.run_identity.checkpoint_dict(),
+                exit_file=str(layout_d.logs / str(new_job_id) / "labeling.exit_code"),
+            )
+            classification_d = recorded_job.classify_terminal(status_d, inspection_d)
+            failure_reason_token_d = (
+                recorded_job.failure_reason(status_d, inspection_d)
+                if classification_d is ExitClass.FAILED
+                else None
+            )
+        else:
+            split_inspection_d = inspect_split_resume(
+                ssh=ssh_d,
+                repo_id=config.output_dataset_id,
+                input_repo_id=config.input_dataset_id,
+                input_revision=config.input_dataset_revision or "",
+                run_id=config.run_id,
+                source_commit=config.source_commit,
+                pipeline_version=config.pipeline_version,
+                model_name=config.split_model,
+                batch_size=config.requirements.batch_size,
+                staging_revision=f"checkpoints/{config.run_id}",
+                exit_file=str(layout_d.logs / str(new_job_id) / "build.exit_code"),
+                cache_dir=config.data_root
+                / "runs"
+                / config.run_id
+                / "split-checkpoint-cache",
+            )
+            classification_d = classify_split_terminal(
+                status_d,
+                split_inspection_d,
+                exit_code=split_inspection_d.exit_code,
+            )
+            failure_reason_token_d = (
+                split_failure_reason(
+                    split_inspection_d,
+                    exit_code=split_inspection_d.exit_code,
+                )
+                if classification_d is ExitClass.FAILED
+                else None
+            )
         _apply_classification(
             store=store,
             config=config,
