@@ -422,3 +422,56 @@ def test_cli_finishes_fallback_cancellation_after_adoption(
     )
     assert cancelled == [("sophia", 42)]
     assert store.load().facts["fallback_cancelled"] is True
+
+
+def test_cli_reoptimizes_adopted_queue_without_start_prediction(
+    tmp_path: Any,
+    monkeypatch: Any,
+) -> None:
+    config, store = _queued_store(tmp_path)
+    current = store.load()
+    store.transition(
+        expected=current.phase,
+        target=current.phase,
+        facts={
+            "replacement_status": "adopted",
+            "fallback_site": "sophia",
+            "fallback_job_id": 42,
+            "fallback_cancelled": True,
+        },
+    )
+    cancelled: list[tuple[str, int]] = []
+    submitted: list[Any] = []
+
+    class _Oar:
+        def __init__(self, ssh: _Ssh, *, preflight: Any = None) -> None:
+            self.site = ssh.target
+            self.preflight = preflight
+
+        def status(self, job_id: int) -> JobStatus:
+            if job_id == 42:
+                return JobStatus(42, JobState.QUEUED, scheduled_start=None)
+            return JobStatus(job_id, JobState.RUNNING)
+
+        def submit(self, request: Any) -> int:
+            submitted.append(request)
+            return 101
+
+        def cancel(self, job_id: int) -> None:
+            cancelled.append((self.site, job_id))
+
+    monkeypatch.setattr(cli, "SshClient", _Ssh)
+    monkeypatch.setattr(cli, "OarClient", _Oar)
+    monkeypatch.setattr(cli, "Stager", _Stager)
+    monkeypatch.setattr(cli, "_remote_home", lambda _ssh: PurePosixPath("/home/u"))
+    monkeypatch.setattr(cli, "_usage_policy_preflight", lambda *_a: None)
+    monkeypatch.setattr(cli, "ensure_home_headroom", lambda *_a, **_kw: None)
+    monkeypatch.setattr(cli, "probe_site", lambda site, *_a, **_kw: _ready_probe(site))
+    args = SimpleNamespace(site=["nancy"], gpu_memory_mb=40_000)
+
+    assert cli._optimize_queued_start(args, store, config, "sophia", 42) == (
+        "nancy",
+        101,
+    )
+    assert len(submitted) == 1
+    assert cancelled == [("sophia", 42)]

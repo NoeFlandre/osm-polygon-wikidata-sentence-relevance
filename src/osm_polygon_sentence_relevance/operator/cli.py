@@ -1019,7 +1019,12 @@ def _optimize_queued_start(
     active_stage = durable.facts.get("active_stage", config.stage.value)
     requires_label_runtime = active_stage == Stage.LABEL.value
     replacement_status = durable.facts.get("replacement_status")
-    if replacement_status == "adopted":
+    adopted_unpredicted_queue = (
+        replacement_status == "adopted"
+        and fallback_status.state is JobState.QUEUED
+        and fallback_status.scheduled_start is None
+    )
+    if replacement_status == "adopted" and not adopted_unpredicted_queue:
         old_site = durable.facts.get("fallback_site")
         old_job = durable.facts.get("fallback_job_id")
         if (
@@ -1038,6 +1043,19 @@ def _optimize_queued_start(
                 facts={"fallback_cancelled": True},
             )
         return fallback_site, fallback_job_id
+    if adopted_unpredicted_queue:
+        current = store.load()
+        store.transition(
+            expected=current.phase,
+            target=current.phase,
+            facts={
+                "fallback_site": fallback_site,
+                "fallback_job_id": fallback_job_id,
+                "fallback_cancelled": False,
+                "replacement_status": "inactive",
+            },
+        )
+        replacement_status = "inactive"
 
     now = datetime.now(tz=GRID5000_TZ)
     existing_trial: tuple[ReplacementCandidate, int, float] | None = None
@@ -1101,15 +1119,15 @@ def _optimize_queued_start(
             _milestone(f"Immediate candidate {target}: labeling runtime not staged")
         else:
             _milestone(f"Immediate candidate {target}: ready")
-    excluded_trial_sites = (
-        frozenset({existing_trial[0].site.name})
-        if existing_trial is not None
-        else frozenset()
-    )
+    excluded_sites: set[str] = set()
+    if existing_trial is not None:
+        excluded_sites.add(existing_trial[0].site.name)
+    if seek_unpredicted:
+        excluded_sites.add(fallback_site)
     candidates = rank_replacement_candidates(
         probes,
         requirements=requirements,
-        excluded_sites=excluded_trial_sites,
+        excluded_sites=frozenset(excluded_sites),
         require_label_runtime=requires_label_runtime,
     )
     if existing_trial is None and not candidates:
