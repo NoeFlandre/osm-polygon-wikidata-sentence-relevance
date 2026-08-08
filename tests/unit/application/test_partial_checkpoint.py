@@ -444,6 +444,21 @@ def test_load_removes_interrupted_atomic_temporary_files(tmp_path: Path) -> None
     assert not batch_tmp.exists()
 
 
+def test_load_removes_interrupted_temporary_files_with_stale_mode(
+    tmp_path: Path,
+) -> None:
+    """A stale temp file's mode must not block recovery of durable progress."""
+    state = _create(tmp_path)
+    progress_tmp = state.directory / ".progress.json.interrupted.tmp"
+    progress_tmp.write_bytes(b"incomplete")
+    os.chmod(progress_tmp, 0o644)
+
+    loaded = _load(tmp_path)
+
+    assert loaded is not None
+    assert not progress_tmp.exists()
+
+
 def test_load_rejects_noncontiguous_progress(tmp_path: Path) -> None:
     state = _create(tmp_path)
     payload = json.loads((state.directory / "progress.json").read_text())

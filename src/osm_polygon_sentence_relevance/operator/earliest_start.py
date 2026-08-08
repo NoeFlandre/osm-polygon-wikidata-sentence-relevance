@@ -180,6 +180,17 @@ def attempt_immediate_replacement(
             submitted_now = True
         site = candidate.site.name
         if submitted_now:
+            fallback_before_prepare = status(fallback_site, fallback_job_id)
+            if fallback_before_prepare.state is JobState.RUNNING:
+                emit(
+                    f"Fallback job {fallback_job_id} started before trial "
+                    f"preparation; keeping it on {fallback_site}"
+                )
+                return ReplacementOutcome(
+                    fallback_site,
+                    fallback_job_id,
+                    replaced=False,
+                )
             try:
                 prepare(candidate)
                 job_id = submit(candidate)

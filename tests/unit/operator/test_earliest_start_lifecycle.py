@@ -122,6 +122,17 @@ def test_running_replacement_is_adopted_before_fallback_is_cancelled() -> None:
     assert harness.cleared == []
 
 
+def test_running_fallback_skips_expensive_trial_preparation() -> None:
+    harness = _Harness(statuses={42: [JobStatus(42, JobState.RUNNING)]})
+
+    outcome = _run(harness, (_candidate("nancy"),))
+
+    assert outcome == ReplacementOutcome("sophia", 42, replaced=False)
+    assert harness.prepared == []
+    assert harness.submitted == []
+    assert harness.cancelled == []
+
+
 def test_trial_timeout_cancels_only_trial_and_retains_fallback() -> None:
     harness = _Harness(statuses={101: [JobStatus(101, JobState.QUEUED)]})
     outcome = _run(harness, (_candidate("nancy"),), timeout=30)
@@ -237,4 +248,4 @@ def test_fallback_start_cancels_trial_before_it_can_run() -> None:
     assert outcome == ReplacementOutcome("sophia", 42, replaced=False)
     assert harness.cancelled == [("nancy", 101)]
     assert harness.adopted == []
-    assert harness.clock == 30
+    assert harness.clock == 0

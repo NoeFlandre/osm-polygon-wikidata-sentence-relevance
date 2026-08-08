@@ -421,7 +421,7 @@ def _ensure_directory(path: Path) -> None:
         raise CheckpointValidationError(f"partial directory has unsafe mode: {path}")
 
 
-def _ensure_regular(path: Path, expected_mode: int) -> None:
+def _ensure_regular(path: Path, expected_mode: int | None) -> None:
     try:
         info = os.lstat(path)
     except OSError as exc:
@@ -430,7 +430,7 @@ def _ensure_regular(path: Path, expected_mode: int) -> None:
         ) from exc
     if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
         raise CheckpointValidationError(f"partial file is not regular: {path}")
-    if info.st_mode & 0o777 != expected_mode:
+    if expected_mode is not None and info.st_mode & 0o777 != expected_mode:
         raise CheckpointValidationError(f"partial file has unsafe mode: {path}")
 
 
@@ -452,7 +452,9 @@ def _remove_interrupted_atomic_temporary_files(directory: Path) -> None:
         )
         if not (is_progress_temp or is_batch_temp):
             continue
-        _ensure_regular(path, _FILE_MODE)
+        # An interrupted temp file is disposable.  Validate its type and
+        # reject symlinks, but do not let a stale pre-crash mode block recovery.
+        _ensure_regular(path, None)
         path.unlink()
         removed = True
     if removed:
