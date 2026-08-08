@@ -111,6 +111,10 @@ from osm_polygon_sentence_relevance.operator.storage import (
     ensure_home_headroom,
     required_staging_headroom,
 )
+from osm_polygon_sentence_relevance.operator.supervisor import (
+    SupervisorLaunch,
+    start_detached_supervisor,
+)
 from osm_polygon_sentence_relevance.operator.workflows import (
     MICRO_LABEL_WALLTIME_SECONDS,
     RemoteLayout,
@@ -187,6 +191,81 @@ def _resume_command(run_id: str) -> str:
     """The exact command the operator prints after a local interrupt."""
 
     return f"uv run osm-polygon-grid5000 resume {run_id}"
+
+
+def _announce_detached(launch: SupervisorLaunch) -> None:
+    """Report the durable handle returned by detached mode."""
+
+    _milestone(
+        f"Detached supervisor started ({launch.backend}); session="
+        f"{launch.session_name}; log={launch.log_path}"
+    )
+
+
+def _detached_run_arguments(args: SimpleNamespace) -> tuple[str, ...]:
+    """Build a complete foreground ``run`` command for the child supervisor."""
+
+    values: list[str] = [
+        "run",
+        "--scope",
+        str(args.scope),
+        "--stage",
+        str(args.stage),
+        "--batch-size",
+        str(args.batch_size),
+        "--row-limit",
+        str(args.row_limit),
+        "--sampling-seed",
+        str(args.sampling_seed),
+        "--sampling-h3-resolution",
+        str(args.sampling_h3_resolution),
+        "--llama-parallel",
+        str(args.llama_parallel),
+        "--llama-per-slot-context",
+        str(args.llama_per_slot_context),
+        "--gpu-memory-mb",
+        str(args.gpu_memory_mb),
+        "--remote-free-bytes",
+        str(args.remote_free_bytes),
+        "--poll-seconds",
+        str(args.poll_seconds),
+    ]
+    if args.region is not None:
+        values.extend(("--region", str(args.region)))
+    if args.input_revision is not None:
+        values.extend(("--input-revision", str(args.input_revision)))
+    if args.sampling_target is not None:
+        values.extend(("--sampling-target", str(args.sampling_target)))
+    if args.request_concurrency is not None:
+        values.extend(("--request-concurrency", str(args.request_concurrency)))
+    for target in args.site:
+        values.extend(("--site", str(target)))
+    return tuple(values)
+
+
+def _detached_resume_arguments(
+    run_id: str,
+    *,
+    site: list[str],
+    gpu_memory_mb: int,
+    poll_seconds: float,
+    sampling_target: int | None,
+) -> tuple[str, ...]:
+    """Build a complete foreground ``resume`` command for a child supervisor."""
+
+    values: list[str] = [
+        "resume",
+        run_id,
+        "--gpu-memory-mb",
+        str(gpu_memory_mb),
+        "--poll-seconds",
+        str(poll_seconds),
+    ]
+    if sampling_target is not None:
+        values.extend(("--sampling-target", str(sampling_target)))
+    for target in site:
+        values.extend(("--site", str(target)))
+    return tuple(values)
 
 
 def _checkpoint_root(layout: RemoteLayout) -> str:
@@ -1723,6 +1802,9 @@ def run_command(
     remote_free_bytes: Annotated[int, typer.Option("--remote-free-bytes")] = 8
     * 1024**3,
     poll_seconds: Annotated[float, typer.Option("--poll-seconds")] = 30.0,
+    detach: Annotated[
+        bool, typer.Option("--detach", help="Run under a detached local supervisor.")
+    ] = False,
 ) -> int:
     """Run or resume a production workflow."""
 
@@ -1746,6 +1828,13 @@ def run_command(
         poll_seconds=poll_seconds,
         optimize_continuations=True,
     )
+    if detach:
+        launch = start_detached_supervisor(
+            _detached_run_arguments(args),
+            data_root=DATA_ROOT,
+        )
+        _announce_detached(launch)
+        return 0
     return _dispatch(_run, args)
 
 
@@ -1766,9 +1855,26 @@ def resume_command(
     gpu_memory_mb: Annotated[int, typer.Option("--gpu-memory-mb")] = 40_000,
     poll_seconds: Annotated[float, typer.Option("--poll-seconds")] = 30.0,
     sampling_target: Annotated[int | None, typer.Option("--sampling-target")] = None,
+    detach: Annotated[
+        bool, typer.Option("--detach", help="Run under a detached local supervisor.")
+    ] = False,
 ) -> int:
     """Resume a run, optionally extending its V2 sampling target."""
 
+    if detach:
+        launch = start_detached_supervisor(
+            _detached_resume_arguments(
+                run_id,
+                site=[*DEFAULT_SITES, *(site or [])],
+                gpu_memory_mb=gpu_memory_mb,
+                poll_seconds=poll_seconds,
+                sampling_target=sampling_target,
+            ),
+            data_root=DATA_ROOT,
+            run_id=run_id,
+        )
+        _announce_detached(launch)
+        return 0
     return _dispatch(
         _resume_handler,
         SimpleNamespace(

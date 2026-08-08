@@ -4,7 +4,7 @@ The installed Mac-side entry point is:
 
 ```text
 osm-polygon-grid5000 run --scope {region,all}
-    [--region REGION-LATEST] --stage {split,label,all}
+    [--region REGION-LATEST] --stage {split,label,all} [--detach]
 ```
 
 For `--scope region`, `--region` is required and must be a canonical shard
@@ -16,7 +16,7 @@ advanced non-publishing canary control: zero means the complete selected scope.
 
 ```text
 osm-polygon-grid5000 status RUN_ID
-osm-polygon-grid5000 resume RUN_ID
+osm-polygon-grid5000 resume RUN_ID [--detach]
 osm-polygon-grid5000 cleanup --site SITE
 ```
 
@@ -31,6 +31,15 @@ and installed before one new bounded allocation is submitted.
 `--execute` is supplied. Ctrl-C during `run` or `resume` stops local monitoring
 but leaves OAR work and checkpoints intact; rerun the exact `resume RUN_ID`
 command printed by the operator.
+
+For unattended production, add `--detach` to `run` or `resume`. The command
+starts one local supervisor and returns immediately. The supervisor uses a
+deterministic `tmux` session when available, or a detached child process as a
+fallback. It writes an append-only console log below the external data root,
+reattaches validated partial runs, and stops only at a complete (or explicitly
+split-only) durable state. A second invocation with the same run identity is
+refused while its supervisor session is active. The start message prints the
+exact session and log path.
 
 ## Earliest policy-compliant start
 

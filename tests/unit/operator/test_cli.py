@@ -18,6 +18,7 @@ from osm_polygon_sentence_relevance.operator.oar import ExitClass, JobState, Job
 from osm_polygon_sentence_relevance.operator.sites import SiteProbe
 from osm_polygon_sentence_relevance.operator.staging import LabelAssets
 from osm_polygon_sentence_relevance.operator.state import RunPhase, StateStore
+from osm_polygon_sentence_relevance.operator.supervisor import SupervisorLaunch
 from osm_polygon_sentence_relevance.operator.workflows import (
     RemoteLayout,
     label_submission,
@@ -155,6 +156,77 @@ def test_typer_run_delegates_current_defaults(
         "stage": "label",
         "optimize_continuations": True,
     }
+
+
+def test_typer_run_detach_starts_one_supervisor_without_dispatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: list[tuple[object, ...]] = []
+    monkeypatch.setattr(
+        cli,
+        "start_detached_supervisor",
+        lambda arguments, **kwargs: seen.append((arguments, kwargs))
+        or SupervisorLaunch("session", Path("/data/supervisor.log"), (), "tmux"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_dispatch",
+        lambda *_: pytest.fail("detached mode must not dispatch in the parent"),
+    )
+
+    result = runner.invoke(
+        cli.app,
+        [
+            "run",
+            "--scope",
+            "all",
+            "--stage",
+            "all",
+            "--detach",
+        ],
+        color=False,
+    )
+
+    assert result.exit_code == 0
+    assert len(seen) == 1
+    arguments, kwargs = seen[0]
+    assert arguments[0] == "run"
+    assert "--detach" not in arguments
+    assert arguments[1:5] == ("--scope", "all", "--stage", "all")
+    assert kwargs["data_root"] == cli.DATA_ROOT
+    assert "Detached supervisor started" in result.stdout
+
+
+def test_typer_resume_detach_uses_run_specific_supervisor_log(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: list[tuple[object, ...]] = []
+    monkeypatch.setattr(
+        cli,
+        "start_detached_supervisor",
+        lambda arguments, **kwargs: seen.append((arguments, kwargs))
+        or SupervisorLaunch("session", Path("/data/supervisor.log"), (), "process"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_dispatch",
+        lambda *_: pytest.fail("detached mode must not dispatch in the parent"),
+    )
+    run_id = "a" * 20
+
+    result = runner.invoke(
+        cli.app,
+        ["resume", run_id, "--detach", "--poll-seconds", "5"],
+        color=False,
+    )
+
+    assert result.exit_code == 0
+    arguments, kwargs = seen[0]
+    assert arguments[:2] == ("resume", run_id)
+    assert ("--poll-seconds", "5.0") in zip(arguments, arguments[1:], strict=False)
+    assert "--detach" not in arguments
+    assert kwargs["run_id"] == run_id
+    assert "Detached supervisor started" in result.stdout
 
 
 def test_sampling_target_defaults_to_v2_only_for_all_label_runs() -> None:

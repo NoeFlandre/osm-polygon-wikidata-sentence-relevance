@@ -35,6 +35,12 @@ V2 stratified label workflow, use:
 uv run osm-polygon-grid5000 run --scope all --stage all
 ```
 
+To leave the workflow running while the terminal is closed, append
+`--detach`. It starts one local, durable supervisor, writes its log under the
+external data root, and reattaches validated checkpoints until the run is
+complete. Use the printed `resume RUN_ID --detach` command only if the
+supervisor itself is stopped.
+
 Use `--stage all` for a fresh worldwide run so the operator can first build
 the sentence table and then enrich it with area metadata from the pinned input
 revision. A V2 `--stage label` run is refused unless that enriched input already
