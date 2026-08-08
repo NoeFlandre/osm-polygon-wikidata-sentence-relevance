@@ -418,6 +418,7 @@ def process_single_shard(
             segmenter,
             batch_size=batch_size,
             start_index=partial.next_section_index,
+            assume_sorted=True,
         ):
             partial = append_partial_batch(partial, segmented_batch)
         if partial.next_section_index != joined.table.num_rows:

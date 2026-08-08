@@ -18,6 +18,7 @@ from osm_polygon_sentence_relevance.sentence_table import (
     segment_joined_sections,
     validate_joined_sections_table,
 )
+from osm_polygon_sentence_relevance.sentences import table as table_module
 
 
 class FakeSegmenter:
@@ -128,6 +129,23 @@ def _one_row(section_text_raw="Some text.", **overrides):
 
 
 class TestSegmentJoinedSections:
+    def test_iter_batches_can_reuse_a_pre_sorted_joined_table(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        segmenter = FakeSegmenter({"Some text.": ["A."]})
+
+        def fail_sort(*_args, **_kwargs):
+            raise AssertionError("pre-sorted table should not be sorted again")
+
+        monkeypatch.setattr(table_module.pc, "sort_indices", fail_sort)
+        batches = list(
+            iter_segmented_batches(
+                _one_row(), segmenter, batch_size=1, assume_sorted=True
+            )
+        )
+
+        assert len(batches) == 1
+
     def test_iter_batches_resume_skips_prior_segmenter_calls(self):
         rows = [
             _row(

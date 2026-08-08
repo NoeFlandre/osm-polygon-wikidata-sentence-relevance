@@ -137,6 +137,7 @@ def segment_joined_sections(
     segmenter: SentenceSegmenter,
     *,
     batch_size: int = 128,
+    assume_sorted: bool = False,
 ) -> SegmentedTableResult:
     """Validate, sort, and segment a joined-sections table.
 
@@ -156,7 +157,14 @@ def segment_joined_sections(
     PreprocessingError
         On malformed ``section_path_raw`` or ``osm_tags_raw`` JSON.
     """
-    batches = list(iter_segmented_batches(table, segmenter, batch_size=batch_size))
+    batches = list(
+        iter_segmented_batches(
+            table,
+            segmenter,
+            batch_size=batch_size,
+            assume_sorted=assume_sorted,
+        )
+    )
     if not batches:
         return SegmentedTableResult(
             table=SEGMENTED_SENTENCES_SCHEMA.empty_table(),
@@ -174,12 +182,15 @@ def iter_segmented_batches(
     *,
     batch_size: int = 128,
     start_index: int = 0,
+    assume_sorted: bool = False,
 ) -> Iterator[SegmentedBatch]:
     """Yield deterministic segmentation batches, optionally resuming at an index.
 
     All validation and preflight parsing happens before the first segmenter
     call. ``start_index`` is a section-row offset, not an output-row offset,
     and must be aligned with ``batch_size`` unless it equals the table size.
+    Set ``assume_sorted`` only when the caller already produced the canonical
+    ``_SORT_KEYS`` order, avoiding a redundant second sort.
     Earlier batches are skipped without invoking the segmenter, allowing a
     caller to resume after a durable batch checkpoint.
     """
@@ -201,8 +212,11 @@ def iter_segmented_batches(
         return
 
     compute: Any = pc
-    indices = compute.sort_indices(table, sort_keys=_SORT_KEYS)
-    rows = _to_sorted_provenance_rows(table.take(indices))
+    if assume_sorted:
+        rows = _to_sorted_provenance_rows(table)
+    else:
+        indices = compute.sort_indices(table, sort_keys=_SORT_KEYS)
+        rows = _to_sorted_provenance_rows(table.take(indices))
     for start in range(start_index, len(rows), batch_size):
         end = min(start + batch_size, len(rows))
         batch_rows = rows[start:end]
