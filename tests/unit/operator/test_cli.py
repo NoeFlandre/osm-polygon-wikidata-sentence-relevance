@@ -150,10 +150,11 @@ def test_typer_run_delegates_current_defaults(
         "sampling_h3_resolution": 3,
         "sampling_seed": "sentence-relevance-v2",
         "sampling_target": None,
-        "scope": "region",
-        "site": list(cli.DEFAULT_SITES),
-        "stage": "label",
-    }
+            "scope": "region",
+            "site": list(cli.DEFAULT_SITES),
+            "stage": "label",
+            "optimize_continuations": True,
+        }
 
 
 def test_sampling_target_defaults_to_v2_only_for_all_label_runs() -> None:

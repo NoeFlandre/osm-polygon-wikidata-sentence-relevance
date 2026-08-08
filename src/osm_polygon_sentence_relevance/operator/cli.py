@@ -667,6 +667,27 @@ def _classify_or_continue(
         else:
             new_job_id = controller_d.submit(component=Stage.SPLIT)
             continuation_log_name = "build.stdout.log"
+        if getattr(args, "optimize_continuations", False):
+            optimized_site, optimized_job_id = _optimize_queued_start(
+                args,
+                store,
+                config,
+                target_site,
+                new_job_id,
+            )
+        else:
+            optimized_site, optimized_job_id = target_site, new_job_id
+        if optimized_site != target_site:
+            mark_remote_status(ssh_d, layout_d, "failed")
+            target_site = optimized_site
+            ssh_d, layout_d, oar_d, controller_d = _attach_to_site(
+                store,
+                config,
+                target_site,
+                poll_seconds=args.poll_seconds,
+            )
+            _stage_hf_token(Stager(ssh_d), layout_d)
+        new_job_id = optimized_job_id
         # Controller.submit atomically persists SUBMITTED and the job ID
         # before returning. Do not duplicate that state transition here.
         current = store.load()
@@ -1664,6 +1685,7 @@ def run_command(
         gpu_memory_mb=gpu_memory_mb,
         remote_free_bytes=remote_free_bytes,
         poll_seconds=poll_seconds,
+        optimize_continuations=True,
     )
     return _dispatch(_run, args)
 
@@ -1697,6 +1719,7 @@ def resume_command(
             gpu_memory_mb=gpu_memory_mb,
             poll_seconds=poll_seconds,
             sampling_target=sampling_target,
+            optimize_continuations=True,
         ),
     )
 
