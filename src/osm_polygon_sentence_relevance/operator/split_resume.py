@@ -8,6 +8,7 @@ the same metadata and Hub file hashes used by the streaming worker.
 
 from __future__ import annotations
 
+import shlex
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -36,7 +37,8 @@ class SplitResumeInspection:
 
 
 def _read_exit_code(ssh: Any, exit_file: str) -> int | None:
-    result = ssh.run(f"test -f {exit_file} && cat {exit_file}")
+    quoted = shlex.quote(exit_file)
+    result = ssh.run(f"if test -f {quoted}; then cat {quoted}; fi")
     text = str(getattr(result, "text", None) or getattr(result, "stdout", ""))
     stripped = text.strip()
     if not stripped:

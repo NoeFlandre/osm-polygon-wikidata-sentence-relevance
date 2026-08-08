@@ -181,6 +181,40 @@ def test_inspect_split_resume_accepts_missing_exit_file(
     assert result.checkpoint_count == result.total_shards == 1
 
 
+def test_inspect_split_resume_treats_missing_exit_file_as_no_exit_code(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    class FakeSsh:
+        def run(self, command: str) -> SimpleNamespace:
+            assert command.startswith("if test -f ")
+            return SimpleNamespace(stdout="")
+
+    monkeypatch.setattr(
+        "scripts.streaming.offload.discover_run",
+        lambda **kwargs: [object()],
+    )
+    monkeypatch.setattr(
+        "scripts.streaming.driver.list_remote_shard_keys",
+        lambda **kwargs: ["one"],
+    )
+    result = inspect_split_resume(
+        ssh=FakeSsh(),
+        repo_id="owner/output",
+        input_repo_id="owner/input",
+        input_revision="a" * 40,
+        run_id="b" * 20,
+        source_commit="c" * 40,
+        pipeline_version="0.1.0",
+        model_name="sat-12l-sm",
+        batch_size=128,
+        staging_revision="checkpoints/" + "b" * 20,
+        exit_file="/run/logs/42/build.exit_code",
+        cache_dir=tmp_path,
+        hub_api=object(),
+    )
+    assert result.exit_code is None
+
+
 def test_inspect_split_resume_wraps_hub_failures(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
