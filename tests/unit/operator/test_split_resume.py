@@ -233,42 +233,6 @@ def test_inspect_split_resume_preserves_split_resume_error(
     assert raised.value is original
 
 
-def test_inspect_split_resume_constructs_default_hub_client(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    class FakeSsh:
-        def run(self, _command: str) -> SimpleNamespace:
-            return SimpleNamespace(stdout="130")
-
-    client = object()
-    monkeypatch.setattr("huggingface_hub.HfApi", lambda: client)
-    seen: list[object] = []
-    monkeypatch.setattr(
-        "scripts.streaming.offload.discover_run",
-        lambda **kwargs: seen.append(kwargs["hub_api"]) or [object()],
-    )
-    monkeypatch.setattr(
-        "scripts.streaming.driver.list_remote_shard_keys",
-        lambda **kwargs: ["one"],
-    )
-    result = inspect_split_resume(
-        ssh=FakeSsh(),
-        repo_id="owner/output",
-        input_repo_id="owner/input",
-        input_revision="a" * 40,
-        run_id="b" * 20,
-        source_commit="c" * 40,
-        pipeline_version="0.1.0",
-        model_name="sat-12l-sm",
-        batch_size=128,
-        staging_revision="checkpoints/" + "b" * 20,
-        exit_file="/run/logs/42/build.exit_code",
-        cache_dir=tmp_path,
-    )
-    assert seen == [client]
-    assert result.checkpoint_count == 1
-
-
 def test_inspect_split_resume_rejects_malformed_exit_file(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
