@@ -12,6 +12,7 @@ import pytest
 import osm_polygon_sentence_relevance.labeling.v2_input as v2_input
 from osm_polygon_sentence_relevance.labeling.v2_input import (
     _write_table_atomically,
+    download_v2_polygon_metadata,
     enrich_v2_input,
     enrich_v2_table,
 )
@@ -246,6 +247,40 @@ def test_downloaded_metadata_uses_sorted_regions_and_pinned_revision(
     ]
     assert all(call[:3] == ("owner/input", "dataset", "a" * 40) for call in calls)
     assert hashlib.sha256(output.read_bytes()).hexdigest()
+
+
+def test_download_one_shard_metadata_uses_pinned_upstream_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    metadata = _metadata(
+        tmp_path / "alpha.parquet",
+        [{"polygon_id": "p1", "area_km2": 0.5, "area_bucket": "0.1-1km2"}],
+    )
+    calls: list[dict[str, object]] = []
+
+    def fake_download(**kwargs: object) -> str:
+        calls.append(kwargs)
+        return str(metadata)
+
+    monkeypatch.setattr(v2_input, "hf_hub_download", fake_download)
+
+    result = download_v2_polygon_metadata(
+        dataset_id="owner/input",
+        revision="a" * 40,
+        shard_key="alpha-latest",
+        cache_dir=tmp_path / "cache",
+    )
+
+    assert result.column_names == ["area_bucket", "area_km2", "polygon_id"]
+    assert calls == [
+        {
+            "repo_id": "owner/input",
+            "repo_type": "dataset",
+            "revision": "a" * 40,
+            "filename": "polygons/alpha-latest.parquet",
+            "cache_dir": tmp_path / "cache",
+        }
+    ]
 
 
 def test_atomic_writer_cleans_temp_file_on_replace_failure(

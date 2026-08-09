@@ -218,6 +218,68 @@ def test_finalization_is_bounded_and_produces_valid_public_artifacts(
     assert not any((tmp_path / "cache").rglob("segmented.parquet"))
 
 
+def test_worldwide_finalization_persists_only_bounded_enriched_sample(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("OAR_JOB_ID", "123")
+    handles = [_handle(tmp_path, "b-latest"), _handle(tmp_path, "a-latest")]
+    metadata_calls: list[str] = []
+
+    monkeypatch.setattr(
+        "scripts.streaming.finalization.discover_run", lambda **_: handles
+    )
+    monkeypatch.setattr(
+        "scripts.streaming.finalization.materialize_checkpoint",
+        lambda handle, **_: handle,
+    )
+
+    def metadata(**kwargs: object) -> pa.Table:
+        shard = str(kwargs["shard_key"])
+        metadata_calls.append(shard)
+        return pa.table(
+            {
+                "polygon_id": [f"{shard}:1"],
+                "area_km2": [20.0 if shard == "a-latest" else 0.5],
+                "area_bucket": ["10-100km2" if shard == "a-latest" else "0.1-1km2"],
+            }
+        )
+
+    monkeypatch.setattr(
+        "scripts.streaming.finalization.download_v2_polygon_metadata", metadata
+    )
+
+    output = finalize_streamed_run(
+        hub_api=mock.Mock(),
+        repo_id="owner/output",
+        upstream_repo_id="owner/input",
+        run_id="run-1",
+        staging_revision="checkpoints/run-1",
+        source_commit=SOURCE_COMMIT,
+        input_dataset_revision=REVISION,
+        pipeline_version="0.1.0",
+        model_name="sat-3l-sm",
+        batch_size=128,
+        local_cache_dir=tmp_path / "cache",
+        scratch_dir=tmp_path / "scratch",
+        output_dir=tmp_path / "output",
+        expected_shard_keys=["a-latest", "b-latest"],
+        sampling_target=1,
+        sampling_seed="worldwide-v2",
+    )
+
+    table = pq.read_table(output / "sentences.parquet")
+    assert table.num_rows == 1
+    assert {"area_km2", "area_bucket"}.issubset(table.column_names)
+    assert metadata_calls == ["a-latest", "b-latest"]
+    manifest = json.loads((output / "manifest.json").read_text())
+    assert manifest["sampling"] == {
+        "seed": "worldwide-v2",
+        "source_finalized_rows": 2,
+        "target": 1,
+    }
+    assert not list(output.parent.rglob("all-sentences.parquet"))
+
+
 def test_finalization_requires_oar(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

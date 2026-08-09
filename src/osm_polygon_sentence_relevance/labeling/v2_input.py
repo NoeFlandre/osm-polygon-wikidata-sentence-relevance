@@ -139,20 +139,34 @@ def _download_polygon_metadata(
     """Download one pinned polygon file per source region in sorted order."""
 
     regions = sorted({str(value) for value in source["region"].to_pylist()})
-    paths: dict[str, Path] = {}
-    for region in regions:
-        path = hf_hub_download(
-            repo_id=dataset_id,
-            repo_type="dataset",
+    return {
+        region: download_v2_polygon_metadata(
+            dataset_id=dataset_id,
             revision=revision,
-            filename=f"polygons/{region}.parquet",
+            shard_key=region,
             cache_dir=cache_dir,
         )
-        paths[region] = Path(path)
-    return {
-        region: pq.read_table(path, columns=sorted(_METADATA_REQUIRED))
-        for region, path in paths.items()
+        for region in regions
     }
+
+
+def download_v2_polygon_metadata(
+    *,
+    dataset_id: str,
+    revision: str,
+    shard_key: str,
+    cache_dir: Path,
+) -> pa.Table:
+    """Read one shard's area metadata from an immutable upstream revision."""
+
+    path = hf_hub_download(
+        repo_id=dataset_id,
+        repo_type="dataset",
+        revision=revision,
+        filename=f"polygons/{shard_key}.parquet",
+        cache_dir=cache_dir,
+    )
+    return pq.read_table(Path(path), columns=sorted(_METADATA_REQUIRED))
 
 
 def download_and_enrich_v2_input(
@@ -230,6 +244,7 @@ if __name__ == "__main__":  # pragma: no cover
 
 
 __all__ = [
+    "download_v2_polygon_metadata",
     "download_and_enrich_v2_input",
     "enrich_v2_input",
     "enrich_v2_table",

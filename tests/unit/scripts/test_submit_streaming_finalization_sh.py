@@ -4,7 +4,7 @@ The submission adapter ``scripts/grid5000/submit_streaming_finalization.sh``
 runs on the Grid'5000 frontend and validates its positional arguments
 before invoking ``oarsub``.  These tests assert the public contract:
 
-* Exactly 12 positional arguments are required.
+* Exactly 14 positional arguments are required.
 * All persistent paths must be absolute real directories.
 * Revision SHAs must be 40 lowercase hexadecimal characters.
 * Repository IDs must be owner/name without spaces or slashes in
@@ -50,6 +50,8 @@ def _good_args(tmp_path: Path) -> list[str]:
         "afghanistan-20260721t070917z",
         "checkpoints/afghanistan-20260721t070917z",
         "afghanistan-latest",
+        "0",
+        "v2-worldwide",
         "00:15:00",
         "cpu",
     ]
@@ -70,7 +72,7 @@ def test_submit_rejects_wrong_arity(tmp_path: Path) -> None:
         text=True,
     )
     assert result.returncode == 2
-    assert "exactly twelve positional arguments" in result.stderr
+    assert "exactly fourteen positional arguments" in result.stderr
 
 
 def test_submit_rejects_non_absolute_repo_path(tmp_path: Path) -> None:
@@ -126,19 +128,31 @@ def test_submit_rejects_run_id_with_uppercase(tmp_path: Path) -> None:
 
 def test_submit_rejects_malformed_walltime(tmp_path: Path) -> None:
     args = _good_args(tmp_path)
-    args[10] = "15 minutes"
+    args[12] = "15 minutes"
     result = subprocess.run(
         [str(SUBMIT), *args],
         capture_output=True,
         text=True,
     )
     assert result.returncode == 2
-    assert "invalid run-id/shard/walltime" in result.stderr
+    assert "invalid run-id/shard/sampling/walltime" in result.stderr
+
+
+def test_submit_rejects_invalid_sampling_contract(tmp_path: Path) -> None:
+    args = _good_args(tmp_path)
+    args[10] = "two-hundred-thousand"
+    result = subprocess.run(
+        [str(SUBMIT), *args],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 2
+    assert "invalid run-id/shard/sampling/walltime" in result.stderr
 
 
 def test_submit_rejects_unknown_node_type(tmp_path: Path) -> None:
     args = _good_args(tmp_path)
-    args[11] = "tpu"
+    args[13] = "tpu"
     result = subprocess.run(
         [str(SUBMIT), *args],
         capture_output=True,

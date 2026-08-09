@@ -74,6 +74,14 @@ def test_finalization_job_rebuilds_environment_on_compute_node() -> None:
     assert "trap mark_failed_on_exit EXIT" in text
 
 
+def test_finalization_payload_treats_all_as_inventory_sentinel() -> None:
+    text = _text("run_streaming_finalization.sh")
+    assert 'if [ "${EXPECTED_SHARD}" != "all" ]; then' in text
+    assert 'args+=(--expected-shard "${EXPECTED_SHARD}")' in text
+    assert 'args+=(--sampling-target "${SAMPLING_TARGET}")' in text
+    assert '--sampling-seed "${SAMPLING_SEED}"' in text
+
+
 def test_split_job_uses_short_resumable_walltime_and_deadline() -> None:
     text = _text("run_streaming_build_job.sh")
     assert 'if [ "${COMPUTE_ENVIRONMENT_REUSED:-0}" -eq 1 ]; then' in text

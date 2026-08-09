@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import PurePosixPath
 
 from osm_polygon_sentence_relevance.labeling.v2_contracts import V2_LOGIT_PROMPT_VERSION
-from osm_polygon_sentence_relevance.operator.config import OperatorConfig, Scope
+from osm_polygon_sentence_relevance.operator.config import OperatorConfig, Scope, Stage
 from osm_polygon_sentence_relevance.operator.oar import (
     SubmissionRequest,
     format_walltime,
@@ -96,6 +96,8 @@ def split_finalization_submission(
     if revision is None:
         raise ValueError("immutable input revision is required")
     expected_shard = config.region or "all"
+    worldwide_v2 = config.scope is Scope.ALL and config.stage is Stage.ALL
+    sampling_target = config.requirements.sampling_target if worldwide_v2 else None
     command = (
         str(layout.repo / "scripts/grid5000/submit_streaming_finalization.sh"),
         str(layout.repo),
@@ -108,6 +110,8 @@ def split_finalization_submission(
         config.run_id,
         f"checkpoints/{config.run_id}",
         expected_shard,
+        str(sampling_target or 0),
+        config.requirements.sampling_seed,
         "02:00:00",
         "cpu",
     )

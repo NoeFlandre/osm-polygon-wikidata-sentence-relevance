@@ -4,8 +4,8 @@
 set -euo pipefail
 umask 077
 
-if [ "$#" -ne 10 ]; then
-    echo "run_streaming_finalization: exactly ten positional arguments are required" >&2
+if [ "$#" -ne 12 ]; then
+    echo "run_streaming_finalization: exactly twelve positional arguments are required" >&2
     exit 2
 fi
 
@@ -19,6 +19,8 @@ INPUT_REVISION="$7"; readonly INPUT_REVISION
 RUN_ID="$8"; readonly RUN_ID
 STAGING_REVISION="$9"; readonly STAGING_REVISION
 EXPECTED_SHARD="${10}"; readonly EXPECTED_SHARD
+SAMPLING_TARGET="${11}"; readonly SAMPLING_TARGET
+SAMPLING_SEED="${12}"; readonly SAMPLING_SEED
 
 PYTHON="${REPO_ROOT}/.venv/bin/python"
 if [ ! -x "${PYTHON}" ]; then
@@ -47,7 +49,13 @@ args=(
     --cache-dir "${CACHE_DIR}"
     --scratch-dir "${SCRATCH_DIR}"
     --output-dir "${OUTPUT_DIR}"
-    --expected-shard "${EXPECTED_SHARD}"
 )
+if [ "${EXPECTED_SHARD}" != "all" ]; then
+    args+=(--expected-shard "${EXPECTED_SHARD}")
+fi
+if [ "${SAMPLING_TARGET}" != "0" ]; then
+    args+=(--sampling-target "${SAMPLING_TARGET}")
+fi
+args+=(--sampling-seed "${SAMPLING_SEED}")
 
 exec "${PYTHON}" "${args[@]}"

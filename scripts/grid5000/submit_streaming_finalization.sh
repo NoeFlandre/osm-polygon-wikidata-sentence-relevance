@@ -6,8 +6,8 @@
 set -euo pipefail
 umask 077
 
-if [ "$#" -ne 12 ]; then
-    echo "submit_streaming_finalization: exactly twelve positional arguments are required" >&2
+if [ "$#" -ne 14 ]; then
+    echo "submit_streaming_finalization: exactly fourteen positional arguments are required" >&2
     exit 2
 fi
 
@@ -21,8 +21,10 @@ INPUT_REVISION="$7"; readonly INPUT_REVISION
 RUN_ID="$8"; readonly RUN_ID
 STAGING_REVISION="$9"; readonly STAGING_REVISION
 EXPECTED_SHARD="${10}"; readonly EXPECTED_SHARD
-WALLTIME="${11}"; readonly WALLTIME
-NODE_TYPE="${12}"; readonly NODE_TYPE
+SAMPLING_TARGET="${11}"; readonly SAMPLING_TARGET
+SAMPLING_SEED="${12}"; readonly SAMPLING_SEED
+WALLTIME="${13}"; readonly WALLTIME
+NODE_TYPE="${14}"; readonly NODE_TYPE
 
 for path in "${REPO_ROOT}" "${HF_HOME}" "${LOG_ROOT}"; do
     case "${path}" in /*) ;; *) echo "submit_streaming_finalization: persistent path must be absolute" >&2; exit 2 ;; esac
@@ -43,8 +45,10 @@ if ! [[ "${OUTPUT_REPO_ID}" =~ ^[^/[:space:]]+/[^/[:space:]]+$ ]] || \
 fi
 if ! [[ "${RUN_ID}" =~ ^[a-z0-9][a-z0-9._-]*$ ]] || \
    ! [[ "${EXPECTED_SHARD}" =~ ^[a-z0-9][a-z0-9._-]*$ ]] || \
+   ! [[ "${SAMPLING_TARGET}" =~ ^[0-9]+$ ]] || \
+   [ -z "${SAMPLING_SEED}" ] || \
    ! [[ "${WALLTIME}" =~ ^[0-9]+:[0-9]+:[0-9]+$ ]]; then
-    echo "submit_streaming_finalization: invalid run-id/shard/walltime" >&2
+    echo "submit_streaming_finalization: invalid run-id/shard/sampling/walltime" >&2
     exit 2
 fi
 case "${NODE_TYPE}" in cpu|gpu) ;; *) echo "submit_streaming_finalization: node-type must be cpu|gpu" >&2; exit 2 ;; esac

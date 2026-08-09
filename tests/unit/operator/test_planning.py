@@ -561,6 +561,32 @@ def test_workflow_layout_and_finalization_commands() -> None:
     assert '"$job_log/build.stdout.log"' in build.command[-1]
 
 
+def test_worldwide_finalization_receives_sampling_contract() -> None:
+    config = OperatorConfig.build(
+        scope="all",
+        region=None,
+        stage="all",
+        source_commit="a" * 40,
+        input_revision="b" * 40,
+        llama_parallel=8,
+        llama_per_slot_context=8192,
+        sampling_target=200_000,
+        sampling_seed="worldwide-seed",
+    )
+
+    command = split_finalization_submission(
+        config, RemoteLayout(PurePosixPath("/r"))
+    ).command
+
+    assert command[-5:] == (
+        "all",
+        "200000",
+        "worldwide-seed",
+        "02:00:00",
+        "cpu",
+    )
+
+
 def test_workflows_require_immutable_revision() -> None:
     config = _config(stage="split")
     object.__setattr__(config, "input_dataset_revision", None)

@@ -25,6 +25,13 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from osm_polygon_sentence_relevance.contracts.schemas import OUTPUT_SENTENCE_SCHEMA
+from osm_polygon_sentence_relevance.labeling.v2_bounded_sampling import (
+    select_v2_parquet_bounded,
+)
+from osm_polygon_sentence_relevance.labeling.v2_input import (
+    download_v2_polygon_metadata,
+    enrich_v2_table,
+)
 from osm_polygon_sentence_relevance.output.atomic import (
     cleanup_on_failure,
     install_atomic,
@@ -160,6 +167,8 @@ def finalize_streamed_run(
     scratch_dir: Path,
     output_dir: Path,
     expected_shard_keys: Sequence[str] | None = None,
+    sampling_target: int | None = None,
+    sampling_seed: str = "v2-worldwide",
 ) -> Path:
     """Build and atomically install the three final public artifacts.
 
@@ -174,6 +183,14 @@ def finalize_streamed_run(
     output = Path(output_dir)
     if output.exists():
         raise StreamingFinalizationError("final output directory must be fresh")
+    if sampling_target is not None and (
+        isinstance(sampling_target, bool)
+        or not isinstance(sampling_target, int)
+        or sampling_target < 1
+    ):
+        raise StreamingFinalizationError("sampling target must be a positive integer")
+    if not isinstance(sampling_seed, str) or not sampling_seed.strip():
+        raise StreamingFinalizationError("sampling seed must be non-blank")
     output.parent.mkdir(parents=True, exist_ok=True)
     scratch.mkdir(parents=True, exist_ok=True)
 
@@ -203,15 +220,21 @@ def finalize_streamed_run(
     tmp_dir = Path(tempfile.mkdtemp(prefix=".finalizing-", dir=output.parent))
     backup: Path | None = None
     parquet_path = tmp_dir / "sentences.parquet"
+    stream_path = (
+        tmp_dir / "all-sentences.parquet"
+        if sampling_target is not None
+        else parquet_path
+    )
     metadata: Mapping[bytes, bytes] = {
         b"input_dataset_revision": input_dataset_revision.encode("utf-8"),
         b"pipeline_version": pipeline_version.encode("utf-8"),
         b"input_dataset_id": upstream_repo_id.encode("utf-8"),
     }
-    writer = pq.ParquetWriter(
-        parquet_path,
-        OUTPUT_SENTENCE_SCHEMA.with_metadata(metadata),
-    )
+    stream_schema = OUTPUT_SENTENCE_SCHEMA
+    if sampling_target is not None:
+        stream_schema = stream_schema.append(pa.field("area_km2", pa.float64()))
+        stream_schema = stream_schema.append(pa.field("area_bucket", pa.string()))
+    writer = pq.ParquetWriter(stream_path, stream_schema.with_metadata(metadata))
     reports: list[FinalizationReport] = []
     try:
         for handle in ordered:
@@ -228,31 +251,87 @@ def finalize_streamed_run(
                 pipeline_version=pipeline_version,
                 input_dataset_id=upstream_repo_id,
             )
-            writer.write_table(finalized.table)
+            output_table = finalized.table
+            if sampling_target is not None:
+                polygon_metadata = download_v2_polygon_metadata(
+                    dataset_id=upstream_repo_id,
+                    revision=input_dataset_revision,
+                    shard_key=handle.shard_key,
+                    cache_dir=cache,
+                )
+                output_table = enrich_v2_table(
+                    output_table, {handle.shard_key: polygon_metadata}
+                )
+            writer.write_table(output_table)
             reports.append(finalized.report)
-            del segmented, finalized
+            del segmented, finalized, output_table
             _evict_materialized(materialized, cache)
         writer.close()
 
         report = _aggregate_reports(reports)
-        digest = sha256_file(parquet_path)
-        statistics = compute_parquet_statistics(
-            parquet_path,
-            input_dataset_revision=input_dataset_revision,
-            pipeline_version=pipeline_version,
-            parquet_sha256=digest,
-            input_dataset_id=upstream_repo_id,
-            scratch_dir=scratch,
-        )
-        if report.output_sentence_count != statistics.row_count:
-            raise StreamingFinalizationError(
-                "aggregated finalization report does not match final Parquet rows"
+        if sampling_target is not None:
+            select_v2_parquet_bounded(
+                stream_path,
+                parquet_path,
+                target=sampling_target,
+                seed=sampling_seed,
+                scratch_dir=scratch,
             )
-        manifest = build_manifest_data_from_statistics(statistics, report)
-        write_manifest(tmp_dir / "manifest.json", manifest)
-        (tmp_dir / "README.md").write_text(
-            render_dataset_card(statistics), encoding="utf-8"
+            stream_path.unlink()
+        digest = sha256_file(parquet_path)
+        expected_output_rows = (
+            report.output_sentence_count
+            if sampling_target is None
+            else min(sampling_target, report.output_sentence_count)
         )
+        if sampling_target is not None:
+            selected_rows = pq.ParquetFile(parquet_path).metadata.num_rows
+            if expected_output_rows != selected_rows:
+                raise StreamingFinalizationError(
+                    "bounded V2 sample does not match its expected row count"
+                )
+            manifest = {
+                "manifest_version": 1,
+                "purpose": "v2-worldwide-label-input",
+                "row_count": selected_rows,
+                "sha256": digest,
+                "input_dataset_id": upstream_repo_id,
+                "input_dataset_revision": input_dataset_revision,
+                "source_commit": source_commit,
+                "pipeline_version": pipeline_version,
+                "sampling": {
+                    "target": sampling_target,
+                    "seed": sampling_seed,
+                    "source_finalized_rows": report.output_sentence_count,
+                },
+            }
+            readme = (
+                "# Worldwide V2 labeling input\n\n"
+                "This internal artifact was generated deterministically from the "
+                "complete validated split checkpoints.\n\n"
+                f"- Selected sentences: {selected_rows:,}\n"
+                f"- Source finalized sentences: {report.output_sentence_count:,}\n"
+                f"- Sampling seed: `{sampling_seed}`\n"
+                f"- Input revision: `{input_dataset_revision}`\n"
+                f"- SHA-256: `{digest}`\n"
+            )
+        else:
+            statistics = compute_parquet_statistics(
+                parquet_path,
+                input_dataset_revision=input_dataset_revision,
+                pipeline_version=pipeline_version,
+                parquet_sha256=digest,
+                input_dataset_id=upstream_repo_id,
+                scratch_dir=scratch,
+            )
+            if expected_output_rows != statistics.row_count:
+                raise StreamingFinalizationError(
+                    "aggregated finalization report does not match final Parquet rows"
+                )
+            manifest = build_manifest_data_from_statistics(statistics, report)
+            readme = render_dataset_card(statistics)
+        write_manifest(tmp_dir / "manifest.json", manifest)
+        (tmp_dir / "README.md").write_text(readme, encoding="utf-8")
         backup = install_atomic(tmp_dir, output)
         if backup is not None:
             remove_backup(backup)
@@ -279,6 +358,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--cache-dir", required=True)
     parser.add_argument("--scratch-dir", required=True)
     parser.add_argument("--output-dir", required=True)
+    parser.add_argument("--sampling-target", type=int, default=None)
+    parser.add_argument("--sampling-seed", default="v2-worldwide")
     parser.add_argument(
         "--expected-shard",
         action="append",
@@ -309,6 +390,8 @@ def main(argv: list[str] | None = None) -> int:
         scratch_dir=Path(args.scratch_dir),
         output_dir=Path(args.output_dir),
         expected_shard_keys=args.expected_shard,
+        sampling_target=args.sampling_target,
+        sampling_seed=args.sampling_seed,
     )
     print(json.dumps({"output_dir": str(result)}, sort_keys=True), flush=True)
     return 0

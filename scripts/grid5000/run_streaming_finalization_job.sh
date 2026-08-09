@@ -9,8 +9,8 @@ if ! [[ "${OAR_JOB_ID}" =~ ^[0-9]+$ ]]; then
     echo "run_streaming_finalization_job: OAR_JOB_ID must be numeric" >&2
     exit 2
 fi
-if [ "$#" -ne 12 ]; then
-    echo "run_streaming_finalization_job: exactly twelve positional arguments are required" >&2
+if [ "$#" -ne 14 ]; then
+    echo "run_streaming_finalization_job: exactly fourteen positional arguments are required" >&2
     exit 2
 fi
 
@@ -24,8 +24,10 @@ INPUT_REVISION="$7"; readonly INPUT_REVISION
 RUN_ID="$8"; readonly RUN_ID
 STAGING_REVISION="$9"; readonly STAGING_REVISION
 EXPECTED_SHARD="${10}"; readonly EXPECTED_SHARD
-WALLTIME="${11}"; readonly WALLTIME
-NODE_TYPE="${12}"; readonly NODE_TYPE
+SAMPLING_TARGET="${11}"; readonly SAMPLING_TARGET
+SAMPLING_SEED="${12}"; readonly SAMPLING_SEED
+WALLTIME="${13}"; readonly WALLTIME
+NODE_TYPE="${14}"; readonly NODE_TYPE
 
 RUN_ROOT="$(cd "${REPO_ROOT}/.." && pwd -P)"; readonly RUN_ROOT
 case "${RUN_ROOT}" in
@@ -90,6 +92,7 @@ set +e
 "${PAYLOAD}" "${REPO_ROOT}" "${HF_HOME}" "${WORK_DIR}" \
     "${OUTPUT_REPO_ID}" "${INPUT_REPO_ID}" "${EXPECTED_SOURCE_COMMIT}" \
     "${INPUT_REVISION}" "${RUN_ID}" "${STAGING_REVISION}" "${EXPECTED_SHARD}" \
+    "${SAMPLING_TARGET}" "${SAMPLING_SEED}" \
     >"${JOB_LOG_DIR}/finalize.stdout.log" \
     2>"${JOB_LOG_DIR}/finalize.stderr.log"
 finalize_rc=$?
