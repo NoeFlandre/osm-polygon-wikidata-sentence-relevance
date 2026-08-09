@@ -51,6 +51,13 @@ def test_guide_documents_bounded_storage_and_resume() -> None:
     assert "same run ID" in text
 
 
+def test_guide_documents_environment_aware_split_deadlines() -> None:
+    text = _text()
+    assert "28 minutes for segmentation" in text
+    assert "one minute for graceful checkpointing" in text
+    assert "25-minute segmentation and four-minute checkpoint budget" in text
+
+
 def test_guide_uses_placeholders_without_personal_paths() -> None:
     text = _text()
     for personal in ("nflandre", "/Users/", "/Volumes/", "/srv/storage/"):

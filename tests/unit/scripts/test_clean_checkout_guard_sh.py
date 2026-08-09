@@ -44,6 +44,7 @@ def _run_environment_preparation(
         f". '{GUARD}'\n"
         f"UV_BIN='{fake_uv}' prepare_compute_environment "
         f"'{repo}' '{scratch}' '{logs}' test\n"
+        f'echo "reused=${{COMPUTE_ENVIRONMENT_REUSED:-unset}}"\n'
         f'echo "exit=$?"\n'
     )
     return subprocess.run(
@@ -142,7 +143,7 @@ def test_compute_environment_reuses_a_valid_existing_venv(tmp_path: Path) -> Non
     fake_uv.chmod(0o755)
     result = _run_environment_preparation(repo, fake_uv, tmp_path)
 
-    assert result.stdout.endswith("exit=0\n")
+    assert result.stdout.endswith("reused=1\nexit=0\n")
     assert sentinel.read_text() == "keep\n"
     assert calls.read_text().splitlines() == ["sync"]
 
@@ -176,7 +177,7 @@ def test_compute_environment_rebuilds_after_reuse_validation_fails(
     result = _run_environment_preparation(repo, fake_uv, tmp_path)
 
     assert result.returncode == 0, result.stderr
-    assert result.stdout.endswith("exit=0\n")
+    assert result.stdout.endswith("reused=0\nexit=0\n")
     assert not sentinel.exists()
     assert calls.read_text().splitlines() == ["reuse-failed", "fresh-build"]
 
@@ -211,7 +212,7 @@ def test_compute_environment_rebuilds_when_locked_imports_fail(tmp_path: Path) -
     result = _run_environment_preparation(repo, fake_uv, tmp_path)
 
     assert result.returncode == 0, result.stderr
-    assert result.stdout.endswith("exit=0\n")
+    assert result.stdout.endswith("reused=0\nexit=0\n")
     assert not sentinel.exists()
     assert calls.read_text().splitlines() == ["reuse-sync", "fresh-build"]
 

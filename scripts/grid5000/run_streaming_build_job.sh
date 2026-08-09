@@ -113,11 +113,20 @@ fi
     2>"${JOB_LOG_DIR}/gpu_preflight.stderr.log"
 
 set +e
-# Spend most of the 30-minute allocation on CUDA segmentation.  Four minutes
-# remain for a graceful SIGINT checkpoint, with one minute of scheduler margin.
-# Completed section batches are already durable, so a forced stop resumes from
-# the last validated batch.
-deadline_helper_run 25m 4m "${PAYLOAD}" \
+# A validated reusable environment leaves enough of the 30-minute allocation
+# for 28 minutes of CUDA segmentation, one minute of graceful SIGINT handling,
+# and one minute of scheduler margin. A rebuilt environment keeps the measured
+# conservative 25/4/1-minute budget. Completed section batches are durable, so
+# either path resumes from the last validated batch after a forced stop.
+if [ "${COMPUTE_ENVIRONMENT_REUSED:-0}" -eq 1 ]; then
+    DEADLINE_DURATION="28m"
+    DEADLINE_GRACE="1m"
+else
+    DEADLINE_DURATION="25m"
+    DEADLINE_GRACE="4m"
+fi
+readonly DEADLINE_DURATION DEADLINE_GRACE
+deadline_helper_run "${DEADLINE_DURATION}" "${DEADLINE_GRACE}" "${PAYLOAD}" \
     "${REPO_ROOT}" "${HF_HOME}" "${WORK_DIR}" \
     "${OUTPUT_REPO_ID}" "${INPUT_REPO_ID}" "${EXPECTED_SOURCE_COMMIT}" \
     "${INPUT_REVISION}" "${RUN_ID}" "${BATCH_SIZE}" "${MAX_SHARDS}" \

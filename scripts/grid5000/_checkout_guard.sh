@@ -47,6 +47,10 @@ prepare_compute_environment() {
     local label="${4:-compute}"
     local uv_bin="${UV_BIN:-}"
 
+    # Expose whether validation reused the existing environment so callers can
+    # budget the remaining allocation time without guessing from log output.
+    COMPUTE_ENVIRONMENT_REUSED=0
+
     if [ -z "${uv_bin}" ]; then
         uv_bin="$(command -v uv || true)"
     fi
@@ -83,6 +87,7 @@ prepare_compute_environment() {
                 2>>"${job_log_dir}/environment.stderr.log"; then
             printf 'COMPUTE_ENVIRONMENT_REUSED\n' \
                 >>"${job_log_dir}/environment.stdout.log"
+            COMPUTE_ENVIRONMENT_REUSED=1
             return 0
         fi
         printf 'Existing compute environment failed validation; rebuilding.\n' \
