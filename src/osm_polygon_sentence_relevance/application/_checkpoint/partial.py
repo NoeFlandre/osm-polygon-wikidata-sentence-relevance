@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import stat
 from dataclasses import dataclass
@@ -37,6 +38,7 @@ from .validation import _segmentation_report_from_dict, _segmentation_report_to_
 PARTIAL_DIRNAME = "partial"
 PARTIAL_PROGRESS_NAME = "progress.json"
 _PARTIAL_SCHEMA_VERSION = 1
+_PARTIAL_BATCH_NAME = re.compile(r"^batch-(\d{9})-(\d{9})\.parquet$")
 
 
 @dataclass(frozen=True, slots=True)
@@ -136,6 +138,17 @@ def load_partial_state(
     _remove_interrupted_atomic_temporary_files(directory)
     expected_names = {PARTIAL_PROGRESS_NAME} | {batch.filename for batch in batches}
     names = {path.name for path in directory.iterdir()}
+    missing_names = expected_names - names
+    extra_names = names - expected_names
+    if not missing_names and len(extra_names) == 1:
+        _remove_immediate_unreferenced_batch(
+            directory,
+            filename=next(iter(extra_names)),
+            next_index=next_index,
+            total_sections=total_sections,
+            batch_size=batch_size,
+        )
+        names = {path.name for path in directory.iterdir()}
     if names != expected_names:
         raise CheckpointValidationError(
             f"partial directory has unexpected entries: {sorted(names)}"
@@ -459,6 +472,36 @@ def _remove_interrupted_atomic_temporary_files(directory: Path) -> None:
         removed = True
     if removed:
         _fsync_dir_strict(directory)
+
+
+def _remove_immediate_unreferenced_batch(
+    directory: Path,
+    *,
+    filename: str,
+    next_index: int,
+    total_sections: int,
+    batch_size: int,
+) -> None:
+    """Discard only the batch from the manifest-advance hard-kill window.
+
+    ``append_partial_batch`` first atomically installs a complete Parquet file
+    and then advances ``progress.json``.  A scheduler kill between those two
+    operations can therefore leave exactly one canonical batch at the
+    manifest's next index.  The manifest remains authoritative: discard that
+    unreferenced batch and recompute its bounded section range.
+    """
+    match = _PARTIAL_BATCH_NAME.fullmatch(filename)
+    if match is None:
+        return
+    start_index, end_index = (int(value) for value in match.groups())
+    if start_index != next_index or end_index != min(
+        next_index + batch_size, total_sections
+    ):
+        return
+    path = directory / filename
+    _ensure_regular(path, _FILE_MODE)
+    path.unlink()
+    _fsync_dir_strict(directory)
 
 
 __all__ = [

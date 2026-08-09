@@ -427,6 +427,56 @@ def test_load_rejects_extra_entry(tmp_path: Path) -> None:
         )
 
 
+def test_load_discards_single_immediate_unreferenced_batch(tmp_path: Path) -> None:
+    """Recover the hard-kill window after batch rename but before manifest write."""
+    state = append_partial_batch(_create(tmp_path), _batch(0, 1))
+    orphan = state.directory / "batch-000000001-000000002.parquet"
+    partial_module.pq.write_table(SEGMENTED_SENTENCES_SCHEMA.empty_table(), orphan)
+    os.chmod(orphan, 0o600)
+
+    loaded = _load(tmp_path)
+
+    assert loaded is not None
+    assert loaded.next_section_index == 1
+    assert [batch.filename for batch in loaded.batches] == [state.batches[0].filename]
+    assert not orphan.exists()
+
+
+@pytest.mark.parametrize(
+    "orphan_names",
+    [
+        ["batch-000000000-000000002.parquet"],
+        ["batch-000000002-000000003.parquet"],
+        [
+            "batch-000000001-000000002.parquet",
+            "batch-000000001-000000003.parquet",
+        ],
+    ],
+)
+def test_load_rejects_ambiguous_unreferenced_batches(
+    tmp_path: Path, orphan_names: list[str]
+) -> None:
+    state = append_partial_batch(_create(tmp_path, total_sections=3), _batch(0, 1))
+    for name in orphan_names:
+        orphan = state.directory / name
+        partial_module.pq.write_table(SEGMENTED_SENTENCES_SCHEMA.empty_table(), orphan)
+        os.chmod(orphan, 0o600)
+
+    with pytest.raises(CheckpointValidationError, match="unexpected entries"):
+        _load(tmp_path, total_sections=3)
+
+
+def test_load_rejects_symlinked_immediate_unreferenced_batch(tmp_path: Path) -> None:
+    state = append_partial_batch(_create(tmp_path), _batch(0, 1))
+    target = tmp_path / "target.parquet"
+    partial_module.pq.write_table(SEGMENTED_SENTENCES_SCHEMA.empty_table(), target)
+    orphan = state.directory / "batch-000000001-000000002.parquet"
+    orphan.symlink_to(target)
+
+    with pytest.raises(CheckpointValidationError, match="not regular"):
+        _load(tmp_path)
+
+
 def test_load_removes_interrupted_atomic_temporary_files(tmp_path: Path) -> None:
     """A killed atomic write must not make durable partial progress unusable."""
     state = _create(tmp_path)

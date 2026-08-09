@@ -142,7 +142,10 @@ a partial shard progress manifest under
 `${work_dir}/shards/partial/${shard_key}/`; completed section batches are
 validated before that manifest advances, so a walltime interruption resumes
 inside a large shard instead of repeating completed batches. Partial state
-is removed only after the complete shard checkpoint has been validated. Each
+also discards the single immediate-next batch that can remain if the scheduler
+stops between the batch rename and manifest update; other unexpected files
+still fail closed. Partial state is removed only after the complete shard
+checkpoint has been validated. Each
 checkpoint carries a per-file source manifest: the six source files referenced by the
 discovered `RegionShardSet` (paths, sizes, and SHA-256). On resume
 every source file is re-hashed; any change in bytes, presence or

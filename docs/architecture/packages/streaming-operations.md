@@ -20,7 +20,12 @@ No full mirror is required. Independent files for the current shard are
 downloaded with a bounded worker pool, while each file keeps the same
 hash-verification and cleanup contract. Scratch is evicted only after
 authoritative readback verifies hash and identity. Publication is a separate
-validated step.
+validated step. A persistent, identity-bound ledger records those verified
+readbacks, so later short allocations skip repeated Hub inspection while final
+publication still validates every checkpoint independently. Within a shard,
+the manifest remains authoritative after a hard stop: only one canonical
+immediate-next orphan batch is discarded and recomputed; ambiguous entries
+fail closed.
 
 ## Tests
 

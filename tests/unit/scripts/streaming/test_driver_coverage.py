@@ -18,6 +18,7 @@ from scripts.streaming.driver import (
     list_remote_shard_keys,
     main,
 )
+from scripts.streaming.offload import OffloadHandle
 
 
 @pytest.fixture(autouse=True)
@@ -47,6 +48,21 @@ def _good_args(tmp_path: Path) -> dict:
         "offload_local_cache_dir": tmp_path / "cache",
         "max_disk_bytes": 1 << 30,
     }
+
+
+def _offload_handle(shard_key: str) -> OffloadHandle:
+    digest = "d" * 64
+    return OffloadHandle(
+        repo_id="owner/repo",
+        run_id="run-1",
+        shard_key=shard_key,
+        staging_revision="rev",
+        folder_path=f"checkpoints/run-1/{shard_key}",
+        expected_table_sha256=digest,
+        computed_table_sha256=digest,
+        table_bytes=123,
+        metadata={"shard_key": shard_key},
+    )
 
 
 def test_main_process_shard_without_confirm(capsys) -> None:
@@ -579,7 +595,7 @@ def test_process_shard_wraps_remote_validation_failure(tmp_path: Path) -> None:
 
 def test_process_shard_reuses_remote_and_evicts_local(tmp_path: Path) -> None:
     driver = StreamDriver(**_good_args(tmp_path))
-    handle = mock.Mock(shard_key="a-latest")
+    handle = _offload_handle("a-latest")
     with (
         mock.patch(
             "scripts.streaming.driver.inspect_remote_checkpoint",
@@ -589,6 +605,152 @@ def test_process_shard_reuses_remote_and_evicts_local(tmp_path: Path) -> None:
     ):
         assert driver.process_shard("a-latest", segmenter=mock.Mock()) is handle
     evict.assert_called_once_with("a-latest")
+    assert driver.has_verified_checkpoint("a-latest")
+    state = json.loads((tmp_path / "state.json").read_text())
+    assert state["verified_checkpoints"] == {
+        "a-latest": {
+            "segmented_table_bytes": 123,
+            "segmented_table_sha256": "d" * 64,
+        }
+    }
+
+
+def test_checkpoint_ledger_requires_exact_run_identity(tmp_path: Path) -> None:
+    state = {
+        "resolved_revision": "a" * 40,
+        "run_id": "other-run",
+        "verified_checkpoints": {
+            "a-latest": {
+                "segmented_table_bytes": 123,
+                "segmented_table_sha256": "d" * 64,
+            }
+        },
+    }
+    (tmp_path / "state.json").write_text(json.dumps(state))
+
+    with pytest.raises(DriverError, match="run_id mismatch"):
+        StreamDriver(**_good_args(tmp_path))
+
+
+def test_checkpoint_ledger_round_trips_across_allocations(tmp_path: Path) -> None:
+    first = StreamDriver(**_good_args(tmp_path))
+    first._write_state(updated=True, completed=_offload_handle("a-latest"))
+
+    resumed = StreamDriver(**_good_args(tmp_path))
+
+    assert resumed.has_verified_checkpoint("a-latest") is True
+    assert resumed.has_verified_checkpoint("b-latest") is False
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda state: state.update({"verified_checkpoints": []}),
+        lambda state: state.pop("source_commit"),
+        lambda state: state["verified_checkpoints"].update(
+            {"../bad": state["verified_checkpoints"].pop("a-latest")}
+        ),
+        lambda state: state["verified_checkpoints"].update({"a-latest": "bad"}),
+        lambda state: state["verified_checkpoints"]["a-latest"].update({"extra": True}),
+        lambda state: state["verified_checkpoints"]["a-latest"].update(
+            {"segmented_table_sha256": "bad"}
+        ),
+        lambda state: state["verified_checkpoints"]["a-latest"].update(
+            {"segmented_table_bytes": 0}
+        ),
+    ],
+)
+def test_checkpoint_ledger_rejects_malformed_durable_state(
+    tmp_path: Path, mutation
+) -> None:
+    driver = StreamDriver(**_good_args(tmp_path))
+    driver._write_state(updated=True, completed=_offload_handle("a-latest"))
+    path = tmp_path / "state.json"
+    state = json.loads(path.read_text())
+    mutation(state)
+    path.write_text(json.dumps(state))
+
+    with pytest.raises(DriverError, match="checkpoint|verified_checkpoints"):
+        StreamDriver(**_good_args(tmp_path))
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"repo_id": "other/repo"},
+        {"run_id": "other-run"},
+        {"staging_revision": "other-revision"},
+        {"shard_key": "../bad"},
+        {"computed_table_sha256": "e" * 64},
+        {
+            "expected_table_sha256": "bad",
+            "computed_table_sha256": "bad",
+        },
+        {
+            "expected_table_sha256": "z" * 64,
+            "computed_table_sha256": "z" * 64,
+        },
+        {"table_bytes": True},
+        {"table_bytes": 0},
+    ],
+)
+def test_checkpoint_ledger_rejects_unverified_handle(
+    tmp_path: Path, changes: dict[str, object]
+) -> None:
+    driver = StreamDriver(**_good_args(tmp_path))
+    handle = dataclasses.replace(_offload_handle("a-latest"), **changes)
+
+    with pytest.raises(DriverError, match="does not match this run"):
+        driver._write_state(updated=True, completed=handle)
+
+    assert driver.has_verified_checkpoint("a-latest") is False
+
+
+def test_main_skips_locally_verified_stream_checkpoint(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fake_driver = mock.Mock()
+    fake_driver.has_verified_checkpoint.side_effect = lambda key: key == "a-latest"
+    monkeypatch.setattr(driver_mod, "StreamDriver", mock.Mock(return_value=fake_driver))
+    monkeypatch.setattr(
+        driver_mod,
+        "list_remote_shard_keys",
+        mock.Mock(side_effect=[[], [], ["a-latest", "b-latest"]]),
+    )
+    monkeypatch.setattr("huggingface_hub.HfApi", mock.Mock())
+    monkeypatch.setattr(
+        "osm_polygon_sentence_relevance.sentences.sat.SaTSentenceSegmenter",
+        mock.Mock(),
+    )
+
+    result = main(
+        [
+            "stream-build",
+            "--confirm-offload",
+            "--run-id",
+            "run-1",
+            "--staging-revision",
+            "rev",
+            "--repo-id",
+            "owner/repo",
+            "--upstream-repo-id",
+            "upstream/repo",
+            "--resolved-revision",
+            "a" * 40,
+            "--source-commit",
+            "b" * 40,
+            "--work-dir",
+            str(tmp_path),
+        ]
+    )
+
+    assert result == 0
+    fake_driver.process_shard.assert_called_once_with("b-latest", segmenter=mock.ANY)
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert events == [
+        {"completed": 1, "shard_key": "a-latest", "total": 2},
+        {"completed": 2, "shard_key": "b-latest", "total": 2},
+    ]
 
 
 def test_download_shard_wraps_optional_probe_failure(tmp_path: Path) -> None:

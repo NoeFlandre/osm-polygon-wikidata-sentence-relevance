@@ -101,6 +101,17 @@ _DOWNLOAD_LAYOUT: tuple[tuple[str, str], ...] = (
     ("wikivoyage/sections", "<shard>.parquet"),
 )
 
+_STATE_IDENTITY_FIELDS = (
+    "repo_id",
+    "resolved_revision",
+    "source_commit",
+    "run_id",
+    "staging_revision",
+    "pipeline_version",
+    "model_name",
+    "batch_size",
+)
+
 
 def list_remote_shard_keys(
     *,
@@ -230,6 +241,7 @@ class StreamDriver:
         if hub_api is None:
             raise ValueError("hub_api must be supplied")
         self.hub_api = hub_api
+        self._verified_checkpoints: dict[str, dict[str, str | int]] = {}
         if optional_shard_keys is not None:
             if any(
                 not isinstance(key, str) or not key.strip()
@@ -277,13 +289,15 @@ class StreamDriver:
         if state_path.exists():
             try:
                 state = json.loads(state_path.read_text())
-                pinned = state.get("resolved_revision")
-                if pinned is not None and pinned != self.cfg.resolved_revision:
-                    raise DriverError(
-                        f"pinned revision mismatch: state.json has {pinned!r}, config has {self.cfg.resolved_revision!r}"
-                    )
             except json.JSONDecodeError as exc:
                 raise DriverError(f"state.json is malformed JSON: {exc}") from exc
+            if not isinstance(state, dict):
+                raise DriverError("state.json must contain a JSON object")
+            self._verified_checkpoints = self._load_verified_checkpoints(state)
+
+    def has_verified_checkpoint(self, shard_key: str) -> bool:
+        """Return whether this persistent work root already verified a shard."""
+        return shard_key in self._verified_checkpoints
 
     def process_shard(
         self,
@@ -319,6 +333,7 @@ class StreamDriver:
         if existing is not None:
             log.info("reusing verified remote checkpoint for %s", shard_key)
             self._evict_local_shard_state(shard_key)
+            self._write_state(updated=True, completed=existing)
             return existing
 
         inbox = self.work_dir / "shards" / "inbox" / shard_key
@@ -385,7 +400,7 @@ class StreamDriver:
             # Strict eviction of BOTH local inbox and active checkpoint after verified readback
             self._evict_local_shard_state(shard_key)
 
-            self._write_state(updated=True)
+            self._write_state(updated=True, completed=handle)
             return handle
 
         except Exception:
@@ -495,7 +510,69 @@ class StreamDriver:
                 f"failed to download required file {failed_path}: {exc}"
             ) from exc
 
-    def _write_state(self, *, updated: bool) -> None:
+    def _state_identity(self) -> dict[str, str | int]:
+        return {
+            "repo_id": self.cfg.repo_id,
+            "resolved_revision": self.cfg.resolved_revision,
+            "source_commit": self.cfg.source_commit,
+            "run_id": self.cfg.run_id,
+            "staging_revision": self.cfg.staging_revision,
+            "pipeline_version": self.cfg.pipeline_version,
+            "model_name": self.cfg.model_name,
+            "batch_size": self.cfg.batch_size,
+        }
+
+    def _load_verified_checkpoints(
+        self, state: dict[str, Any]
+    ) -> dict[str, dict[str, str | int]]:
+        identity = self._state_identity()
+        for field, expected in identity.items():
+            if field in state and state[field] != expected:
+                label = "pinned revision" if field == "resolved_revision" else field
+                raise DriverError(
+                    f"{label} mismatch: state.json has {state[field]!r}, "
+                    f"config has {expected!r}"
+                )
+        raw = state.get("verified_checkpoints")
+        if raw is None:
+            return {}
+        if not isinstance(raw, dict):
+            raise DriverError("state.json verified_checkpoints must be an object")
+        if raw and any(field not in state for field in _STATE_IDENTITY_FIELDS):
+            raise DriverError(
+                "state.json checkpoint ledger is missing its complete run identity"
+            )
+        result: dict[str, dict[str, str | int]] = {}
+        for shard_key, descriptor in raw.items():
+            if not _valid_streaming_shard_key(shard_key) or not isinstance(
+                descriptor, dict
+            ):
+                raise DriverError("state.json checkpoint ledger is malformed")
+            if set(descriptor) != {
+                "segmented_table_sha256",
+                "segmented_table_bytes",
+            }:
+                raise DriverError("state.json checkpoint descriptor is malformed")
+            digest = descriptor["segmented_table_sha256"]
+            size = descriptor["segmented_table_bytes"]
+            if (
+                not isinstance(digest, str)
+                or len(digest) != 64
+                or any(char not in "0123456789abcdef" for char in digest)
+                or isinstance(size, bool)
+                or not isinstance(size, int)
+                or size <= 0
+            ):
+                raise DriverError("state.json checkpoint descriptor is malformed")
+            result[shard_key] = {
+                "segmented_table_sha256": digest,
+                "segmented_table_bytes": size,
+            }
+        return result
+
+    def _write_state(
+        self, *, updated: bool, completed: OffloadHandle | None = None
+    ) -> None:
         state_path = self.work_dir / "state.json"
         state: dict[str, Any] = {}
         if state_path.exists():
@@ -503,9 +580,31 @@ class StreamDriver:
                 state = json.loads(state_path.read_text())
             except json.JSONDecodeError:
                 state = {}
-        state["resolved_revision"] = self.cfg.resolved_revision
+        checkpoints = dict(self._verified_checkpoints)
+        if completed is not None:
+            if (
+                completed.repo_id != self.cfg.repo_id
+                or completed.run_id != self.cfg.run_id
+                or completed.staging_revision != self.cfg.staging_revision
+                or not _valid_streaming_shard_key(completed.shard_key)
+                or completed.expected_table_sha256 != completed.computed_table_sha256
+                or len(completed.computed_table_sha256) != 64
+                or any(
+                    char not in "0123456789abcdef"
+                    for char in completed.computed_table_sha256
+                )
+                or isinstance(completed.table_bytes, bool)
+                or completed.table_bytes <= 0
+            ):
+                raise DriverError("verified checkpoint handle does not match this run")
+            checkpoints[completed.shard_key] = {
+                "segmented_table_sha256": completed.computed_table_sha256,
+                "segmented_table_bytes": completed.table_bytes,
+            }
+        state.update(self._state_identity())
+        state["schema_version"] = 1
         state["last_updated"] = updated
-        state["run_id"] = self.cfg.run_id
+        state["verified_checkpoints"] = checkpoints
         state_path.parent.mkdir(parents=True, exist_ok=True)
         temp_path = state_path.with_name(f".{state_path.name}.tmp-{os.getpid()}")
         payload = json.dumps(state, sort_keys=True, separators=(",", ":")) + "\n"
@@ -525,9 +624,22 @@ class StreamDriver:
                 os.fsync(directory_fd)
             finally:
                 os.close(directory_fd)
+            self._verified_checkpoints = checkpoints
         finally:
             if temp_path.exists():
                 temp_path.unlink()
+
+
+def _valid_streaming_shard_key(value: object) -> bool:
+    return bool(
+        isinstance(value, str)
+        and value
+        and all(
+            (char.isascii() and char.isalnum() and char == char.lower())
+            or char in "-_."
+            for char in value
+        )
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -639,7 +751,8 @@ def main(argv: list[str] | None = None) -> int:
             shard_keys = shard_keys[: args.max_shards]
         total = len(shard_keys)
         for index, shard_key in enumerate(shard_keys, start=1):
-            driver.process_shard(shard_key, segmenter=segmenter)
+            if driver.has_verified_checkpoint(shard_key) is not True:
+                driver.process_shard(shard_key, segmenter=segmenter)
             print(
                 json.dumps(
                     {
