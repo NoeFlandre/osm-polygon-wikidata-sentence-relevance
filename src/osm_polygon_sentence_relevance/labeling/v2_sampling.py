@@ -175,20 +175,24 @@ def _bucket(area: object, recorded: object) -> str:
     return canonical_area_bucket(area, recorded)
 
 
-def _ordered_polygons(table: pa.Table, seed: str) -> list[str]:
-    rows = table.to_pylist()
+def ordered_polygon_ids(
+    metadata: Mapping[str, tuple[str, str]], *, seed: str
+) -> list[str]:
+    """Order validated ``polygon_id -> (area bucket, H3 cell)`` metadata."""
+
     by_polygon: dict[str, dict[str, str]] = {}
-    for row in rows:
-        polygon_id = row["polygon_id"]
+    for polygon_id, values in metadata.items():
         if not isinstance(polygon_id, str) or not polygon_id:
             raise ValueError("polygon_id must be non-empty")
-        bucket = _bucket(row["area_km2"], row["area_bucket"])
-        cell = _cell(row["lat"], row["lon"])
-        current = by_polygon.get(polygon_id)
-        candidate = {"bucket": bucket, "cell": cell}
-        if current is not None and current != candidate:
-            raise ValueError("polygon metadata is inconsistent")
-        by_polygon[polygon_id] = candidate
+        if (
+            not isinstance(values, tuple)
+            or len(values) != 2
+            or values[0] not in AREA_BUCKETS
+            or not isinstance(values[1], str)
+            or not values[1]
+        ):
+            raise ValueError("polygon metadata is invalid")
+        by_polygon[polygon_id] = {"bucket": values[0], "cell": values[1]}
     large = sorted(
         (polygon for polygon, info in by_polygon.items() if info["bucket"] == "large"),
         key=lambda value: _rank(seed, value),
@@ -207,6 +211,24 @@ def _ordered_polygons(table: pa.Table, seed: str) -> list[str]:
     )
     tail = [queues[cell].popleft() for cell in schedule]
     return large + tail
+
+
+def _ordered_polygons(table: pa.Table, seed: str) -> list[str]:
+    rows = table.to_pylist()
+    by_polygon: dict[str, tuple[str, str]] = {}
+    for row in rows:
+        polygon_id = row["polygon_id"]
+        if not isinstance(polygon_id, str) or not polygon_id:
+            raise ValueError("polygon_id must be non-empty")
+        candidate = (
+            _bucket(row["area_km2"], row["area_bucket"]),
+            _cell(row["lat"], row["lon"]),
+        )
+        current = by_polygon.get(polygon_id)
+        if current is not None and current != candidate:
+            raise ValueError("polygon metadata is inconsistent")
+        by_polygon[polygon_id] = candidate
+    return ordered_polygon_ids(by_polygon, seed=seed)
 
 
 def _ordered_rows(
@@ -271,6 +293,7 @@ __all__ = [
     "V2_H3_RESOLUTION",
     "V2_SAMPLING_VERSION",
     "canonical_area_bucket",
+    "ordered_polygon_ids",
     "select_v2_rows",
     "weighted_schedule",
 ]
