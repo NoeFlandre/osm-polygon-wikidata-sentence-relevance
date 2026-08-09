@@ -20,6 +20,7 @@ import sys
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from itertools import count
 from pathlib import Path
 from typing import Final, Literal
 
@@ -249,14 +250,14 @@ def supervise(
     data_root: Path,
     log_path: Path,
     run_id: str | None = None,
-    max_attempts: int = 100,
+    max_attempts: int | None = None,
     retry_seconds: float = 10.0,
     run_process: RunProcess = subprocess.run,
     sleep: Callable[[float], None] = time.sleep,
 ) -> int:
     """Run foreground allocations and resume validated partial runs."""
 
-    if max_attempts <= 0:
+    if max_attempts is not None and max_attempts <= 0:
         raise ValueError("max_attempts must be positive")
     if retry_seconds < 0:
         raise ValueError("retry_seconds must be non-negative")
@@ -264,7 +265,7 @@ def supervise(
     current = tuple(arguments)
     current_run_id = run_id
     stop_after_split = _stage(current) == "split"
-    for attempt in range(1, max_attempts + 1):
+    for attempt in count(1):
         with log_path.open("a", encoding="utf-8") as log_handle:
             print(
                 f"[supervisor] allocation attempt {attempt}",
@@ -286,7 +287,7 @@ def supervise(
             return result.returncode if result.returncode else 1
         if current_run_id is None:
             return result.returncode if result.returncode else 1
-        if attempt == max_attempts:
+        if max_attempts is not None and attempt == max_attempts:
             return 1
         current = _child_resume_command(current, current_run_id)
         sleep(retry_seconds)
@@ -301,7 +302,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--log-path", type=Path, required=True)
     parser.add_argument("--run-id")
     parser.add_argument("--retry-seconds", type=float, default=10.0)
-    parser.add_argument("--max-attempts", type=int, default=100)
+    parser.add_argument("--max-attempts", type=int)
     parser.add_argument("child", nargs=argparse.REMAINDER)
     parsed = parser.parse_args(argv)
     child = tuple(parsed.child[1:] if parsed.child[:1] == ["--"] else parsed.child)

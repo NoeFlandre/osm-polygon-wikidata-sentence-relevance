@@ -232,6 +232,35 @@ def test_supervise_retries_until_durable_run_is_complete(tmp_path: Path) -> None
     ]
 
 
+def test_supervise_default_does_not_expire_a_valid_long_running_workflow(
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / "runs" / ("a" * 20) / "state.json"
+    state_path.parent.mkdir(parents=True)
+    attempts = 0
+
+    def run_process(
+        command: tuple[str, ...], **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        nonlocal attempts
+        attempts += 1
+        phase = "complete" if attempts == 101 else "remote_prepared"
+        state_path.write_text(json.dumps({"phase": phase}), encoding="utf-8")
+        return subprocess.CompletedProcess(command, 0 if phase == "complete" else 1)
+
+    result = supervise(
+        ("resume", "a" * 20),
+        data_root=tmp_path,
+        log_path=tmp_path / "supervisor.log",
+        run_id="a" * 20,
+        run_process=run_process,
+        sleep=lambda _: None,
+    )
+
+    assert result == 0
+    assert attempts == 101
+
+
 def test_supervise_keeps_executable_when_rebuilding_child_resume_command(
     tmp_path: Path,
 ) -> None:
@@ -391,6 +420,7 @@ def test_supervisor_main_requires_and_forwards_child_command(
         == 7
     )
     assert seen[0][0] == ("python", "-c", "pass")
+    assert cast(dict[str, object], seen[0][1])["max_attempts"] is None
 
 
 def test_supervisor_main_requires_a_child_command(tmp_path: Path) -> None:
