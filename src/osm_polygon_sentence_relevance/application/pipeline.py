@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -245,6 +246,7 @@ def process_single_shard(
     pipeline_version: str,
     model_name: str,
     batch_size: int,
+    progress_callback: Callable[[int, int], None] | None = None,
 ) -> ShardCheckpointResult:
     """Process a single shard and publish a durable per-shard checkpoint.
 
@@ -291,6 +293,9 @@ def process_single_shard(
     model_name, batch_size
         Identity values recorded into the checkpoint metadata and
         validated on subsequent loads.
+    progress_callback : Callable[[int, int], None] | None, optional
+        Called after each section batch is durably checkpointed, with the
+        completed and total section counts. Existing callers remain silent.
 
     Returns
     -------
@@ -421,6 +426,8 @@ def process_single_shard(
             assume_sorted=True,
         ):
             partial = append_partial_batch(partial, segmented_batch)
+            if progress_callback is not None:
+                progress_callback(partial.next_section_index, joined.table.num_rows)
         if partial.next_section_index != joined.table.num_rows:
             raise CheckpointValidationError(
                 f"partial segmentation incomplete for {shard.shard_key!r}"

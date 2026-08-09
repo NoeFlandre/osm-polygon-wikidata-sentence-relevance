@@ -33,7 +33,9 @@ import json
 import logging
 import os
 import shutil
+from collections.abc import Callable
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -86,6 +88,28 @@ def sat_split_kwargs(batch_size: int) -> dict[str, int]:
     ):
         raise ValueError("batch_size must be a positive integer")
     return {"batch_size": batch_size, "outer_batch_size": 1000}
+
+
+def _emit_shard_progress(
+    shard_key: str,
+    completed_sections: int,
+    total_sections: int,
+) -> None:
+    """Emit one machine-readable heartbeat after a durable section batch."""
+
+    print(
+        json.dumps(
+            {
+                "completed_sections": completed_sections,
+                "event": "shard-progress",
+                "shard_key": shard_key,
+                "total_sections": total_sections,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ),
+        flush=True,
+    )
 
 
 # Per-shard inbox layout mirrors the production layout under
@@ -205,6 +229,7 @@ class StreamDriver:
         batch_size: int = 128,
         local_input_root: Path | None = None,
         optional_shard_keys: frozenset[str] | set[str] | None = None,
+        progress_callback: Callable[[str, int, int], None] | None = None,
     ) -> None:
         if not isinstance(repo_id, str) or "/" not in repo_id or not repo_id.strip():
             raise ValueError("repo_id must be a non-blank owner/name string")
@@ -241,6 +266,7 @@ class StreamDriver:
         if hub_api is None:
             raise ValueError("hub_api must be supplied")
         self.hub_api = hub_api
+        self._progress_callback = progress_callback
         self._verified_checkpoints: dict[str, dict[str, str | int]] = {}
         if optional_shard_keys is not None:
             if any(
@@ -352,6 +378,11 @@ class StreamDriver:
 
             self._assert_disk_ceiling_or_raise()
 
+            progress_callback = (
+                partial(self._progress_callback, shard_key)
+                if self._progress_callback is not None
+                else None
+            )
             res = process_single_shard(
                 shard=shard,
                 input_root=self.work_dir / "shards" / "inbox",
@@ -362,6 +393,7 @@ class StreamDriver:
                 pipeline_version=self.cfg.pipeline_version,
                 model_name=self.cfg.model_name,
                 batch_size=self.cfg.batch_size,
+                progress_callback=progress_callback,
             )
             if not res.published and not res.reused:
                 raise DriverError(
@@ -722,6 +754,7 @@ def main(argv: list[str] | None = None) -> int:
         model_name=args.model_name,
         batch_size=args.batch_size,
         optional_shard_keys=optional_shard_keys,
+        progress_callback=_emit_shard_progress,
     )
 
     if args.command == "process-shard":

@@ -269,6 +269,7 @@ def test_process_single_shard_resumes_after_intra_shard_interruption(
     work = tmp_path / "work"
     work.mkdir()
     shard = sorted(discover_shards(root), key=lambda s: s.shard_key)[0]
+    first_progress: list[tuple[int, int]] = []
 
     with pytest.raises(Exception, match="segmenter raised an error"):
         process_single_shard(
@@ -281,8 +282,12 @@ def test_process_single_shard_resumes_after_intra_shard_interruption(
             pipeline_version="v1",
             model_name="mock",
             batch_size=1,
+            progress_callback=lambda completed, total: first_progress.append(
+                (completed, total)
+            ),
         )
 
+    assert first_progress == [(1, 2)]
     progress = work / "shards" / "partial" / "reg-a" / "progress.json"
     assert progress.exists()
     payload = json.loads(progress.read_text())
@@ -290,6 +295,7 @@ def test_process_single_shard_resumes_after_intra_shard_interruption(
     assert len(payload["batches"]) == 1
 
     resume_segmenter = _MockSegmenter()
+    resumed_progress: list[tuple[int, int]] = []
     result = process_single_shard(
         shard=shard,
         input_root=root,
@@ -300,10 +306,14 @@ def test_process_single_shard_resumes_after_intra_shard_interruption(
         pipeline_version="v1",
         model_name="mock",
         batch_size=1,
+        progress_callback=lambda completed, total: resumed_progress.append(
+            (completed, total)
+        ),
     )
 
     assert result.published is True
     assert resume_segmenter.calls == 1
+    assert resumed_progress == [(2, 2)]
     assert not progress.parent.exists()
     table, _, _ = load_shard_checkpoint(
         work,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from unittest import mock
 
@@ -54,7 +55,9 @@ def test_stream_build_processes_sorted_remote_shards_once(
             return_value=segmenter,
         ),
         mock.patch("huggingface_hub.HfApi", return_value=hub_api),
-        mock.patch("scripts.streaming.driver.StreamDriver", return_value=driver),
+        mock.patch(
+            "scripts.streaming.driver.StreamDriver", return_value=driver
+        ) as driver_factory,
     ):
         rc = main(
             [
@@ -88,7 +91,15 @@ def test_stream_build_processes_sorted_remote_shards_once(
         mock.call("a-latest", segmenter=segmenter),
         mock.call("b-latest", segmenter=segmenter),
     ]
-    assert '"completed":2' in capsys.readouterr().out
+    progress_callback = driver_factory.call_args.kwargs["progress_callback"]
+    progress_callback("b-latest", 128, 512)
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert events[-1] == {
+        "completed_sections": 128,
+        "event": "shard-progress",
+        "shard_key": "b-latest",
+        "total_sections": 512,
+    }
 
 
 def test_stream_build_max_shards_bounds_canary(
