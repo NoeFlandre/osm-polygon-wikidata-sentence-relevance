@@ -12,7 +12,10 @@ such as `afghanistan-latest`; it is forbidden with `--scope all`. The operator
 uses only the configured external-volume state root. It selects a compatible
 site, streams remote logs, preserves checkpoints across allocation boundaries,
 and publishes only a complete, validated production run. `--row-limit` is an
-advanced non-publishing canary control: zero means the complete selected scope.
+advanced smoke control. Regional workflows stop after a positive, non-publishing
+row limit. A worldwide V2 `all` workflow instead validates and preserves that
+isolated smoke, then automatically continues its separate production lane with
+`row_limit=0`. Zero starts V2 production directly.
 
 ```text
 osm-polygon-grid5000 status RUN_ID

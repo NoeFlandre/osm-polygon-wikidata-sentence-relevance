@@ -14,6 +14,10 @@ from typer.testing import CliRunner
 from osm_polygon_sentence_relevance.operator import cli
 from osm_polygon_sentence_relevance.operator.config import OperatorConfig
 from osm_polygon_sentence_relevance.operator.controller import LiveProgress
+from osm_polygon_sentence_relevance.operator.label_lanes import (
+    LabelLane,
+    label_lane_plan,
+)
 from osm_polygon_sentence_relevance.operator.oar import ExitClass, JobState, JobStatus
 from osm_polygon_sentence_relevance.operator.sites import SiteProbe
 from osm_polygon_sentence_relevance.operator.staging import LabelAssets
@@ -676,6 +680,170 @@ def test_finalize_split_checkpointed_stage_all_hands_off_to_label(
     assert store.value.phase is RunPhase.REMOTE_PREPARED
     assert store.value.facts["split_output_job_id"] == 91
     assert store.value.facts["active_stage"] == "label"
+    assert store.value.facts["label_lane"] == "production"
+
+
+def test_completed_v2_smoke_is_preserved_then_reopens_production(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    config = OperatorConfig.build(
+        scope="all",
+        stage="all",
+        source_commit="a" * 40,
+        input_revision="b" * 40,
+        row_limit=128,
+        sampling_target=200_000,
+    )
+    store = _FakeStore(tmp_path)
+    store.value = SimpleNamespace(
+        phase=RunPhase.RUNNING,
+        facts={"active_stage": "label", "label_lane": "smoke"},
+    )
+    layout = cli.RemoteLayout(PurePosixPath("/run"))
+    plan = label_lane_plan(config, layout.root, store.value.facts)
+    preserved = tmp_path / "runs" / config.run_id / "label-smoke"
+    monkeypatch.setattr(cli, "preserve_label", lambda *_args: preserved)
+    monkeypatch.setattr(
+        cli,
+        "label_publication_commit",
+        lambda *_args: pytest.fail("smoke must never be published"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "publish_label",
+        lambda *_args: pytest.fail("smoke must never be published"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "mark_remote_status",
+        lambda *_args: pytest.fail("parent run remains active after smoke"),
+    )
+
+    cli._apply_classification(
+        store=store,  # type: ignore[arg-type]
+        config=config,
+        ssh=_FakeSsh(target="sophia"),  # type: ignore[arg-type]
+        layout=layout,
+        job_id=92,
+        active_stage="label",
+        classification=ExitClass.COMPLETE,
+        label_plan=plan,
+    )
+
+    assert store.value.phase is RunPhase.REMOTE_PREPARED
+    assert store.value.facts["smoke_completed"] is True
+    assert store.value.facts["smoke_job_id"] == 92
+    assert store.value.facts["smoke_artifact_path"] == str(preserved)
+    assert store.value.facts["label_lane"] == LabelLane.PRODUCTION.value
+    assert store.value.facts["active_stage"] == "label"
+    assert "published" not in store.value.facts
+
+
+def test_v2_production_resume_inspects_isolated_full_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = OperatorConfig.build(
+        scope="all",
+        stage="all",
+        source_commit="a" * 40,
+        input_revision="b" * 40,
+        row_limit=128,
+        sampling_target=200_000,
+    )
+    store = _FakeStore(Path("/state"))
+    store.value = SimpleNamespace(
+        phase=RunPhase.QUEUED,
+        facts={
+            "active_stage": "label",
+            "label_lane": "production",
+            "site": "sophia",
+            "job_id": 93,
+        },
+    )
+    ssh = _FakeSsh(target="sophia")
+    layout = cli.RemoteLayout(PurePosixPath("/run"))
+    oar = _FakeOar(ssh)
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        cli,
+        "_attach_to_site",
+        lambda *_args, **_kwargs: (
+            ssh,
+            layout,
+            oar,
+            _FakeController(state=store),
+        ),
+    )
+
+    def inspect(_ssh: object, **kwargs: object) -> object:
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(cli.recorded_job, "inspect_remote_resume", inspect)
+    monkeypatch.setattr(
+        cli.recorded_job,
+        "classify_terminal",
+        lambda *_args: ExitClass.CONTINUE,
+    )
+
+    result = cli._classify_or_continue(
+        _run_args(stage="all"),
+        store,  # type: ignore[arg-type]
+        config,
+        "sophia",
+        93,
+    )
+
+    assert result is ExitClass.CONTINUE
+    assert captured["label_work_root"] == "/run/label-work"
+    assert captured["label_output_root"] == "/run/label-output"
+    identity = captured["expected_identity"]
+    assert isinstance(identity, dict)
+    assert identity["row_limit"] == 0
+
+
+def test_fresh_v2_all_runs_smoke_then_full_without_replaying_split(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_run_fakes(monkeypatch, tmp_path)
+    submitted_lanes: list[str] = []
+    split_submissions = 0
+
+    class LaneController(_FakeController):
+        def submit(self, **kwargs: object) -> int:
+            nonlocal split_submissions
+            component = kwargs["component"]
+            facts = dict(self.state.value.facts)
+            facts.update({"job_id": 80, "active_stage": component.value})
+            if component is cli.Stage.SPLIT:
+                split_submissions += 1
+            else:
+                plan = kwargs["label_plan"]
+                submitted_lanes.append(plan.lane.value)  # type: ignore[union-attr]
+                facts["label_lane"] = plan.lane.value  # type: ignore[union-attr]
+            self.state.value = SimpleNamespace(phase=RunPhase.RUNNING, facts=facts)
+            return 80
+
+    monkeypatch.setattr(cli, "Controller", LaneController)
+    monkeypatch.setattr(cli, "_optimize_queued_start", lambda *_args: ("sophia", 80))
+    monkeypatch.setattr(cli, "preserve_label", lambda *_args: tmp_path / "smoke")
+    monkeypatch.setattr(cli, "mark_remote_status", lambda *_args: None)
+    args = _run_args(stage="all", sites=["sophia"])
+    args.scope = "all"
+    args.region = None
+    args.row_limit = 128
+
+    assert cli._run(args) == 0
+
+    state = _FakeStore.instances[-1].value
+    assert split_submissions == 1
+    assert submitted_lanes == ["smoke", "production"]
+    assert state.phase is RunPhase.COMPLETE
+    assert state.facts["smoke_completed"] is True
+    assert state.facts["published"] is True
 
 
 def test_fresh_split_submission_optimizes_before_monitoring(

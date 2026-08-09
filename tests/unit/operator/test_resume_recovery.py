@@ -274,6 +274,174 @@ def test_resume_prepared_stage_all_reuses_finalized_split_output(
     assert Path("/home/u/run/logs/789/output/sentences.parquet") in calls
 
 
+def test_resume_prepared_v2_production_submits_full_lane_without_resplitting(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = OperatorConfig.build(
+        scope="all",
+        stage="all",
+        source_commit="a" * 40,
+        input_revision="b" * 40,
+        row_limit=128,
+        sampling_target=200_000,
+    )
+    store = StateStore(tmp_path)
+    store.load_or_create(config.run_identity)
+    facts = {
+        "site": "sophia",
+        "split_output_job_id": 789,
+        "active_stage": "label",
+        "label_lane": "production",
+        "smoke_completed": True,
+    }
+    phase = RunPhase.CREATED
+    for target in (
+        RunPhase.INPUTS_RESOLVED,
+        RunPhase.SITE_SELECTED,
+        RunPhase.STORAGE_READY,
+        RunPhase.REMOTE_PREPARED,
+    ):
+        store.transition(expected=phase, target=target, facts=facts)
+        phase = target
+    monkeypatch.setattr(cli, "DATA_ROOT", tmp_path)
+    monkeypatch.setattr(cli, "_git_head", lambda: config.source_commit)
+    submitted: list[dict[str, object]] = []
+
+    class FakeStager:
+        def prepare(self, _config: object, _layout: object) -> object:
+            return SimpleNamespace(reused=True)
+
+        def prepare_v2_input(
+            self, _config: object, layout: object, source: PurePosixPath
+        ) -> PurePosixPath:
+            assert source == PurePosixPath(
+                "/home/u/run/logs/789/output/sentences.parquet"
+            )
+            return layout.v2_input  # type: ignore[no-any-return,union-attr]
+
+        def prepare_label_assets(
+            self, _config: object, layout: object, *, download_input: bool
+        ) -> LabelAssets:
+            assert download_input is False
+            return LabelAssets(
+                input_parquet=layout.v2_input,  # type: ignore[union-attr]
+                model_file=layout.root / "model/model.gguf",  # type: ignore[union-attr]
+                tokenizer_dir=layout.root / "tokenizer",  # type: ignore[union-attr]
+                llama_server_ready=True,
+            )
+
+    class FakeController:
+        def submit(self, **kwargs: object) -> int:
+            submitted.append(kwargs)
+            store.transition(
+                expected=RunPhase.REMOTE_PREPARED,
+                target=RunPhase.SUBMITTED,
+                facts={
+                    "job_id": 456,
+                    "active_stage": "label",
+                    "label_lane": "production",
+                },
+            )
+            return 456
+
+    layout = cli.RemoteLayout(PurePosixPath("/home/u/run"))
+    monkeypatch.setattr(
+        cli,
+        "_attach_to_site",
+        lambda *_args, **_kwargs: (object(), layout, object(), FakeController()),
+    )
+    monkeypatch.setattr(cli, "_usage_policy_preflight", lambda *_args: None)
+    monkeypatch.setattr(cli, "ensure_home_headroom", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(cli, "Stager", lambda _ssh: FakeStager())
+    monkeypatch.setattr(
+        cli, "_classify_or_continue", lambda **_kwargs: ExitClass.COMPLETE
+    )
+    monkeypatch.setattr(
+        cli,
+        "_optimize_queued_start",
+        lambda _args, _store, _config, site, job_id: (site, job_id),
+    )
+
+    assert cli._resume_run(config.run_id, _resume_args(config.run_id)) == 0
+
+    assert len(submitted) == 1
+    plan = submitted[0]["label_plan"]
+    assert plan.lane.value == "production"  # type: ignore[union-attr]
+    assert plan.config.requirements.row_limit == 0  # type: ignore[union-attr]
+    assert plan.work_dir == PurePosixPath("/home/u/run/label-work")  # type: ignore[union-attr]
+
+
+@pytest.mark.parametrize(
+    ("lane", "expected_work", "expected_row_limit"),
+    [
+        ("smoke", "label-smoke-work", 128),
+        ("production", "label-work", 0),
+    ],
+)
+def test_cross_site_relay_uses_current_v2_lane_identity_and_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    lane: str,
+    expected_work: str,
+    expected_row_limit: int,
+) -> None:
+    config = OperatorConfig.build(
+        scope="all",
+        stage="all",
+        source_commit="a" * 40,
+        input_revision="b" * 40,
+        row_limit=128,
+        sampling_target=200_000,
+    )
+
+    class FakeStore:
+        value = SimpleNamespace(
+            phase=RunPhase.REMOTE_PREPARED,
+            facts={"active_stage": "label", "label_lane": lane},
+        )
+
+        def load(self) -> SimpleNamespace:
+            return self.value
+
+        def transition(self, **kwargs: object) -> None:
+            assert kwargs["expected"] is self.value.phase
+            assert kwargs["target"] is self.value.phase
+
+    captured: dict[str, object] = {}
+    inventory = SimpleNamespace(root=tmp_path / "relay")
+    monkeypatch.setattr(cli, "DATA_ROOT", tmp_path)
+    monkeypatch.setattr(cli, "SshClient", lambda **_kwargs: object())
+    monkeypatch.setattr(cli, "_remote_home", lambda _ssh: PurePosixPath("/home/u"))
+
+    def retrieve(**kwargs: object) -> object:
+        captured["source"] = kwargs
+        return inventory
+
+    def stage(**kwargs: object) -> None:
+        captured["destination"] = kwargs
+
+    monkeypatch.setattr(cli.relay, "retrieve_to_seagate", retrieve)
+    monkeypatch.setattr(cli.relay, "stage_to_destination", stage)
+
+    assert cli._relay_for_continuation(
+        store=FakeStore(),  # type: ignore[arg-type]
+        config=config,
+        source_site="sophia",
+        destination_site="grenoble",
+    ) == str(inventory.root)
+
+    source = captured["source"]
+    destination = captured["destination"]
+    assert isinstance(source, dict)
+    assert isinstance(destination, dict)
+    expected_root = f"/home/u/osm-polygon-operator/{config.run_id}/{expected_work}"
+    assert source["source_checkpoint_root"] == expected_root
+    assert destination["destination_checkpoint_root"] == expected_root
+    identity = source["expected_run_identity"]
+    assert isinstance(identity, dict)
+    assert identity["row_limit"] == expected_row_limit
+
+
 def test_resume_refuses_prepared_state_without_site(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

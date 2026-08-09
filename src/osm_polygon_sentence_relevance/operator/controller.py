@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import PurePosixPath
 
 from osm_polygon_sentence_relevance.operator.config import OperatorConfig, Stage
+from osm_polygon_sentence_relevance.operator.label_lanes import LabelLanePlan
 from osm_polygon_sentence_relevance.operator.oar import (
     JobState,
     JobStatus,
@@ -106,6 +107,7 @@ class Controller:
         walltime_seconds: int = DEFAULT_LABEL_WALLTIME_SECONDS,
         policy_type: str | None = None,
         gpu_memory_mb: int = 40_000,
+        label_plan: LabelLanePlan | None = None,
     ) -> int:
         """Submit exactly once from REMOTE_PREPARED."""
 
@@ -146,6 +148,7 @@ class Controller:
                 walltime_seconds=walltime_seconds,
                 policy_type=policy_type,
                 gpu_memory_mb=gpu_memory_mb,
+                label_plan=label_plan,
             )
         else:
             raise ControllerError("stage=all requires an explicit component")
@@ -158,6 +161,11 @@ class Controller:
                 "job_id": job_id,
                 "log_offset": 0,
                 "active_stage": selected.value,
+                **(
+                    {"label_lane": label_plan.lane.value}
+                    if label_plan is not None
+                    else {}
+                ),
                 **(
                     {"requested_walltime_seconds": walltime_seconds}
                     if selected is Stage.LABEL

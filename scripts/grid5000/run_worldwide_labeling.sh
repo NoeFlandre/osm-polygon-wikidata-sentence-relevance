@@ -4,8 +4,8 @@
 set -euo pipefail
 umask 077
 
-if [ "$#" -ne 18 ]; then
-    echo "run_worldwide_labeling: exactly eighteen arguments are required" >&2
+if [ "$#" -ne 19 ]; then
+    echo "run_worldwide_labeling: exactly nineteen arguments are required" >&2
     exit 2
 fi
 
@@ -15,10 +15,12 @@ SOURCE_COMMIT="$9"; DATASET_ID="${10}"; BATCH_SIZE="${11}"; ROW_LIMIT="${12}"
 LLAMA_PARALLEL="${13}"; LLAMA_PER_SLOT_CONTEXT="${14}"
 REQUEST_CONCURRENCY="${15}"; SAMPLING_TARGET="${16}"
 SAMPLING_SEED="${17}"; SAMPLING_H3_RESOLUTION="${18}"
+LABEL_LANE="${19}"
 readonly REPO_ROOT INPUT_PARQUET WORK_DIR OUTPUT_DIR MODEL_FILE TOKENIZER_DIR
 readonly MODEL_REVISION INPUT_REVISION SOURCE_COMMIT DATASET_ID BATCH_SIZE ROW_LIMIT
 readonly LLAMA_PARALLEL LLAMA_PER_SLOT_CONTEXT REQUEST_CONCURRENCY SAMPLING_TARGET
 readonly SAMPLING_SEED SAMPLING_H3_RESOLUTION
+readonly LABEL_LANE
 
 : "${OAR_JOB_ID:?run_worldwide_labeling requires an OAR allocation}"
 if ! [[ "${OAR_JOB_ID}" =~ ^[0-9]+$ ]]; then
@@ -46,6 +48,11 @@ if ! [[ "${BATCH_SIZE}" =~ ^[1-9][0-9]*$ ]] || \
     echo "run_worldwide_labeling: invalid batch, target, seed, or H3 configuration" >&2
     exit 2
 fi
+case "${LABEL_LANE}" in
+    smoke) [ "${ROW_LIMIT}" -gt 0 ] || { echo "run_worldwide_labeling: smoke lane requires a row limit" >&2; exit 2; } ;;
+    production) [ "${ROW_LIMIT}" -eq 0 ] || { echo "run_worldwide_labeling: production lane requires the full target" >&2; exit 2; } ;;
+    *) echo "run_worldwide_labeling: label lane is invalid" >&2; exit 2 ;;
+esac
 case "${LLAMA_PARALLEL}" in 1|2|4|8|16|32) ;; *) echo "run_worldwide_labeling: unsupported parallelism" >&2; exit 2;; esac
 if ! [[ "${LLAMA_PER_SLOT_CONTEXT}" =~ ^[1-9][0-9]*$ ]] || \
    [ "${LLAMA_PER_SLOT_CONTEXT}" -lt 4096 ] || \
@@ -66,7 +73,7 @@ if ! [[ "${RUN_ID}" =~ ^[0-9a-f]{20}$ ]]; then
     echo "run_worldwide_labeling: work directory must be nested under a 20-hex run directory" >&2
     exit 2
 fi
-CHECKPOINT_NAMESPACE="checkpoints/${RUN_ID}"; readonly CHECKPOINT_NAMESPACE
+CHECKPOINT_NAMESPACE="checkpoints/${RUN_ID}/${LABEL_LANE}"; readonly CHECKPOINT_NAMESPACE
 LABEL_CLI="${REPO_ROOT}/.venv/bin/osm-polygon-label-sentences"; readonly LABEL_CLI
 [ -x "${LABEL_CLI}" ] || { echo "run_worldwide_labeling: labeling CLI is missing" >&2; exit 2; }
 MODEL_SHA256="$(sha256sum "${MODEL_FILE}" | awk '{print $1}')"; readonly MODEL_SHA256
@@ -114,7 +121,7 @@ LABEL_RESULT="${WORK_DIR}.label-result.json"
     --h3-resolution "${SAMPLING_H3_RESOLUTION}" --checkpoint-dataset-id "${DATASET_ID}" \
     --checkpoint-namespace "${CHECKPOINT_NAMESPACE}" --checkpoint-drain-seconds 30 \
     --release-lane v2-worldwide --trackio-project worldwide-stratified-labeling \
-    --trackio-run-name "run-${RUN_ID}" --trackio-space-id NoeFlandre/worldwide-stratified-labeling-trackio \
+    --trackio-run-name "run-${RUN_ID}-${LABEL_LANE}" --trackio-space-id NoeFlandre/worldwide-stratified-labeling-trackio \
     --endpoint "http://127.0.0.1:${PORT}/v1/chat/completions" >"${LABEL_RESULT}"
 if grep -q '"interrupted": true' "${LABEL_RESULT}"; then
     echo "run_worldwide_labeling: safely interrupted; resume with identical identity" >&2
@@ -130,7 +137,7 @@ fi
     --llama-parallel "${LLAMA_PARALLEL}" --llama-per-slot-context "${LLAMA_PER_SLOT_CONTEXT}" \
     --llama-total-context "${LLAMA_TOTAL_CONTEXT}" --request-concurrency "${REQUEST_CONCURRENCY}" \
     --release-lane v2-worldwide
-if [ "${ROW_LIMIT}" -eq 0 ]; then
+if [ "${LABEL_LANE}" = "production" ]; then
     "${LABEL_CLI}" publish --output-dir "${OUTPUT_DIR}" --dataset-id "${DATASET_ID}"
 else
     echo "V2 canary complete; publication intentionally skipped: ${OUTPUT_DIR}"

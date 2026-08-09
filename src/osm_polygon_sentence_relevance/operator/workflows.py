@@ -8,6 +8,10 @@ from pathlib import PurePosixPath
 
 from osm_polygon_sentence_relevance.labeling.v2_contracts import V2_LOGIT_PROMPT_VERSION
 from osm_polygon_sentence_relevance.operator.config import OperatorConfig, Scope, Stage
+from osm_polygon_sentence_relevance.operator.label_lanes import (
+    LabelLanePlan,
+    label_lane_plan,
+)
 from osm_polygon_sentence_relevance.operator.oar import (
     SubmissionRequest,
     format_walltime,
@@ -128,14 +132,29 @@ def label_submission(
     walltime_seconds: int = DEFAULT_LABEL_WALLTIME_SECONDS,
     policy_type: str | None = None,
     gpu_memory_mb: int = 40_000,
+    label_plan: LabelLanePlan | None = None,
 ) -> SubmissionRequest:
     """Build one resumable labeling allocation."""
 
     revision = config.input_dataset_revision
     if revision is None:
         raise ValueError("immutable input revision is required")
-    requirements = config.requirements
     v2 = config.prompt_version == V2_LOGIT_PROMPT_VERSION
+    if v2:
+        plan = label_plan or label_lane_plan(config, layout.root, {})
+        if plan.parent_run_id != config.run_id:
+            raise ValueError("label lane does not belong to this operator run")
+        effective_config = plan.config
+        work_dir = plan.work_dir
+        output_dir = plan.output_dir
+    else:
+        if label_plan is not None:
+            raise ValueError("label lanes are only available for worldwide V2 runs")
+        plan = None
+        effective_config = config
+        work_dir = layout.label_work
+        output_dir = layout.label_output
+    requirements = effective_config.requirements
     wrapper_name = (
         "run_worldwide_labeling_job.sh" if v2 else "run_afghanistan_labeling_job.sh"
     )
@@ -148,14 +167,14 @@ def label_submission(
         str(layout.hf_home),
         str(layout.logs),
         str(input_parquet),
-        str(layout.label_work),
-        str(layout.label_output),
+        str(work_dir),
+        str(output_dir),
         str(model_file),
         str(tokenizer_dir),
-        config.label_model_revision,
+        effective_config.label_model_revision,
         revision,
-        config.source_commit,
-        config.output_dataset_id,
+        effective_config.source_commit,
+        effective_config.output_dataset_id,
         str(requirements.batch_size),
         str(requirements.row_limit),
         str(requirements.llama_parallel),
@@ -164,7 +183,8 @@ def label_submission(
         str(requirements.sampling_target or 0),
         requirements.sampling_seed,
         str(requirements.sampling_h3_resolution),
-        config.execution_commit or config.source_commit,
+        *((plan.lane.value,) if plan is not None else ()),
+        effective_config.execution_commit or effective_config.source_commit,
     )
     if walltime_seconds == DEFAULT_LABEL_WALLTIME_SECONDS and policy_type is None:
         return SubmissionRequest(

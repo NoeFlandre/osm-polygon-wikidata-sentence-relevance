@@ -35,6 +35,13 @@ V2 stratified label workflow, use:
 uv run osm-polygon-grid5000 run --scope all --stage all
 ```
 
+Add `--row-limit 128` when a preserved smoke result is required before the
+full run. For worldwide V2, the operator completes that isolated smoke lane,
+validates and saves it below the external run directory, then automatically
+continues the same parent run with `row_limit=0` until all 200,000 selected
+sentences are published. Smoke and production use separate local and Hub
+checkpoint namespaces, so neither can be mistaken for the other.
+
 To leave the workflow running while the terminal is closed, append
 `--detach`. It starts one local, durable supervisor, writes its log under the
 external data root, and reattaches validated checkpoints until the run is

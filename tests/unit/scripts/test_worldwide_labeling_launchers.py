@@ -47,9 +47,9 @@ def test_payload_revalidates_immutable_identity_and_pinned_model() -> None:
     assert "Qwen3.6-27B-Q4_K_M.gguf" in payload
 
 
-def test_wrapper_keeps_twenty_argument_front_contract_and_resumable_lock() -> None:
+def test_wrapper_keeps_lane_aware_front_contract_and_resumable_lock() -> None:
     wrapper = _text("run_worldwide_labeling_job.sh")
-    assert "exactly twenty-one arguments are required" in wrapper
+    assert "exactly twenty-two arguments are required" in wrapper
     assert "validate_clean_checkout" in wrapper
     assert "flock -n" in wrapper
     assert "labeling.exit_code" in wrapper
@@ -58,7 +58,7 @@ def test_wrapper_keeps_twenty_argument_front_contract_and_resumable_lock() -> No
         'deadline_helper_run "${DEADLINE_DURATION}" "${DEADLINE_GRACE}" '
         '"${PAYLOAD}" "${REPO_ROOT}" "$4" "$5" "$6" "$7" "$8" "$9" '
         '"${10}" "${11}" "${12}" "${13}" "${14}" "${15}" '
-        '"${16}" "${17}" "${18}" "${19}" "${20}"'
+        '"${16}" "${17}" "${18}" "${19}" "${20}" "${21}"'
     )
     assert expected in normalized
 
@@ -71,13 +71,15 @@ def test_wrapper_rebuilds_environment_on_compute_node_and_marks_failure() -> Non
     assert 'HF_TOKEN_FILE="${RUN_ROOT}/.hf-token"' in wrapper
     assert 'export HF_TOKEN="$(cat -- "${HF_TOKEN_FILE}")"' in wrapper
     assert 'stat -c %a -- "${HF_TOKEN_FILE}"' in wrapper
-    assert 'EXECUTION_COMMIT="${21}"' in wrapper
+    assert 'LABEL_LANE="${21}"' in wrapper
+    assert 'EXECUTION_COMMIT="${22}"' in wrapper
     assert 'rev-parse HEAD)" != "${EXECUTION_COMMIT}' in wrapper
 
 
 def test_submitter_uses_shared_policy_helper_and_single_submission() -> None:
     submit = _text("submit_worldwide_labeling.sh")
-    assert "exactly twenty-one arguments are required" in submit
+    assert "exactly twenty-two arguments are required" in submit
+    assert 'case "${21}" in smoke|production)' in submit
     assert '"40000" "00:55:00"' in submit
     assert '"${command_string}"' in submit
     assert '"${HELPER}"' in submit
@@ -131,6 +133,8 @@ def test_submitter_rejects_mutable_revision_before_scheduler_call(
         "200000",
         "seed",
         "3",
+        "production",
+        "d" * 40,
     ]
     result = subprocess.run(
         ["bash", str(GRID / "submit_worldwide_labeling.sh"), *args],
@@ -141,3 +145,15 @@ def test_submitter_rejects_mutable_revision_before_scheduler_call(
     )
     assert result.returncode == 2
     assert not calls.exists()
+
+
+def test_payload_isolates_lane_checkpoint_and_tracking_namespaces() -> None:
+    payload = _text("run_worldwide_labeling.sh")
+
+    assert "exactly nineteen arguments are required" in payload
+    assert 'case "${LABEL_LANE}" in' in payload
+    assert "smoke)" in payload
+    assert "production)" in payload
+    assert 'CHECKPOINT_NAMESPACE="checkpoints/${RUN_ID}/${LABEL_LANE}"' in payload
+    assert '--trackio-run-name "run-${RUN_ID}-${LABEL_LANE}"' in payload
+    assert 'if [ "${LABEL_LANE}" = "production" ]; then' in payload

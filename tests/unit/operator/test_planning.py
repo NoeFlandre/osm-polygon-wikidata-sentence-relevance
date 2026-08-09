@@ -8,6 +8,10 @@ from types import SimpleNamespace
 import pytest
 
 from osm_polygon_sentence_relevance.operator.config import OperatorConfig
+from osm_polygon_sentence_relevance.operator.label_lanes import (
+    LabelLane,
+    label_lane_plan,
+)
 from osm_polygon_sentence_relevance.operator.oar import (
     CheckpointFacts,
     ExitClass,
@@ -290,6 +294,51 @@ def test_worldwide_label_uses_dedicated_v2_launcher() -> None:
         tokenizer_dir=PurePosixPath("/r/tokenizer"),
     )
     assert request.command[0].endswith("submit_worldwide_labeling.sh")
+
+
+def test_worldwide_label_submission_isolates_smoke_and_production_contracts() -> None:
+    config = OperatorConfig.build(
+        scope="all",
+        stage="all",
+        source_commit="a" * 40,
+        input_revision="b" * 40,
+        row_limit=128,
+        sampling_target=200_000,
+    )
+    layout = RemoteLayout(PurePosixPath("/r"))
+    smoke = label_lane_plan(config, layout.root, {})
+    production = label_lane_plan(
+        config,
+        layout.root,
+        {"label_lane": LabelLane.PRODUCTION.value},
+    )
+
+    smoke_command = label_submission(
+        config,
+        layout,
+        input_parquet=PurePosixPath("/r/input.parquet"),
+        model_file=PurePosixPath("/r/model.gguf"),
+        tokenizer_dir=PurePosixPath("/r/tokenizer"),
+        label_plan=smoke,
+    ).command
+    production_command = label_submission(
+        config,
+        layout,
+        input_parquet=PurePosixPath("/r/input.parquet"),
+        model_file=PurePosixPath("/r/model.gguf"),
+        tokenizer_dir=PurePosixPath("/r/tokenizer"),
+        label_plan=production,
+    ).command
+
+    assert smoke_command[5:7] == (
+        "/r/label-smoke-work",
+        "/r/label-smoke-output",
+    )
+    assert smoke_command[14] == "128"
+    assert smoke_command[-2] == "smoke"
+    assert production_command[5:7] == ("/r/label-work", "/r/label-output")
+    assert production_command[14] == "0"
+    assert production_command[-2] == "production"
 
 
 @pytest.mark.parametrize(

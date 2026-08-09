@@ -12,6 +12,7 @@ from osm_polygon_sentence_relevance.operator.controller import (
     Controller,
     ControllerError,
 )
+from osm_polygon_sentence_relevance.operator.label_lanes import label_lane_plan
 from osm_polygon_sentence_relevance.operator.oar import JobState, JobStatus
 from osm_polygon_sentence_relevance.operator.ssh import LogChunk
 from osm_polygon_sentence_relevance.operator.state import RunPhase
@@ -162,6 +163,45 @@ def test_submit_label_serializes_assets() -> None:
     )
     assert state.value.phase is RunPhase.SUBMITTED
     assert "/remote/model.gguf" in oar.requests[0].command  # type: ignore[union-attr]
+
+
+def test_submit_worldwide_label_persists_exact_lane() -> None:
+    config = OperatorConfig.build(
+        scope="all",
+        stage="all",
+        source_commit="a" * 40,
+        input_revision="b" * 40,
+        row_limit=128,
+        sampling_target=200_000,
+    )
+    state = FakeState(RunPhase.REMOTE_PREPARED)
+    oar = FakeOar()
+    layout = RemoteLayout(PurePosixPath("/remote/run"))
+    controller = Controller(
+        config=config,
+        state=state,  # type: ignore[arg-type]
+        ssh=FakeSsh(),  # type: ignore[arg-type]
+        oar=oar,  # type: ignore[arg-type]
+        stager=FakeStager(),  # type: ignore[arg-type]
+        layout=layout,
+    )
+    plan = label_lane_plan(config, layout.root, {})
+
+    assert (
+        controller.submit(
+            component=Stage.LABEL,
+            input_parquet=PurePosixPath("/remote/input.parquet"),
+            model_file=PurePosixPath("/remote/model.gguf"),
+            tokenizer_dir=PurePosixPath("/remote/tokenizer"),
+            label_plan=plan,
+        )
+        == 42
+    )
+
+    assert state.value.facts["label_lane"] == "smoke"
+    command = oar.requests[0].command  # type: ignore[union-attr]
+    assert "/remote/run/label-smoke-work" in command
+    assert command[-2] == "smoke"
 
 
 def test_submit_rejects_unrelated_phase() -> None:

@@ -9,6 +9,10 @@ import shutil
 import tempfile
 from pathlib import Path, PurePosixPath
 
+from osm_polygon_sentence_relevance.labeling.v2_finalization import (
+    V2_PUBLICATION_FILES,
+    validate_v2_publication,
+)
 from osm_polygon_sentence_relevance.operator.config import DATA_ROOT
 from osm_polygon_sentence_relevance.operator.relay_transport import RemoteTransfer
 from osm_polygon_sentence_relevance.operator.ssh import SshClient
@@ -113,27 +117,54 @@ def publish_label(
     layout: RemoteLayout,
     output_dir: PurePosixPath,
     dataset_id: str,
+    *,
+    v2: bool = False,
 ) -> str:
     """Fetch the finalized release locally and publish from the authenticated Mac.
 
     Grid'5000 frontends do not carry the operator's Hub credentials and may
     not be able to import the package's NumPy/PyArrow stack. The release is
-    small and already complete, so transfer exactly its five validated files
-    to the Seagate-backed run directory and use the normal local publisher.
-    A completed local relay is retained so a retry never refetches it.
+    small and already complete, so transfer its closed validated file set to
+    the Seagate-backed run directory and use the normal local publisher. A
+    completed local relay is retained so a retry never refetches it.
     """
+
+    relay_root = _retrieve_label_output(
+        ssh,
+        layout,
+        output_dir,
+        relay_name="label-publication",
+        release_files=V2_PUBLICATION_FILES if v2 else _LABEL_RELEASE_FILES,
+    )
+
+    try:
+        commit_id = _publish_local_label_output(relay_root, dataset_id)
+    except Exception as exc:
+        raise RuntimeError("local Hugging Face label publication failed") from exc
+    return commit_id
+
+
+def _retrieve_label_output(
+    ssh: SshClient,
+    layout: RemoteLayout,
+    output_dir: PurePosixPath,
+    *,
+    relay_name: str,
+    release_files: tuple[str, ...] = _LABEL_RELEASE_FILES,
+) -> Path:
+    """Fetch one completed label output into an idempotent Seagate relay."""
 
     run_dir = DATA_ROOT / "runs" / layout.root.name
     run_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-    relay_root = run_dir / "label-publication"
+    relay_root = run_dir / relay_name
     if relay_root.is_symlink():
         raise RuntimeError("local label publication relay is a symlink")
 
     if not relay_root.exists():
-        staging = Path(tempfile.mkdtemp(prefix=".label-publication-", dir=run_dir))
+        staging = Path(tempfile.mkdtemp(prefix=f".{relay_name}-", dir=run_dir))
         try:
             transfer = RemoteTransfer(ssh_target=ssh.target)
-            for relative in _LABEL_RELEASE_FILES:
+            for relative in release_files:
                 destination = staging / relative
                 destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
                 transfer.fetch(str(output_dir / relative), destination)
@@ -141,12 +172,25 @@ def publish_label(
         except Exception as exc:
             shutil.rmtree(staging, ignore_errors=True)
             raise RuntimeError("failed to retrieve completed label output") from exc
+    return relay_root
 
-    try:
-        commit_id = _publish_local_label_output(relay_root, dataset_id)
-    except Exception as exc:
-        raise RuntimeError("local Hugging Face label publication failed") from exc
-    return commit_id
+
+def preserve_label(
+    ssh: SshClient,
+    layout: RemoteLayout,
+    output_dir: PurePosixPath,
+) -> Path:
+    """Durably preserve a completed smoke output without publishing it."""
+
+    relay_root = _retrieve_label_output(
+        ssh,
+        layout,
+        output_dir,
+        relay_name="label-smoke",
+        release_files=V2_PUBLICATION_FILES,
+    )
+    validate_v2_publication(relay_root)
+    return relay_root
 
 
 def label_publication_commit(
@@ -196,6 +240,7 @@ __all__ = [
     "assert_remote_exit_zero",
     "label_publication_commit",
     "mark_remote_status",
+    "preserve_label",
     "publish_label",
     "publish_split",
     "remote_exit_code",

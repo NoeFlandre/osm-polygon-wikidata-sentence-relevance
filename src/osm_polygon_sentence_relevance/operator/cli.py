@@ -43,6 +43,11 @@ from osm_polygon_sentence_relevance.operator.earliest_start import (
     should_seek_replacement,
 )
 from osm_polygon_sentence_relevance.operator.job_monitor import monitor_job_with_log
+from osm_polygon_sentence_relevance.operator.label_lanes import (
+    LabelLane,
+    LabelLanePlan,
+    label_lane_plan,
+)
 from osm_polygon_sentence_relevance.operator.llama_server import ensure_llama_server
 from osm_polygon_sentence_relevance.operator.oar import (
     GRID5000_TZ,
@@ -76,6 +81,7 @@ from osm_polygon_sentence_relevance.operator.remote_completion import (
     assert_remote_exit_zero,
     label_publication_commit,
     mark_remote_status,
+    preserve_label,
     publish_label,
     publish_split,
     remote_exit_code,
@@ -268,7 +274,9 @@ def _detached_resume_arguments(
     return tuple(values)
 
 
-def _checkpoint_root(layout: RemoteLayout) -> str:
+def _checkpoint_root(
+    layout: RemoteLayout, label_plan: LabelLanePlan | None = None
+) -> str:
     """The remote root consumed by :class:`CheckpointStore`.
 
     The real production layout written by :class:`CheckpointStore` is::
@@ -281,7 +289,22 @@ def _checkpoint_root(layout: RemoteLayout) -> str:
     There is no ``${label_work}/checkpoints/<run_id>`` directory.
     """
 
-    return str(layout.label_work)
+    return str(label_plan.work_dir if label_plan is not None else layout.label_work)
+
+
+def _current_label_plan(
+    store: StateStore,
+    config: OperatorConfig,
+    layout: RemoteLayout,
+) -> LabelLanePlan | None:
+    """Return the durable V2 lane, leaving legacy labeling unchanged."""
+
+    if (
+        config.scope is not Scope.ALL
+        or config.prompt_version != V2_LOGIT_PROMPT_VERSION
+    ):
+        return None
+    return label_lane_plan(config, layout.root, store.load().facts)
 
 
 def _attach_to_site(
@@ -418,6 +441,7 @@ def _apply_classification(
     classification: ExitClass,
     resume_artifact_path: str | None = None,
     failure_reason_token: str | None = None,
+    label_plan: LabelLanePlan | None = None,
 ) -> None:
     """Drive durable state transitions for a classified terminal allocation.
 
@@ -453,8 +477,52 @@ def _apply_classification(
         )
     if classification is ExitClass.COMPLETE:
         if is_label:
+            if label_plan is not None and label_plan.lane is LabelLane.SMOKE:
+                smoke_path = preserve_label(
+                    ssh,
+                    layout,
+                    label_plan.output_dir,
+                )
+                facts: dict[str, object] = {
+                    "smoke_job_id": job_id,
+                    "smoke_completed": True,
+                    "smoke_artifact_path": str(smoke_path),
+                }
+                if is_recovery_from_failed:
+                    facts["recovered_from_job_id"] = job_id
+                    facts["recovery_reason"] = (
+                        "previously-failed smoke allocation re-inspected as complete"
+                    )
+                    facts["recovery_attempt"] = _next_recovery_attempt(current.facts)
+                _transition_terminal(
+                    store,
+                    expected=(RunPhase.RUNNING, RunPhase.QUEUED, RunPhase.FAILED),
+                    target=RunPhase.VALIDATED,
+                    facts=facts,
+                )
+                store.transition(
+                    expected=RunPhase.VALIDATED,
+                    target=RunPhase.REMOTE_PREPARED,
+                    facts={
+                        "active_stage": Stage.LABEL.value,
+                        "label_lane": LabelLane.PRODUCTION.value,
+                    },
+                )
+                print(
+                    "V2 smoke complete and preserved; production labeling is ready.",
+                    flush=True,
+                )
+                return
+            publishes = (
+                label_plan.publishes
+                if label_plan is not None
+                else config.requirements.row_limit == 0
+            )
+            output_dir = (
+                label_plan.output_dir if label_plan is not None else layout.label_output
+            )
             hub_commit: str | None = None
-            if config.requirements.row_limit == 0:
+            if publishes:
                 try:
                     hub_commit = label_publication_commit(ssh, layout, job_id)
                 except RuntimeError as exc:
@@ -463,7 +531,11 @@ def _apply_classification(
                     ):
                         raise
                     hub_commit = publish_label(
-                        ssh, layout, layout.label_output, config.output_dataset_id
+                        ssh,
+                        layout,
+                        output_dir,
+                        config.output_dataset_id,
+                        v2=label_plan is not None,
                     )
             facts: dict[str, object] = {"label_job_id": job_id}
             if hub_commit is not None:
@@ -488,7 +560,7 @@ def _apply_classification(
             store.transition(
                 expected=RunPhase.VERIFYING,
                 target=RunPhase.COMPLETE,
-                facts={"published": config.requirements.row_limit == 0},
+                facts={"published": publishes},
             )
             print(f"Labeling complete: run {config.run_id}", flush=True)
             mark_remote_status(ssh, layout, "complete")
@@ -601,7 +673,21 @@ def _finalize_split_checkpointed(
         store.transition(
             expected=RunPhase.VALIDATED,
             target=RunPhase.REMOTE_PREPARED,
-            facts={"active_stage": Stage.LABEL.value},
+            facts={
+                "active_stage": Stage.LABEL.value,
+                **(
+                    {
+                        "label_lane": label_lane_plan(
+                            config,
+                            layout.root,
+                            {},
+                        ).lane.value
+                    }
+                    if config.scope is Scope.ALL
+                    and config.prompt_version == V2_LOGIT_PROMPT_VERSION
+                    else {}
+                ),
+            },
         )
     return final_job
 
@@ -640,6 +726,9 @@ def _classify_or_continue(
     )
     active = str(store.load().facts.get("active_stage", config.stage.value))
     is_label = active == Stage.LABEL.value
+    current_label_plan = (
+        _current_label_plan(store, config, layout) if is_label else None
+    )
     log_name = "labeling.stdout.log" if is_label else "build.stdout.log"
 
     status = oar.status(job_id)
@@ -699,11 +788,26 @@ def _classify_or_continue(
             else None
         )
     else:
+        label_work_root = (
+            current_label_plan.work_dir
+            if current_label_plan is not None
+            else layout.label_work
+        )
+        label_output_root = (
+            current_label_plan.output_dir
+            if current_label_plan is not None
+            else layout.label_output
+        )
+        expected_identity = (
+            current_label_plan.config.run_identity.checkpoint_dict()
+            if current_label_plan is not None
+            else config.run_identity.checkpoint_dict()
+        )
         inspection = recorded_job.inspect_remote_resume(
             ssh,
-            label_work_root=str(layout.label_work),
-            label_output_root=str(layout.label_output),
-            expected_identity=config.run_identity.checkpoint_dict(),
+            label_work_root=str(label_work_root),
+            label_output_root=str(label_output_root),
+            expected_identity=expected_identity,
             exit_file=str(layout.logs / str(job_id) / "labeling.exit_code"),
         )
         classification = recorded_job.classify_terminal(status, inspection)
@@ -736,6 +840,7 @@ def _classify_or_continue(
         classification=classification,
         resume_artifact_path=relay_artifact_path,
         failure_reason_token=failure_reason_token,
+        label_plan=current_label_plan,
     )
 
     if classification is ExitClass.COMPLETE and not is_label:
@@ -816,6 +921,7 @@ def _classify_or_continue(
                 relay_root=relay_root,
             )
         if is_label:
+            iteration_label_plan = _current_label_plan(store, config, layout_d)
             new_job_id = controller_d.submit(
                 component=Stage.LABEL,
                 input_parquet=layout_d.root / "input/sentences.parquet",
@@ -827,9 +933,15 @@ def _classify_or_continue(
                     walltime_seconds=MICRO_LABEL_WALLTIME_SECONDS,
                 ),
                 gpu_memory_mb=getattr(args, "gpu_memory_mb", 40_000),
+                **(
+                    {"label_plan": iteration_label_plan}
+                    if iteration_label_plan is not None
+                    else {}
+                ),
             )
             continuation_log_name = "labeling.stdout.log"
         else:
+            iteration_label_plan = None
             new_job_id = controller_d.submit(component=Stage.SPLIT)
             continuation_log_name = "build.stdout.log"
         if getattr(args, "optimize_continuations", False):
@@ -872,11 +984,26 @@ def _classify_or_continue(
             raise RuntimeError("continuation allocation failed")
         status_d = oar_d.status(new_job_id)
         if is_label:
+            label_work_root_d = (
+                iteration_label_plan.work_dir
+                if iteration_label_plan is not None
+                else layout_d.label_work
+            )
+            label_output_root_d = (
+                iteration_label_plan.output_dir
+                if iteration_label_plan is not None
+                else layout_d.label_output
+            )
+            expected_identity_d = (
+                iteration_label_plan.config.run_identity.checkpoint_dict()
+                if iteration_label_plan is not None
+                else config.run_identity.checkpoint_dict()
+            )
             inspection_d = recorded_job.inspect_remote_resume(
                 ssh_d,
-                label_work_root=str(layout_d.label_work),
-                label_output_root=str(layout_d.label_output),
-                expected_identity=config.run_identity.checkpoint_dict(),
+                label_work_root=str(label_work_root_d),
+                label_output_root=str(label_output_root_d),
+                expected_identity=expected_identity_d,
                 exit_file=str(layout_d.logs / str(new_job_id) / "labeling.exit_code"),
             )
             classification_d = recorded_job.classify_terminal(status_d, inspection_d)
@@ -925,6 +1052,7 @@ def _classify_or_continue(
             active_stage=active,
             classification=classification_d,
             failure_reason_token=failure_reason_token_d,
+            label_plan=iteration_label_plan,
         )
         if classification_d is ExitClass.COMPLETE:
             return ExitClass.COMPLETE
@@ -951,31 +1079,44 @@ def _relay_for_continuation(
 ) -> str:
     """Retrieve, validate, and stage the resume set for a new site."""
 
+    current = store.load()
+    is_label = current.facts.get("active_stage") == Stage.LABEL.value
     source_ssh = SshClient(target=source_site, command_timeout=600)
     source_layout = RemoteLayout(
         _remote_home(source_ssh) / "osm-polygon-operator" / config.run_id
     )
-    source_root = _checkpoint_root(source_layout)
+    source_label_plan = (
+        _current_label_plan(store, config, source_layout) if is_label else None
+    )
+    source_root = _checkpoint_root(source_layout, source_label_plan)
+    expected_identity = (
+        source_label_plan.config.run_identity.checkpoint_dict()
+        if source_label_plan is not None
+        else config.run_identity.checkpoint_dict()
+    )
     inventory = relay.retrieve_to_seagate(
         source=relay.RemoteTransfer(ssh_target=source_site),
         source_checkpoint_root=source_root,
         destination_root=DATA_ROOT / "runs",
         run_id=config.run_id,
-        expected_run_identity=config.run_identity.checkpoint_dict(),
+        expected_run_identity=expected_identity,
     )
     destination_ssh = SshClient(target=destination_site, command_timeout=600)
     destination_layout = RemoteLayout(
         _remote_home(destination_ssh) / "osm-polygon-operator" / config.run_id
     )
-    destination_root = _checkpoint_root(destination_layout)
+    destination_label_plan = (
+        _current_label_plan(store, config, destination_layout) if is_label else None
+    )
+    destination_root = _checkpoint_root(destination_layout, destination_label_plan)
     relay.stage_to_destination(
         inventory=inventory,
         destination=relay.RemoteTransfer(ssh_target=destination_site),
         destination_checkpoint_root=destination_root,
     )
     store.transition(
-        expected=store.load().phase,
-        target=store.load().phase,
+        expected=current.phase,
+        target=current.phase,
         facts={"relay_destination_site": destination_site},
     )
     return str(inventory.root)
@@ -1169,6 +1310,7 @@ def _optimize_queued_start(
         if not requires_label_runtime:
             return oar.submit(split_submission(config, layout))
         label_assets = assets[site]
+        label_plan = _current_label_plan(store, config, layout)
         return oar.submit(
             label_submission(
                 config,
@@ -1182,6 +1324,7 @@ def _optimize_queued_start(
                     walltime_seconds=MICRO_LABEL_WALLTIME_SECONDS,
                 ),
                 gpu_memory_mb=getattr(args, "gpu_memory_mb", 40_000),
+                label_plan=label_plan,
             )
         )
 
@@ -1329,6 +1472,7 @@ def _resume_run(run_id: str, args: SimpleNamespace) -> int:
             print(f"Submitted split continuation job {job_id}", flush=True)
             candidate = (site_value, job_id)
         else:
+            current_label_plan = _current_label_plan(store, config, layout)
             if config.prompt_version == V2_LOGIT_PROMPT_VERSION:
                 split_job_raw = durable.facts.get("split_output_job_id")
                 if type(split_job_raw) is not int:
@@ -1378,6 +1522,7 @@ def _resume_run(run_id: str, args: SimpleNamespace) -> int:
                     walltime_seconds=MICRO_LABEL_WALLTIME_SECONDS,
                 ),
                 gpu_memory_mb=getattr(args, "gpu_memory_mb", 40_000),
+                label_plan=current_label_plan,
             )
             print(f"Submitted continuation job {job_id}", flush=True)
             candidate = (site_value, job_id)
@@ -1684,104 +1829,96 @@ def _run(args: SimpleNamespace) -> int:
                 input_parquet=input_parquet,
                 llama_server_ready=True,
             )
-        for allocation in range(1, 101):
-            job_id = controller.submit(
-                component=Stage.LABEL,
-                input_parquet=assets.input_parquet,
-                model_file=assets.model_file,
-                tokenizer_dir=assets.tokenizer_dir,
-                walltime_seconds=MICRO_LABEL_WALLTIME_SECONDS,
-                policy_type=policy_type_for(
-                    datetime.now(tz=GRID5000_TZ),
+        while True:
+            label_plan = _current_label_plan(store, config, layout)
+            for allocation in range(1, 101):
+                job_id = controller.submit(
+                    component=Stage.LABEL,
+                    input_parquet=assets.input_parquet,
+                    model_file=assets.model_file,
+                    tokenizer_dir=assets.tokenizer_dir,
                     walltime_seconds=MICRO_LABEL_WALLTIME_SECONDS,
-                ),
-                gpu_memory_mb=getattr(args, "gpu_memory_mb", 40_000),
-            )
-            if config.stage is Stage.LABEL:
-                optimized_site, optimized_job_id = _optimize_queued_start(
-                    args,
-                    store,
-                    config,
-                    active_site,
-                    job_id,
+                    policy_type=policy_type_for(
+                        datetime.now(tz=GRID5000_TZ),
+                        walltime_seconds=MICRO_LABEL_WALLTIME_SECONDS,
+                    ),
+                    gpu_memory_mb=getattr(args, "gpu_memory_mb", 40_000),
+                    label_plan=label_plan,
                 )
-                if optimized_site != active_site:
-                    mark_remote_status(ssh, layout, "failed")
-                    active_site = optimized_site
-                    ssh, layout, oar, controller = _attach_to_site(
+                if config.stage is Stage.LABEL:
+                    optimized_site, optimized_job_id = _optimize_queued_start(
+                        args,
                         store,
                         config,
                         active_site,
-                        poll_seconds=args.poll_seconds,
-                        preflight=submission_preflight,
+                        job_id,
                     )
-                    stager = Stager(ssh)
-                    _stage_hf_token(stager, layout)
-                    assets = stager.prepare_label_assets(
-                        config,
-                        layout,
-                        download_input=True,
-                    )
-                job_id = optimized_job_id
-            print(
-                f"Submitted labeling job {job_id} (allocation {allocation})",
-                flush=True,
-            )
-            outcome = controller.monitor(job_id, log_name="labeling.stdout.log")
-            if outcome is not JobState.TERMINATED:
-                raise RuntimeError("labeling allocation failed")
-            assert_remote_exit_zero(ssh, layout, job_id, "labeling.exit_code")
-            complete = (
-                _result_text(
-                    ssh.run(
-                        "if test -f "
-                        f"{layout.label_output!s}/manifest.json; "
-                        "then printf yes; else printf no; fi"
-                    )
+                    if optimized_site != active_site:
+                        mark_remote_status(ssh, layout, "failed")
+                        active_site = optimized_site
+                        ssh, layout, oar, controller = _attach_to_site(
+                            store,
+                            config,
+                            active_site,
+                            poll_seconds=args.poll_seconds,
+                            preflight=submission_preflight,
+                        )
+                        stager = Stager(ssh)
+                        _stage_hf_token(stager, layout)
+                        assets = stager.prepare_label_assets(
+                            config,
+                            layout,
+                            download_input=True,
+                        )
+                    job_id = optimized_job_id
+                print(
+                    f"Submitted labeling job {job_id} (allocation {allocation})",
+                    flush=True,
                 )
-                == "yes"
+                outcome = controller.monitor(job_id, log_name="labeling.stdout.log")
+                if outcome is not JobState.TERMINATED:
+                    raise RuntimeError("labeling allocation failed")
+                assert_remote_exit_zero(ssh, layout, job_id, "labeling.exit_code")
+                output_dir = (
+                    label_plan.output_dir
+                    if label_plan is not None
+                    else layout.label_output
+                )
+                complete = (
+                    _result_text(
+                        ssh.run(
+                            "if test -f "
+                            f"{output_dir!s}/manifest.json; "
+                            "then printf yes; else printf no; fi"
+                        )
+                    )
+                    == "yes"
+                )
+                if complete:
+                    break
+                current = store.load()
+                if current.phase not in {RunPhase.RUNNING, RunPhase.QUEUED}:
+                    raise RuntimeError("label continuation has invalid durable state")
+                store.transition(
+                    expected=current.phase,
+                    target=RunPhase.REMOTE_PREPARED,
+                    facts={"continued_after_job": job_id},
+                )
+                print("Validated label checkpoints preserved; continuing.", flush=True)
+            else:
+                raise RuntimeError("labeling exceeded allocation safety bound")
+            _apply_classification(
+                store=store,
+                config=config,
+                ssh=ssh,
+                layout=layout,
+                job_id=job_id,
+                active_stage=Stage.LABEL.value,
+                classification=ExitClass.COMPLETE,
+                label_plan=label_plan,
             )
-            if complete:
+            if store.load().phase is RunPhase.COMPLETE:
                 break
-            current = store.load()
-            if current.phase not in {RunPhase.RUNNING, RunPhase.QUEUED}:
-                raise RuntimeError("label continuation has invalid durable state")
-            store.transition(
-                expected=current.phase,
-                target=RunPhase.REMOTE_PREPARED,
-                facts={"continued_after_job": job_id},
-            )
-            print("Validated label checkpoints preserved; continuing.", flush=True)
-        else:
-            raise RuntimeError("labeling exceeded allocation safety bound")
-        _transition_terminal(
-            store,
-            expected=(RunPhase.RUNNING, RunPhase.QUEUED),
-            target=RunPhase.VALIDATED,
-            facts={"label_job_id": job_id},
-        )
-        label_hub_commit: str | None = None
-        if config.requirements.row_limit == 0:
-            label_hub_commit = label_publication_commit(ssh, layout, job_id)
-        store.transition(
-            expected=RunPhase.VALIDATED,
-            target=RunPhase.VERIFYING,
-            facts={
-                "dataset_id": config.output_dataset_id,
-                **(
-                    {"hub_commit": label_hub_commit}
-                    if label_hub_commit is not None
-                    else {}
-                ),
-            },
-        )
-        store.transition(
-            expected=RunPhase.VERIFYING,
-            target=RunPhase.COMPLETE,
-            facts={"published": config.requirements.row_limit == 0},
-        )
-        print(f"Labeling complete: run {config.run_id}", flush=True)
-        mark_remote_status(ssh, layout, "complete")
     return 0
 
 

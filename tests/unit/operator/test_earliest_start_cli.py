@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shlex
 import time
 from pathlib import PurePosixPath
 from types import SimpleNamespace
@@ -167,6 +168,72 @@ def test_cli_adopts_running_trial_then_cancels_fallback(
     assert len(submitted_requests) == 1
     assert submitted_requests[0].command[1:3] == ("40000", "00:20:00")
     assert submitted_requests[0].command[3] in {"day", "night"}
+
+
+def test_v2_replacement_preserves_the_durable_production_lane(
+    tmp_path: Any,
+    monkeypatch: Any,
+) -> None:
+    config = OperatorConfig.build(
+        scope="all",
+        stage="all",
+        source_commit="a" * 40,
+        input_revision="b" * 40,
+        row_limit=128,
+        sampling_target=200_000,
+    )
+    _, store = _queued_store(tmp_path, config=config, active_stage="label")
+    current = store.load()
+    store.transition(
+        expected=current.phase,
+        target=current.phase,
+        facts={"label_lane": "production", "smoke_completed": True},
+    )
+    submitted: list[Any] = []
+
+    class _Oar:
+        def __init__(self, ssh: _Ssh, *, preflight: Any = None) -> None:
+            self.site = ssh.target
+            self.preflight = preflight
+
+        def status(self, job_id: int) -> JobStatus:
+            if job_id == 42:
+                return JobStatus(
+                    42,
+                    JobState.QUEUED,
+                    scheduled_start="2099-07-29 19:00:00",
+                    walltime_seconds=3300,
+                )
+            return JobStatus(job_id, JobState.RUNNING, walltime_seconds=1200)
+
+        def submit(self, request: Any) -> int:
+            submitted.append(request)
+            return 101
+
+        def cancel(self, _job_id: int) -> None:
+            return None
+
+    monkeypatch.setattr(cli, "SshClient", _Ssh)
+    monkeypatch.setattr(cli, "OarClient", _Oar)
+    monkeypatch.setattr(cli, "Stager", _Stager)
+    monkeypatch.setattr(cli, "_remote_home", lambda _ssh: PurePosixPath("/home/u"))
+    monkeypatch.setattr(cli, "_usage_policy_preflight", lambda *_a: None)
+    monkeypatch.setattr(cli, "ensure_home_headroom", lambda *_a, **_kw: None)
+    monkeypatch.setattr(cli, "probe_site", lambda site, *_a, **_kw: _ready_probe(site))
+
+    assert cli._optimize_queued_start(
+        SimpleNamespace(site=["nancy"], gpu_memory_mb=40_000),
+        store,
+        config,
+        "sophia",
+        42,
+    ) == ("nancy", 101)
+
+    assert len(submitted) == 1
+    tokens = shlex.split(submitted[0].command[4])
+    assert tokens[-2] == "production"
+    assert tokens[-9] == "0"
+    assert "/home/u/osm-polygon-operator/" + config.run_id + "/label-work" in tokens
 
 
 def test_cli_retains_fallback_when_no_runtime_ready_candidate(

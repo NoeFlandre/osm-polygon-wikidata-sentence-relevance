@@ -9,6 +9,9 @@ from types import SimpleNamespace
 
 import pytest
 
+from osm_polygon_sentence_relevance.labeling.v2_finalization import (
+    V2_PUBLICATION_FILES,
+)
 from osm_polygon_sentence_relevance.operator import remote_completion
 from osm_polygon_sentence_relevance.operator.workflows import RemoteLayout
 
@@ -174,6 +177,62 @@ def test_publish_label_fetches_once_and_reuses_seagate_relay(
     assert published[0][1] == "owner/labels"
     assert sorted(path.name for _, path in fetched) == sorted(
         Path(relative).name for relative in remote_completion._LABEL_RELEASE_FILES
+    )
+
+
+def test_preserve_label_fetches_smoke_once_without_publication(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(remote_completion, "DATA_ROOT", tmp_path)
+    fetched: list[tuple[str, Path]] = []
+
+    class _Transfer:
+        def __init__(self, *, ssh_target: str) -> None:
+            assert ssh_target == "sophia"
+
+        def fetch(self, remote_path: str, local_path: Path) -> None:
+            fetched.append((remote_path, local_path))
+            local_path.write_bytes(b"smoke")
+
+    monkeypatch.setattr(remote_completion, "RemoteTransfer", _Transfer)
+    monkeypatch.setattr(
+        remote_completion,
+        "_publish_local_label_output",
+        lambda *_args: pytest.fail("preserving a smoke must not publish"),
+    )
+    validated: list[Path] = []
+    monkeypatch.setattr(
+        remote_completion,
+        "validate_v2_publication",
+        lambda path: validated.append(path),
+        raising=False,
+    )
+    ssh = _FakeSsh()
+    ssh.target = "sophia"  # type: ignore[attr-defined]
+    layout = RemoteLayout(PurePosixPath("/remote/run-123"))
+
+    first = remote_completion.preserve_label(
+        ssh,  # type: ignore[arg-type]
+        layout,
+        PurePosixPath("/remote/run-123/label-smoke-output"),
+    )
+    second = remote_completion.preserve_label(
+        ssh,  # type: ignore[arg-type]
+        layout,
+        PurePosixPath("/remote/run-123/label-smoke-output"),
+    )
+
+    expected = tmp_path / "runs" / "run-123" / "label-smoke"
+    assert first == second == expected
+    assert len(fetched) == len(V2_PUBLICATION_FILES)
+    prefix = "/remote/run-123/label-smoke-output/"
+    assert sorted(remote.removeprefix(prefix) for remote, _ in fetched) == sorted(
+        V2_PUBLICATION_FILES
+    )
+    assert validated == [expected, expected]
+    assert all(
+        remote.startswith("/remote/run-123/label-smoke-output/")
+        for remote, _local in fetched
     )
 
 

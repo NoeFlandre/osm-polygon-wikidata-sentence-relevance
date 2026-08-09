@@ -5,10 +5,11 @@ set -euo pipefail
 umask 077
 : "${OAR_JOB_ID:?OAR_JOB_ID is required}"
 if ! [[ "${OAR_JOB_ID}" =~ ^[0-9]+$ ]]; then echo "run_worldwide_labeling_job: OAR_JOB_ID must be numeric" >&2; exit 2; fi
-if [ "$#" -ne 21 ]; then echo "run_worldwide_labeling_job: exactly twenty-one arguments are required" >&2; exit 2; fi
+if [ "$#" -ne 22 ]; then echo "run_worldwide_labeling_job: exactly twenty-two arguments are required" >&2; exit 2; fi
 REPO_ROOT="$(cd "$1" && pwd -P)"; readonly REPO_ROOT
-LOG_ROOT="$3"; DATA_SOURCE_COMMIT="${11}"; WORK_DIR="$5"; EXECUTION_COMMIT="${21}"
-readonly LOG_ROOT DATA_SOURCE_COMMIT WORK_DIR EXECUTION_COMMIT
+LOG_ROOT="$3"; DATA_SOURCE_COMMIT="${11}"; WORK_DIR="$5"; LABEL_LANE="${21}"; EXECUTION_COMMIT="${22}"
+readonly LOG_ROOT DATA_SOURCE_COMMIT WORK_DIR LABEL_LANE EXECUTION_COMMIT
+case "${LABEL_LANE}" in smoke|production) ;; *) echo "run_worldwide_labeling_job: label lane is invalid" >&2; exit 2;; esac
 RUN_ROOT="$(cd "${REPO_ROOT}/.." && pwd -P)"; readonly RUN_ROOT
 . "$(dirname "${BASH_SOURCE[0]}")/_checkout_guard.sh"
 mark_failed_on_exit() {
@@ -51,7 +52,7 @@ set +e
 . "$(dirname "${BASH_SOURCE[0]}")/_deadline_helper.sh"
 DEADLINE_DURATION="${LABEL_DEADLINE_DURATION:-45m}"; DEADLINE_GRACE="${LABEL_DEADLINE_GRACE:-5m}"
 deadline_helper_run "${DEADLINE_DURATION}" "${DEADLINE_GRACE}" "${PAYLOAD}" \
-    "${REPO_ROOT}" "$4" "$5" "$6" "$7" "$8" "$9" "${10}" "${11}" "${12}" "${13}" "${14}" "${15}" "${16}" "${17}" "${18}" "${19}" "${20}" \
+    "${REPO_ROOT}" "$4" "$5" "$6" "$7" "$8" "$9" "${10}" "${11}" "${12}" "${13}" "${14}" "${15}" "${16}" "${17}" "${18}" "${19}" "${20}" "${21}" \
     >"${JOB_LOG_DIR}/labeling.stdout.log" 2>"${JOB_LOG_DIR}/labeling.stderr.log"
 rc=$?
 set -e
