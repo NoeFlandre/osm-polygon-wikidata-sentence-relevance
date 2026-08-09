@@ -35,9 +35,11 @@ _VENV_PYTHON_RELATIVE_PATH=".venv/bin/python"
 _VENV_CLI_RELATIVE_PATH=".venv/bin/osm-polygon-label-sentences"
 
 
-# Recreate the repository environment on the compute node. Frontends and
-# compute nodes can use different CPU architectures, so a virtualenv created
-# during staging must never be executed blindly by a worker allocation.
+# Validate and synchronize the repository environment on the compute node.
+# Reusing a compatible environment avoids downloading the same locked wheels
+# during every short allocation.  A frontend-created or damaged environment
+# is never trusted blindly: a failed synchronization removes it and performs
+# one clean rebuild on the worker architecture.
 prepare_compute_environment() {
     local repo_root="$1"
     local scratch_base="$2"
@@ -63,19 +65,45 @@ prepare_compute_environment() {
         echo "${label}: uv cache must not be a symlink" >&2
         return 1
     fi
-    rm -rf -- "${repo_root}/.venv"
     mkdir -p -m 0700 -- "${scratch_base}/uv-cache"
     export UV_CACHE_DIR="${scratch_base}/uv-cache"
+
+    : >"${job_log_dir}/environment.stdout.log"
+    : >"${job_log_dir}/environment.stderr.log"
+    if [ -d "${repo_root}/.venv" ]; then
+        if "${uv_bin}" sync --locked --no-dev \
+            --extra hub --extra segmentation --extra operator \
+            --project "${repo_root}" \
+            >>"${job_log_dir}/environment.stdout.log" \
+            2>>"${job_log_dir}/environment.stderr.log" && \
+            [ -x "${repo_root}/.venv/bin/python" ] && \
+            "${repo_root}/.venv/bin/python" -c \
+                'import h3, huggingface_hub, pyarrow, torch, typer, wtpsplit' \
+                >>"${job_log_dir}/environment.stdout.log" \
+                2>>"${job_log_dir}/environment.stderr.log"; then
+            printf 'COMPUTE_ENVIRONMENT_REUSED\n' \
+                >>"${job_log_dir}/environment.stdout.log"
+            return 0
+        fi
+        printf 'Existing compute environment failed validation; rebuilding.\n' \
+            >>"${job_log_dir}/environment.stderr.log"
+    fi
+
+    rm -rf -- "${repo_root}/.venv"
     if ! "${uv_bin}" sync --locked --no-dev \
         --extra hub --extra segmentation --extra operator \
         --project "${repo_root}" \
-        >"${job_log_dir}/environment.stdout.log" \
-        2>"${job_log_dir}/environment.stderr.log"; then
+        >>"${job_log_dir}/environment.stdout.log" \
+        2>>"${job_log_dir}/environment.stderr.log"; then
         echo "${label}: compute-node environment preparation failed" >&2
         return 1
     fi
-    if [ ! -x "${repo_root}/.venv/bin/python" ]; then
-        echo "${label}: compute-node Python is missing" >&2
+    if [ ! -x "${repo_root}/.venv/bin/python" ] || \
+        ! "${repo_root}/.venv/bin/python" -c \
+            'import h3, huggingface_hub, pyarrow, torch, typer, wtpsplit' \
+            >>"${job_log_dir}/environment.stdout.log" \
+            2>>"${job_log_dir}/environment.stderr.log"; then
+        echo "${label}: compute-node environment validation failed" >&2
         return 1
     fi
 }

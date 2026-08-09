@@ -33,6 +33,27 @@ def _run_guard(
     )
 
 
+def _run_environment_preparation(
+    repo: Path, fake_uv: Path, tmp_path: Path
+) -> subprocess.CompletedProcess[str]:
+    scratch = tmp_path / "scratch"
+    logs = tmp_path / "logs"
+    scratch.mkdir()
+    logs.mkdir()
+    script = (
+        f". '{GUARD}'\n"
+        f"UV_BIN='{fake_uv}' prepare_compute_environment "
+        f"'{repo}' '{scratch}' '{logs}' test\n"
+        f'echo "exit=$?"\n'
+    )
+    return subprocess.run(
+        ["bash", "-c", script],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+
 def _init_repo(path: Path) -> None:
     """Create an initialised repository with one tracked file."""
 
@@ -103,8 +124,96 @@ def test_guard_exports_compute_environment_bootstrap_contract() -> None:
     assert "prepare_compute_environment()" in text
     assert "command -v uv || true" in text
     assert 'UV_CACHE_DIR="${scratch_base}/uv-cache"' in text
-    assert 'rm -rf -- "${repo_root}/.venv"' in text
     assert '"${uv_bin}" sync --locked --no-dev' in text
+
+
+def test_compute_environment_reuses_a_valid_existing_venv(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "uv.lock").write_text("lock\n")
+    (repo / "pyproject.toml").write_text("[project]\nname='fixture'\n")
+    _create_venv(repo / ".venv")
+    sentinel = repo / ".venv" / "installed-wheel"
+    sentinel.write_text("keep\n")
+
+    calls = tmp_path / "uv.calls"
+    fake_uv = tmp_path / "uv"
+    fake_uv.write_text(f"#!/bin/sh\nprintf 'sync\\n' >> '{calls}'\nexit 0\n")
+    fake_uv.chmod(0o755)
+    result = _run_environment_preparation(repo, fake_uv, tmp_path)
+
+    assert result.stdout.endswith("exit=0\n")
+    assert sentinel.read_text() == "keep\n"
+    assert calls.read_text().splitlines() == ["sync"]
+
+
+def test_compute_environment_rebuilds_after_reuse_validation_fails(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _create_venv(repo / ".venv")
+    sentinel = repo / ".venv" / "stale-wheel"
+    sentinel.write_text("discard\n")
+
+    calls = tmp_path / "uv.calls"
+    fake_uv = tmp_path / "uv"
+    fake_uv.write_text(
+        "#!/bin/sh\n"
+        f"calls='{calls}'\n"
+        f"repo='{repo}'\n"
+        'if [ ! -f "$calls" ]; then\n'
+        "  printf 'reuse-failed\\n' > \"$calls\"\n"
+        "  exit 1\n"
+        "fi\n"
+        "printf 'fresh-build\\n' >> \"$calls\"\n"
+        'mkdir -p "$repo/.venv/bin"\n'
+        "printf '#!/bin/sh\\nexit 0\\n' > \"$repo/.venv/bin/python\"\n"
+        'chmod 0755 "$repo/.venv/bin/python"\n'
+        "exit 0\n"
+    )
+    fake_uv.chmod(0o755)
+    result = _run_environment_preparation(repo, fake_uv, tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.endswith("exit=0\n")
+    assert not sentinel.exists()
+    assert calls.read_text().splitlines() == ["reuse-failed", "fresh-build"]
+
+
+def test_compute_environment_rebuilds_when_locked_imports_fail(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _create_venv(repo / ".venv")
+    stale_python = repo / ".venv" / "bin" / "python"
+    stale_python.write_text("#!/bin/sh\nexit 1\n")
+    stale_python.chmod(0o755)
+    sentinel = repo / ".venv" / "incompatible-wheel"
+    sentinel.write_text("discard\n")
+
+    calls = tmp_path / "uv.calls"
+    fake_uv = tmp_path / "uv"
+    fake_uv.write_text(
+        "#!/bin/sh\n"
+        f"calls='{calls}'\n"
+        f"repo='{repo}'\n"
+        'if [ ! -f "$calls" ]; then\n'
+        "  printf 'reuse-sync\\n' > \"$calls\"\n"
+        "  exit 0\n"
+        "fi\n"
+        "printf 'fresh-build\\n' >> \"$calls\"\n"
+        'mkdir -p "$repo/.venv/bin"\n'
+        "printf '#!/bin/sh\\nexit 0\\n' > \"$repo/.venv/bin/python\"\n"
+        'chmod 0755 "$repo/.venv/bin/python"\n'
+        "exit 0\n"
+    )
+    fake_uv.chmod(0o755)
+    result = _run_environment_preparation(repo, fake_uv, tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.endswith("exit=0\n")
+    assert not sentinel.exists()
+    assert calls.read_text().splitlines() == ["reuse-sync", "fresh-build"]
 
 
 def test_guard_accepts_approved_venv_directory(tmp_path: Path) -> None:
