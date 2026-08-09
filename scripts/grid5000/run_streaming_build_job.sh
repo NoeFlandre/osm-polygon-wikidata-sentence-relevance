@@ -113,7 +113,11 @@ fi
     2>"${JOB_LOG_DIR}/gpu_preflight.stderr.log"
 
 set +e
-deadline_helper_run 20m 10m "${PAYLOAD}" \
+# Spend most of the 30-minute allocation on CUDA segmentation.  Four minutes
+# remain for a graceful SIGINT checkpoint, with one minute of scheduler margin.
+# Completed section batches are already durable, so a forced stop resumes from
+# the last validated batch.
+deadline_helper_run 25m 4m "${PAYLOAD}" \
     "${REPO_ROOT}" "${HF_HOME}" "${WORK_DIR}" \
     "${OUTPUT_REPO_ID}" "${INPUT_REPO_ID}" "${EXPECTED_SOURCE_COMMIT}" \
     "${INPUT_REVISION}" "${RUN_ID}" "${BATCH_SIZE}" "${MAX_SHARDS}" \

@@ -76,7 +76,8 @@ def test_finalization_job_rebuilds_environment_on_compute_node() -> None:
 
 def test_split_job_uses_short_resumable_walltime_and_deadline() -> None:
     text = _text("run_streaming_build_job.sh")
-    assert 'deadline_helper_run 20m 10m "${PAYLOAD}"' in text
+    assert 'deadline_helper_run 25m 4m "${PAYLOAD}"' in text
+    assert "one minute of scheduler margin" in text
 
 
 def test_job_marks_failed_managed_root_for_later_cleanup() -> None:
