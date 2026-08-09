@@ -582,6 +582,11 @@ def _install_run_fakes(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(cli, "OarClient", _FakeOar)
     monkeypatch.setattr(cli, "Stager", _FakeStager)
     monkeypatch.setattr(cli, "Controller", _FakeController)
+    monkeypatch.setattr(
+        cli,
+        "preserve_manual_eval",
+        lambda *_args, lane: tmp_path / f"manual-eval-{lane}.jsonl",
+    )
 
 
 def test_run_split_finalizes_publishes_and_marks_complete(
@@ -703,7 +708,21 @@ def test_completed_v2_smoke_is_preserved_then_reopens_production(
     layout = cli.RemoteLayout(PurePosixPath("/run"))
     plan = label_lane_plan(config, layout.root, store.value.facts)
     preserved = tmp_path / "runs" / config.run_id / "label-smoke"
+    manual_eval = tmp_path / "runs" / config.run_id / "manual-eval-smoke.jsonl"
+    manual_eval_calls: list[tuple[PurePosixPath, str]] = []
     monkeypatch.setattr(cli, "preserve_label", lambda *_args: preserved)
+
+    def preserve_manual_eval(
+        _ssh: object,
+        _layout: object,
+        work_dir: PurePosixPath,
+        *,
+        lane: str,
+    ) -> Path:
+        manual_eval_calls.append((work_dir, lane))
+        return manual_eval
+
+    monkeypatch.setattr(cli, "preserve_manual_eval", preserve_manual_eval)
     monkeypatch.setattr(
         cli,
         "label_publication_commit",
@@ -735,9 +754,64 @@ def test_completed_v2_smoke_is_preserved_then_reopens_production(
     assert store.value.facts["smoke_completed"] is True
     assert store.value.facts["smoke_job_id"] == 92
     assert store.value.facts["smoke_artifact_path"] == str(preserved)
+    assert store.value.facts["smoke_manual_eval_path"] == str(manual_eval)
+    assert manual_eval_calls == [(plan.work_dir, "smoke")]
     assert store.value.facts["label_lane"] == LabelLane.PRODUCTION.value
     assert store.value.facts["active_stage"] == "label"
     assert "published" not in store.value.facts
+
+
+def test_completed_v2_production_preserves_manual_eval_before_completion(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    config = OperatorConfig.build(
+        scope="all",
+        stage="all",
+        source_commit="a" * 40,
+        input_revision="b" * 40,
+        row_limit=128,
+        sampling_target=200_000,
+    )
+    store = _FakeStore(tmp_path)
+    store.value = SimpleNamespace(
+        phase=RunPhase.RUNNING,
+        facts={"active_stage": "label", "label_lane": "production"},
+    )
+    layout = cli.RemoteLayout(PurePosixPath("/run"))
+    plan = label_lane_plan(config, layout.root, store.value.facts)
+    manual_eval = tmp_path / "manual-eval-production.jsonl"
+    calls: list[tuple[PurePosixPath, str]] = []
+
+    def preserve_manual_eval(
+        _ssh: object,
+        _layout: object,
+        work_dir: PurePosixPath,
+        *,
+        lane: str,
+    ) -> Path:
+        calls.append((work_dir, lane))
+        return manual_eval
+
+    monkeypatch.setattr(cli, "preserve_manual_eval", preserve_manual_eval)
+    monkeypatch.setattr(cli, "label_publication_commit", lambda *_args: "c" * 40)
+    monkeypatch.setattr(cli, "mark_remote_status", lambda *_args: None)
+
+    cli._apply_classification(
+        store=store,  # type: ignore[arg-type]
+        config=config,
+        ssh=_FakeSsh(target="sophia"),  # type: ignore[arg-type]
+        layout=layout,
+        job_id=94,
+        active_stage="label",
+        classification=ExitClass.COMPLETE,
+        label_plan=plan,
+    )
+
+    assert store.value.phase is RunPhase.COMPLETE
+    assert store.value.facts["manual_eval_path"] == str(manual_eval)
+    assert store.value.facts["hub_commit"] == "c" * 40
+    assert calls == [(plan.work_dir, "production")]
 
 
 def test_v2_production_resume_inspects_isolated_full_identity(
@@ -830,6 +904,11 @@ def test_fresh_v2_all_runs_smoke_then_full_without_replaying_split(
     monkeypatch.setattr(cli, "Controller", LaneController)
     monkeypatch.setattr(cli, "_optimize_queued_start", lambda *_args: ("sophia", 80))
     monkeypatch.setattr(cli, "preserve_label", lambda *_args: tmp_path / "smoke")
+    monkeypatch.setattr(
+        cli,
+        "preserve_manual_eval",
+        lambda *_args, lane: tmp_path / f"manual-eval-{lane}.jsonl",
+    )
     monkeypatch.setattr(cli, "mark_remote_status", lambda *_args: None)
     args = _run_args(stage="all", sites=["sophia"])
     args.scope = "all"

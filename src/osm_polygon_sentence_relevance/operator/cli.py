@@ -82,6 +82,7 @@ from osm_polygon_sentence_relevance.operator.remote_completion import (
     label_publication_commit,
     mark_remote_status,
     preserve_label,
+    preserve_manual_eval,
     publish_label,
     publish_split,
     remote_exit_code,
@@ -483,10 +484,17 @@ def _apply_classification(
                     layout,
                     label_plan.output_dir,
                 )
+                manual_eval_path = preserve_manual_eval(
+                    ssh,
+                    layout,
+                    label_plan.work_dir,
+                    lane=LabelLane.SMOKE.value,
+                )
                 facts: dict[str, object] = {
                     "smoke_job_id": job_id,
                     "smoke_completed": True,
                     "smoke_artifact_path": str(smoke_path),
+                    "smoke_manual_eval_path": str(manual_eval_path),
                 }
                 if is_recovery_from_failed:
                     facts["recovered_from_job_id"] = job_id
@@ -521,6 +529,16 @@ def _apply_classification(
             output_dir = (
                 label_plan.output_dir if label_plan is not None else layout.label_output
             )
+            manual_eval_path = (
+                preserve_manual_eval(
+                    ssh,
+                    layout,
+                    label_plan.work_dir,
+                    lane=label_plan.lane.value,
+                )
+                if label_plan is not None
+                else None
+            )
             hub_commit: str | None = None
             if publishes:
                 try:
@@ -538,6 +556,8 @@ def _apply_classification(
                         v2=label_plan is not None,
                     )
             facts: dict[str, object] = {"label_job_id": job_id}
+            if manual_eval_path is not None:
+                facts["manual_eval_path"] = str(manual_eval_path)
             if hub_commit is not None:
                 facts["hub_commit"] = hub_commit
             if is_recovery_from_failed:

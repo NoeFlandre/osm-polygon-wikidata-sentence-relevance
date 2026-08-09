@@ -26,6 +26,24 @@ class _FakeSsh:
         return SimpleNamespace(stdout=self.output)
 
 
+def _manual_eval_row() -> dict[str, object]:
+    return {
+        "sentence_id": "sentence-1",
+        "page_title": "Place",
+        "section_title": "Geography",
+        "previous_sentence": None,
+        "sentence_text": "The valley is forested.",
+        "next_sentence": None,
+        "model_label": "yes",
+        "yes_logprob": -0.1,
+        "no_logprob": -2.1,
+        "logit_margin": 2.0,
+        "two_class_probability": 0.88,
+        "human_label": "",
+        "notes": "",
+    }
+
+
 def test_remote_exit_code_reads_exact_path_and_parses_integer() -> None:
     ssh = _FakeSsh("0\n")
     layout = RemoteLayout(PurePosixPath("/r"))
@@ -180,6 +198,77 @@ def test_publish_label_fetches_once_and_reuses_seagate_relay(
     )
 
 
+def test_publish_label_wraps_local_publisher_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        remote_completion,
+        "_retrieve_label_output",
+        lambda *_args, **_kwargs: tmp_path,
+    )
+    monkeypatch.setattr(
+        remote_completion,
+        "_publish_local_label_output",
+        lambda *_args: (_ for _ in ()).throw(ValueError("upload failed")),
+    )
+
+    with pytest.raises(
+        RuntimeError, match="local Hugging Face label publication failed"
+    ) as exc_info:
+        remote_completion.publish_label(
+            _FakeSsh(),  # type: ignore[arg-type]
+            RemoteLayout(PurePosixPath("/run")),
+            PurePosixPath("/run/output"),
+            "owner/dataset",
+        )
+
+    assert isinstance(exc_info.value.__cause__, ValueError)
+
+
+def test_label_retrieval_rejects_symlink_and_cleans_failed_staging(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(remote_completion, "DATA_ROOT", tmp_path)
+    run_dir = tmp_path / "runs" / "run-123"
+    run_dir.mkdir(parents=True)
+    target = run_dir / "target"
+    target.mkdir()
+    (run_dir / "label-publication").symlink_to(target, target_is_directory=True)
+    ssh = _FakeSsh()
+    ssh.target = "sophia"  # type: ignore[attr-defined]
+    layout = RemoteLayout(PurePosixPath("/remote/run-123"))
+
+    with pytest.raises(RuntimeError, match="relay is a symlink"):
+        remote_completion._retrieve_label_output(
+            ssh,  # type: ignore[arg-type]
+            layout,
+            PurePosixPath("/remote/run-123/output"),
+            relay_name="label-publication",
+        )
+
+    (run_dir / "label-publication").unlink()
+
+    class _FailingTransfer:
+        def __init__(self, *, ssh_target: str) -> None:
+            assert ssh_target == "sophia"
+
+        def fetch(self, _remote_path: str, _local_path: Path) -> None:
+            raise OSError("transfer failed")
+
+    monkeypatch.setattr(remote_completion, "RemoteTransfer", _FailingTransfer)
+    with pytest.raises(RuntimeError, match="failed to retrieve completed label output"):
+        remote_completion._retrieve_label_output(
+            ssh,  # type: ignore[arg-type]
+            layout,
+            PurePosixPath("/remote/run-123/output"),
+            relay_name="label-publication",
+            release_files=("manifest.json",),
+        )
+    assert not any(
+        path.name.startswith(".label-publication-") for path in run_dir.iterdir()
+    )
+
+
 def test_preserve_label_fetches_smoke_once_without_publication(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -234,6 +323,163 @@ def test_preserve_label_fetches_smoke_once_without_publication(
         remote.startswith("/remote/run-123/label-smoke-output/")
         for remote, _local in fetched
     )
+
+
+def test_preserve_manual_eval_fetches_validates_and_reuses_local_copy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(remote_completion, "DATA_ROOT", tmp_path)
+    fetched: list[tuple[str, Path]] = []
+    row = _manual_eval_row()
+
+    class _Transfer:
+        def __init__(self, *, ssh_target: str) -> None:
+            assert ssh_target == "sophia"
+
+        def fetch(self, remote_path: str, local_path: Path) -> None:
+            fetched.append((remote_path, local_path))
+            local_path.write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+    monkeypatch.setattr(remote_completion, "RemoteTransfer", _Transfer)
+    ssh = _FakeSsh()
+    ssh.target = "sophia"  # type: ignore[attr-defined]
+    layout = RemoteLayout(PurePosixPath("/remote/run-123"))
+
+    first = remote_completion.preserve_manual_eval(
+        ssh,  # type: ignore[arg-type]
+        layout,
+        PurePosixPath("/remote/run-123/label-smoke-work"),
+        lane="smoke",
+    )
+    first.write_text(
+        json.dumps({**row, "human_label": "yes", "notes": "reviewed"}) + "\n",
+        encoding="utf-8",
+    )
+    second = remote_completion.preserve_manual_eval(
+        ssh,  # type: ignore[arg-type]
+        layout,
+        PurePosixPath("/remote/run-123/label-smoke-work"),
+        lane="smoke",
+    )
+
+    expected = tmp_path / "runs" / "run-123" / "manual-eval-smoke.jsonl"
+    assert first == second == expected
+    assert fetched == [
+        (
+            "/remote/run-123/label-smoke-work/manual_eval.jsonl",
+            fetched[0][1],
+        )
+    ]
+    assert json.loads(second.read_text())["notes"] == "reviewed"
+
+
+def test_preserve_manual_eval_rejects_invalid_lane_without_transfer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(remote_completion, "DATA_ROOT", tmp_path)
+    ssh = _FakeSsh()
+    ssh.target = "sophia"  # type: ignore[attr-defined]
+
+    with pytest.raises(ValueError, match="manual evaluation lane is invalid"):
+        remote_completion.preserve_manual_eval(
+            ssh,  # type: ignore[arg-type]
+            RemoteLayout(PurePosixPath("/remote/run-123")),
+            PurePosixPath("/remote/run-123/label-work"),
+            lane="other",
+        )
+
+
+def test_preserve_manual_eval_rejects_symlink_destination(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(remote_completion, "DATA_ROOT", tmp_path)
+    run_dir = tmp_path / "runs" / "run-123"
+    run_dir.mkdir(parents=True)
+    target = run_dir / "target.jsonl"
+    target.write_text("protected\n", encoding="utf-8")
+    (run_dir / "manual-eval-smoke.jsonl").symlink_to(target)
+    ssh = _FakeSsh()
+    ssh.target = "sophia"  # type: ignore[attr-defined]
+
+    with pytest.raises(RuntimeError, match="destination is a symlink"):
+        remote_completion.preserve_manual_eval(
+            ssh,  # type: ignore[arg-type]
+            RemoteLayout(PurePosixPath("/remote/run-123")),
+            PurePosixPath("/remote/run-123/label-work"),
+            lane="smoke",
+        )
+
+
+def test_preserve_manual_eval_rejects_malformed_transfer_without_final_artifact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(remote_completion, "DATA_ROOT", tmp_path)
+
+    class _Transfer:
+        def __init__(self, *, ssh_target: str) -> None:
+            assert ssh_target == "sophia"
+
+        def fetch(self, _remote_path: str, local_path: Path) -> None:
+            local_path.write_text('{"sentence_id":"incomplete"}\n', encoding="utf-8")
+
+    monkeypatch.setattr(remote_completion, "RemoteTransfer", _Transfer)
+    ssh = _FakeSsh()
+    ssh.target = "sophia"  # type: ignore[attr-defined]
+
+    with pytest.raises(
+        RuntimeError, match="failed to preserve manual evaluation artifact"
+    ) as exc_info:
+        remote_completion.preserve_manual_eval(
+            ssh,  # type: ignore[arg-type]
+            RemoteLayout(PurePosixPath("/remote/run-123")),
+            PurePosixPath("/remote/run-123/label-work"),
+            lane="production",
+        )
+
+    assert isinstance(exc_info.value.__cause__, RuntimeError)
+    assert not (tmp_path / "runs" / "run-123" / "manual-eval-production.jsonl").exists()
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("model_label", "maybe"),
+        ("yes_logprob", True),
+        ("no_logprob", float("nan")),
+        ("two_class_probability", 1.1),
+        ("human_label", 1),
+    ],
+)
+def test_manual_eval_validation_rejects_invalid_values(
+    tmp_path: Path, field: str, value: object
+) -> None:
+    path = tmp_path / "manual.jsonl"
+    path.write_text(
+        json.dumps({**_manual_eval_row(), field: value}) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RuntimeError, match="manual evaluation artifact is invalid"):
+        remote_completion._validate_manual_eval(path)
+
+
+def test_manual_eval_validation_rejects_empty_duplicate_and_non_file(
+    tmp_path: Path,
+) -> None:
+    empty = tmp_path / "empty.jsonl"
+    empty.write_text("", encoding="utf-8")
+    duplicate = tmp_path / "duplicate.jsonl"
+    line = json.dumps(_manual_eval_row()) + "\n"
+    duplicate.write_text(line + line, encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="manual evaluation row count is invalid"):
+        remote_completion._validate_manual_eval(empty)
+    with pytest.raises(RuntimeError, match="manual evaluation artifact is invalid"):
+        remote_completion._validate_manual_eval(duplicate)
+    with pytest.raises(
+        RuntimeError, match="manual evaluation artifact is not a regular file"
+    ):
+        remote_completion._validate_manual_eval(tmp_path / "missing.jsonl")
 
 
 def test_label_publication_commit_selects_latest_valid_record() -> None:

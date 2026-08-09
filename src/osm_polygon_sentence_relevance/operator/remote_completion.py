@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import shlex
 import shutil
@@ -27,6 +28,24 @@ _LABEL_RELEASE_FILES: tuple[str, ...] = (
     "assets/joint_label_heatmap.png",
     "assets/polygon_coverage_funnel.png",
     "assets/reason_code_distribution.png",
+)
+
+_V2_MANUAL_EVAL_FIELDS = frozenset(
+    {
+        "sentence_id",
+        "page_title",
+        "section_title",
+        "previous_sentence",
+        "sentence_text",
+        "next_sentence",
+        "model_label",
+        "yes_logprob",
+        "no_logprob",
+        "logit_margin",
+        "two_class_probability",
+        "human_label",
+        "notes",
+    }
 )
 
 
@@ -193,6 +212,88 @@ def preserve_label(
     return relay_root
 
 
+def _validate_manual_eval(path: Path) -> None:
+    """Reject malformed or incomplete V2 review samples before preservation."""
+
+    if path.is_symlink() or not path.is_file():
+        raise RuntimeError("manual evaluation artifact is not a regular file")
+    seen: set[str] = set()
+    rows = 0
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            payload = json.loads(line)
+            if not isinstance(payload, dict) or set(payload) != _V2_MANUAL_EVAL_FIELDS:
+                raise ValueError("manual evaluation fields are invalid")
+            sentence_id = payload["sentence_id"]
+            if (
+                not isinstance(sentence_id, str)
+                or not sentence_id
+                or sentence_id in seen
+            ):
+                raise ValueError("manual evaluation sentence IDs are invalid")
+            seen.add(sentence_id)
+            if payload["model_label"] not in {"yes", "no"}:
+                raise ValueError("manual evaluation model label is invalid")
+            for name in (
+                "yes_logprob",
+                "no_logprob",
+                "logit_margin",
+                "two_class_probability",
+            ):
+                value = payload[name]
+                if isinstance(value, bool) or not isinstance(value, (int, float)):
+                    raise ValueError("manual evaluation score is invalid")
+                if not math.isfinite(float(value)):
+                    raise ValueError("manual evaluation score is invalid")
+            probability = float(payload["two_class_probability"])
+            if not 0.0 <= probability <= 1.0:
+                raise ValueError("manual evaluation probability is invalid")
+            if not isinstance(payload["human_label"], str) or not isinstance(
+                payload["notes"], str
+            ):
+                raise ValueError("manual evaluation review fields are invalid")
+            rows += 1
+    except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
+        raise RuntimeError("manual evaluation artifact is invalid") from exc
+    if rows < 1 or rows > 100:
+        raise RuntimeError("manual evaluation row count is invalid")
+
+
+def preserve_manual_eval(
+    ssh: SshClient,
+    layout: RemoteLayout,
+    work_dir: PurePosixPath,
+    *,
+    lane: str,
+) -> Path:
+    """Preserve one editable V2 manual-review sample before remote cleanup."""
+
+    if lane not in {"smoke", "production"}:
+        raise ValueError("manual evaluation lane is invalid")
+    run_dir = DATA_ROOT / "runs" / layout.root.name
+    run_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    destination = run_dir / f"manual-eval-{lane}.jsonl"
+    if destination.is_symlink():
+        raise RuntimeError("manual evaluation destination is a symlink")
+    if destination.exists():
+        _validate_manual_eval(destination)
+        return destination
+
+    staging = Path(tempfile.mkdtemp(prefix=f".manual-eval-{lane}-", dir=run_dir))
+    artifact = staging / "manual_eval.jsonl"
+    try:
+        RemoteTransfer(ssh_target=ssh.target).fetch(
+            str(work_dir / "manual_eval.jsonl"), artifact
+        )
+        _validate_manual_eval(artifact)
+        os.replace(artifact, destination)
+    except Exception as exc:
+        raise RuntimeError("failed to preserve manual evaluation artifact") from exc
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+    return destination
+
+
 def label_publication_commit(
     ssh: SshClient,
     layout: RemoteLayout,
@@ -241,6 +342,7 @@ __all__ = [
     "label_publication_commit",
     "mark_remote_status",
     "preserve_label",
+    "preserve_manual_eval",
     "publish_label",
     "publish_split",
     "remote_exit_code",
