@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 import pyarrow as pa
 import pytest
 
@@ -92,6 +94,38 @@ def test_v2_larger_target_is_a_prefix_of_smaller_target() -> None:
     smaller = select_v2_rows(_table(), target=5, seed="seed")
     larger = select_v2_rows(_table(), target=7, seed="seed")
     assert larger["sentence_id"].to_pylist()[:5] == smaller["sentence_id"].to_pylist()
+
+
+def _reference_weighted_schedule(
+    sizes: Mapping[str, int], *, seed: str, limit: int
+) -> list[str]:
+    remaining = dict(sizes)
+    served = dict.fromkeys(remaining, 0)
+    ordered: list[str] = []
+    while remaining and len(ordered) < limit:
+        key = min(
+            remaining,
+            key=lambda value: (
+                served[value] / sizes[value],
+                v2_sampling._rank(seed, value),
+            ),
+        )
+        ordered.append(key)
+        served[key] += 1
+        remaining[key] -= 1
+        if remaining[key] == 0:
+            del remaining[key]
+    return ordered
+
+
+@pytest.mark.parametrize("limit", [1, 4, 9, 20, 99])
+def test_weighted_schedule_heap_matches_reference_order(limit: int) -> None:
+    sizes = {"alpha": 7, "beta": 2, "gamma": 11}
+
+    actual = v2_sampling.weighted_schedule(sizes, seed="seed", limit=limit)
+
+    assert actual == _reference_weighted_schedule(sizes, seed="seed", limit=limit)
+    assert len(actual) == min(limit, sum(sizes.values()))
 
 
 def test_v2_rejects_area_bucket_mismatch_and_missing_columns() -> None:

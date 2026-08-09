@@ -8,8 +8,11 @@ their sentences are ranked. A larger target extends the same ordered prefix.
 from __future__ import annotations
 
 import hashlib
+import heapq
 import math
-from collections import defaultdict
+from collections import defaultdict, deque
+from collections.abc import Callable, Hashable, Mapping
+from typing import TypeVar
 
 import pyarrow as pa
 
@@ -44,9 +47,68 @@ _REQUIRED = frozenset(
     }
 )
 
+_Key = TypeVar("_Key", bound=Hashable)
+
 
 def _rank(seed: str, value: str) -> str:
     return hashlib.sha256(f"{seed}\0{value}".encode()).hexdigest()
+
+
+def _weighted_schedule(
+    sizes: Mapping[_Key, int],
+    *,
+    rank: Callable[[_Key], str],
+    limit: int,
+) -> list[_Key]:
+    """Merge proportional stratum streams in the legacy deterministic order.
+
+    For a stratum of size ``n``, its successive priorities are ``0/n``,
+    ``1/n``, ..., ``(n-1)/n``. Merging those monotonic streams with a heap is
+    exactly equivalent to repeatedly scanning every remaining stratum for the
+    minimum ``served / size`` value, but costs ``O(limit log strata)`` rather
+    than ``O(limit * strata)``.
+    """
+
+    if limit <= 0 or not sizes:
+        return []
+    heap: list[tuple[float, str, int, _Key, int]] = []
+    for ordinal, (key, size) in enumerate(sizes.items()):
+        if isinstance(size, bool) or not isinstance(size, int) or size <= 0:
+            raise ValueError("stratum sizes must be positive integers")
+        heap.append((0.0, rank(key), ordinal, key, 0))
+    heapq.heapify(heap)
+    result: list[_Key] = []
+    while heap and len(result) < limit:
+        _, stable_rank, ordinal, key, served = heapq.heappop(heap)
+        result.append(key)
+        next_served = served + 1
+        size = sizes[key]
+        if next_served < size:
+            heapq.heappush(
+                heap,
+                (
+                    next_served / size,
+                    stable_rank,
+                    ordinal,
+                    key,
+                    next_served,
+                ),
+            )
+    return result
+
+
+def weighted_schedule(sizes: Mapping[str, int], *, seed: str, limit: int) -> list[str]:
+    """Return the deterministic proportional prefix for named strata."""
+
+    if isinstance(limit, bool) or not isinstance(limit, int) or limit < 0:
+        raise ValueError("limit must be a non-negative integer")
+    if any(not isinstance(key, str) or not key for key in sizes):
+        raise ValueError("stratum names must be non-empty strings")
+    return _weighted_schedule(
+        sizes,
+        rank=lambda value: _rank(seed, value),
+        limit=limit,
+    )
 
 
 def _cell(lat: object, lon: object) -> str:
@@ -137,21 +199,13 @@ def _ordered_polygons(table: pa.Table, seed: str) -> list[str]:
             by_cell[str(info["cell"])].append(polygon)
     for values in by_cell.values():
         values.sort(key=lambda value: _rank(seed, value))
-    tail: list[str] = []
-    served = dict.fromkeys(by_cell, 0)
-    while by_cell:
-        cell = min(
-            by_cell,
-            key=lambda value: (
-                served[value] / max(1, len(by_cell[value]) + served[value]),
-                _rank(seed, value),
-            ),
-        )
-        values = by_cell[cell]
-        tail.append(values.pop(0))
-        served[cell] += 1
-        if not values:
-            del by_cell[cell]
+    queues = {cell: deque(values) for cell, values in by_cell.items()}
+    schedule = weighted_schedule(
+        {cell: len(values) for cell, values in by_cell.items()},
+        seed=seed,
+        limit=sum(len(values) for values in by_cell.values()),
+    )
+    tail = [queues[cell].popleft() for cell in schedule]
     return large + tail
 
 
@@ -177,22 +231,13 @@ def _ordered_rows(
                 index,
             )
         )
-    initial_sizes = {key: len(value) for key, value in rows_by_stratum.items()}
-    served = dict.fromkeys(rows_by_stratum, 0)
-    ordered: list[int] = []
-    while rows_by_stratum:
-        stratum = min(
-            rows_by_stratum,
-            key=lambda key: (
-                served[key] / initial_sizes[key],
-                _rank(seed, "\0".join(key)),
-            ),
-        )
-        ordered.append(rows_by_stratum[stratum].pop(0))
-        served[stratum] += 1
-        if not rows_by_stratum[stratum]:
-            del rows_by_stratum[stratum]
-    return ordered
+    queues = {key: deque(indexes) for key, indexes in rows_by_stratum.items()}
+    schedule = _weighted_schedule(
+        {key: len(indexes) for key, indexes in rows_by_stratum.items()},
+        rank=lambda key: _rank(seed, "\0".join(key)),
+        limit=sum(len(indexes) for indexes in rows_by_stratum.values()),
+    )
+    return [queues[stratum].popleft() for stratum in schedule]
 
 
 def _normalized(value: object) -> str:
@@ -227,4 +272,5 @@ __all__ = [
     "V2_SAMPLING_VERSION",
     "canonical_area_bucket",
     "select_v2_rows",
+    "weighted_schedule",
 ]
