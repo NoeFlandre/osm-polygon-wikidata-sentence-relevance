@@ -643,6 +643,41 @@ def test_finalize_split_checkpointed_publishes_and_marks_complete(
     assert "Sentence splitting complete" in capsys.readouterr().out
 
 
+def test_finalize_split_checkpointed_stage_all_hands_off_to_label(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A resumed all-stage run must label after split finalization."""
+
+    config = OperatorConfig.build(
+        scope="all",
+        stage="all",
+        source_commit="a" * 40,
+        input_revision="b" * 40,
+    )
+    store = _FakeStore(Path("/state"))
+    store.value = SimpleNamespace(phase=RunPhase.CHECKPOINTED, facts={})
+    ssh = _FakeSsh(target="sophia")
+    oar = _FakeOar(ssh)
+    layout = cli.RemoteLayout(PurePosixPath("/run"))
+    monkeypatch.setattr(cli, "split_finalization_submission", lambda *_: object())
+    monkeypatch.setattr(cli, "monitor_job_with_log", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(cli, "assert_remote_exit_zero", lambda *_args, **_kwargs: None)
+
+    final_job = cli._finalize_split_checkpointed(
+        store=store,
+        config=config,
+        ssh=ssh,
+        layout=layout,
+        oar=oar,
+        poll_seconds=0.0,
+    )
+
+    assert final_job == 91
+    assert store.value.phase is RunPhase.REMOTE_PREPARED
+    assert store.value.facts["split_output_job_id"] == 91
+    assert store.value.facts["active_stage"] == "label"
+
+
 def test_fresh_split_submission_optimizes_before_monitoring(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

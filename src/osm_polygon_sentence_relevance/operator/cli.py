@@ -601,7 +601,7 @@ def _finalize_split_checkpointed(
         store.transition(
             expected=RunPhase.VALIDATED,
             target=RunPhase.REMOTE_PREPARED,
-            facts={"active_stage": Stage.SPLIT.value},
+            facts={"active_stage": Stage.LABEL.value},
         )
     return final_job
 
