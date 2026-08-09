@@ -706,7 +706,7 @@ def test_checkpoint_ledger_rejects_unverified_handle(
     assert driver.has_verified_checkpoint("a-latest") is False
 
 
-def test_main_skips_locally_verified_stream_checkpoint(
+def test_main_reports_reused_checkpoints_once_and_processes_only_pending_shards(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     fake_driver = mock.Mock()
@@ -748,9 +748,55 @@ def test_main_skips_locally_verified_stream_checkpoint(
     fake_driver.process_shard.assert_called_once_with("b-latest", segmenter=mock.ANY)
     events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
     assert events == [
-        {"completed": 1, "shard_key": "a-latest", "total": 2},
+        {"completed": 1, "event": "resume", "remaining": 1, "total": 2},
         {"completed": 2, "shard_key": "b-latest", "total": 2},
     ]
+
+
+def test_main_does_not_load_segmenter_when_every_shard_is_already_verified(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fake_driver = mock.Mock()
+    fake_driver.has_verified_checkpoint.return_value = True
+    segmenter = mock.Mock()
+    monkeypatch.setattr(driver_mod, "StreamDriver", mock.Mock(return_value=fake_driver))
+    monkeypatch.setattr(
+        driver_mod,
+        "list_remote_shard_keys",
+        mock.Mock(side_effect=[[], [], ["a-latest", "b-latest"]]),
+    )
+    monkeypatch.setattr("huggingface_hub.HfApi", mock.Mock())
+    monkeypatch.setattr(
+        "osm_polygon_sentence_relevance.sentences.sat.SaTSentenceSegmenter",
+        segmenter,
+    )
+
+    result = main(
+        [
+            "stream-build",
+            "--confirm-offload",
+            "--run-id",
+            "run-1",
+            "--staging-revision",
+            "rev",
+            "--repo-id",
+            "owner/repo",
+            "--upstream-repo-id",
+            "upstream/repo",
+            "--resolved-revision",
+            "a" * 40,
+            "--source-commit",
+            "b" * 40,
+            "--work-dir",
+            str(tmp_path),
+        ]
+    )
+
+    assert result == 0
+    segmenter.assert_not_called()
+    fake_driver.process_shard.assert_not_called()
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert events == [{"completed": 2, "event": "resume", "remaining": 0, "total": 2}]
 
 
 def test_download_shard_wraps_optional_probe_failure(tmp_path: Path) -> None:

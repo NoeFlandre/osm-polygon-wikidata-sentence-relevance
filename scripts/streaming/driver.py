@@ -724,15 +724,14 @@ def main(argv: list[str] | None = None) -> int:
         optional_shard_keys=optional_shard_keys,
     )
 
-    from osm_polygon_sentence_relevance.sentences.sat import SaTSentenceSegmenter
-
-    segmenter = SaTSentenceSegmenter(
-        model_name=args.model_name,
-        split_kwargs=sat_split_kwargs(args.batch_size),
-        device=args.device,
-    )
-
     if args.command == "process-shard":
+        from osm_polygon_sentence_relevance.sentences.sat import SaTSentenceSegmenter
+
+        segmenter = SaTSentenceSegmenter(
+            model_name=args.model_name,
+            split_kwargs=sat_split_kwargs(args.batch_size),
+            device=args.device,
+        )
         driver.process_shard(args.shard, segmenter=segmenter)
         print(f"OK: processed and offloaded {args.shard}")
         return 0
@@ -750,13 +749,44 @@ def main(argv: list[str] | None = None) -> int:
         if args.max_shards is not None:
             shard_keys = shard_keys[: args.max_shards]
         total = len(shard_keys)
-        for index, shard_key in enumerate(shard_keys, start=1):
-            if driver.has_verified_checkpoint(shard_key) is not True:
-                driver.process_shard(shard_key, segmenter=segmenter)
+        pending_shards = [
+            shard_key
+            for shard_key in shard_keys
+            if driver.has_verified_checkpoint(shard_key) is not True
+        ]
+        previously_completed = total - len(pending_shards)
+        print(
+            json.dumps(
+                {
+                    "completed": previously_completed,
+                    "event": "resume",
+                    "remaining": len(pending_shards),
+                    "total": total,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+            flush=True,
+        )
+        if not pending_shards:
+            return 0
+
+        from osm_polygon_sentence_relevance.sentences.sat import SaTSentenceSegmenter
+
+        segmenter = SaTSentenceSegmenter(
+            model_name=args.model_name,
+            split_kwargs=sat_split_kwargs(args.batch_size),
+            device=args.device,
+        )
+        for completed_count, shard_key in enumerate(
+            pending_shards,
+            start=previously_completed + 1,
+        ):
+            driver.process_shard(shard_key, segmenter=segmenter)
             print(
                 json.dumps(
                     {
-                        "completed": index,
+                        "completed": completed_count,
                         "shard_key": shard_key,
                         "total": total,
                     },
