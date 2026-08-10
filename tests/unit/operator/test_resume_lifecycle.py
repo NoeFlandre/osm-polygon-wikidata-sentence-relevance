@@ -1407,7 +1407,7 @@ def test_resume_after_recovery_reattaches_to_running_continuation(
     def fake_optimize(args, store, config, fallback_site, fallback_job_id):
         return fallback_site, fallback_job_id
 
-    monkeypatch.setattr(cli, "_optimize_queued_start", fake_optimize)
+    monkeypatch.setattr(cli, "_race_queued_start", fake_optimize)
 
     args = _resume_args(config.run_id)
     assert cli._resume_run(config.run_id, args) == 0

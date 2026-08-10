@@ -19,6 +19,7 @@ from osm_polygon_sentence_relevance.operator.oar import (
 
 DEFAULT_LABEL_WALLTIME_SECONDS = 3_300
 MICRO_LABEL_WALLTIME_SECONDS = 1_200
+DEFAULT_SPLIT_WALLTIME_SECONDS = 1_800
 _LABEL_GRACE_SECONDS = 300
 _LABEL_SCHEDULER_MARGIN_SECONDS = 300
 
@@ -66,14 +67,21 @@ class RemoteLayout:
         return self.input_dir / "v2-sentences.parquet"
 
 
-def split_submission(config: OperatorConfig, layout: RemoteLayout) -> SubmissionRequest:
+def split_submission(
+    config: OperatorConfig,
+    layout: RemoteLayout,
+    *,
+    walltime_seconds: int = DEFAULT_SPLIT_WALLTIME_SECONDS,
+) -> SubmissionRequest:
     """Build one resumable splitter submission."""
 
     revision = config.input_dataset_revision
     if revision is None:
         raise ValueError("immutable input revision is required")
     shard = (config.region or "") if config.scope is Scope.REGION else ""
-    command = (
+    if not 900 <= walltime_seconds <= 3_600:
+        raise ValueError("split walltime must be between 15 and 60 minutes")
+    command: tuple[str, ...] = (
         str(layout.repo / "scripts/grid5000/submit_streaming_build.sh"),
         str(layout.repo),
         str(layout.hf_home),
@@ -88,6 +96,8 @@ def split_submission(config: OperatorConfig, layout: RemoteLayout) -> Submission
         shard,
         config.source_commit,
     )
+    if walltime_seconds != DEFAULT_SPLIT_WALLTIME_SECONDS:
+        command += (str(walltime_seconds),)
     return SubmissionRequest(command)
 
 
@@ -259,6 +269,7 @@ def llama_build_submission(layout: RemoteLayout) -> SubmissionRequest:
 __all__ = [
     "RemoteLayout",
     "DEFAULT_LABEL_WALLTIME_SECONDS",
+    "DEFAULT_SPLIT_WALLTIME_SECONDS",
     "MICRO_LABEL_WALLTIME_SECONDS",
     "label_submission",
     "llama_build_submission",

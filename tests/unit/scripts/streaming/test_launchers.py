@@ -85,15 +85,14 @@ def test_finalization_payload_treats_all_as_inventory_sentinel() -> None:
 def test_split_job_uses_short_resumable_walltime_and_deadline() -> None:
     text = _text("run_streaming_build_job.sh")
     assert 'if [ "${COMPUTE_ENVIRONMENT_REUSED:-0}" -eq 1 ]; then' in text
-    assert 'DEADLINE_DURATION="28m"' in text
-    assert 'DEADLINE_GRACE="1m"' in text
-    assert 'DEADLINE_DURATION="25m"' in text
-    assert 'DEADLINE_GRACE="4m"' in text
+    assert "grace_seconds=60" in text
+    assert "grace_seconds=240" in text
+    assert 'DEADLINE_GRACE="${grace_seconds}s"' in text
     assert (
         'deadline_helper_run "${DEADLINE_DURATION}" "${DEADLINE_GRACE}" '
         '"${PAYLOAD}"' in text
     )
-    assert "one minute of scheduler margin" in text
+    assert "one scheduler minute" in text
 
 
 def test_job_marks_failed_managed_root_for_later_cleanup() -> None:
@@ -105,14 +104,24 @@ def test_job_marks_failed_managed_root_for_later_cleanup() -> None:
 def test_submitter_uses_shared_gpu_resource_helper() -> None:
     text = _text("submit_streaming_build.sh")
     assert 'HELPER="${REPO_ROOT}/scripts/grid5000/_submit_gpu_job.sh"' in text
-    assert 'exec "${HELPER}" "40000" "00:30:00" "${policy_type}"' in text
+    assert 'exec "${HELPER}" "40000" "${walltime}" "${policy_type}"' in text
     assert "exec oarsub" not in text
-    assert '"00:30:00"' in text
+    assert 'WALLTIME_SECONDS="${13:-1800}"' in text
+    assert "STREAMING_WALLTIME_SECONDS=${WALLTIME_SECONDS}" in text
     assert "TZ=Europe/Paris date" in text
     assert "policy_type=night" in text
     assert "policy_type=day" in text
     assert " -I" not in text
     assert "device auto" not in text
+
+
+def test_streaming_wrapper_derives_deadline_from_scheduler_walltime() -> None:
+    text = _text("run_streaming_build_job.sh")
+    assert 'STREAMING_WALLTIME_SECONDS="${STREAMING_WALLTIME_SECONDS:-1800}"' in text
+    assert (
+        "deadline_seconds=$((STREAMING_WALLTIME_SECONDS - grace_seconds - 60))" in text
+    )
+    assert 'DEADLINE_DURATION="${deadline_seconds}s"' in text
 
 
 def test_finalization_submissions_are_night_bound() -> None:

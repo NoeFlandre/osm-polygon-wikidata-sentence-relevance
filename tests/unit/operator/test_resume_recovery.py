@@ -113,7 +113,7 @@ def test_resume_live_job_reattaches_without_submission(
         return ExitClass.COMPLETE
 
     monkeypatch.setattr(cli, "_classify_or_continue", classify)
-    monkeypatch.setattr(cli, "_optimize_queued_start", optimize)
+    monkeypatch.setattr(cli, "_race_queued_start", optimize)
     args = _resume_args(config.run_id)
     assert cli._resume_run(config.run_id, args) == 0
     assert optimized == [("sophia", 123)]
@@ -191,7 +191,7 @@ def test_resume_prepared_continuation_validates_assets_and_submits(
     )
     monkeypatch.setattr(
         cli,
-        "_optimize_queued_start",
+        "_race_queued_start",
         lambda _args, _store, _config, site, job_id: (site, job_id),
     )
     args = _resume_args(config.run_id)
@@ -264,7 +264,7 @@ def test_resume_prepared_stage_all_reuses_finalized_split_output(
     )
     monkeypatch.setattr(
         cli,
-        "_optimize_queued_start",
+        "_race_queued_start",
         lambda _args, _store, _config, site, job_id: (site, job_id),
     )
 
@@ -358,7 +358,7 @@ def test_resume_prepared_v2_production_submits_full_lane_without_resplitting(
     )
     monkeypatch.setattr(
         cli,
-        "_optimize_queued_start",
+        "_race_queued_start",
         lambda _args, _store, _config, site, job_id: (site, job_id),
     )
 

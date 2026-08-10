@@ -19,6 +19,8 @@ from osm_polygon_sentence_relevance.operator.sites import (
 
 IMMEDIATE_START_LIMIT = timedelta(minutes=10)
 UNPREDICTED_TRIAL_SECONDS = 120.0
+QUEUED_RESCAN_SECONDS = 300.0
+IMMEDIATE_TRIAL_WALLTIME_SECONDS = 900
 
 
 @dataclass(frozen=True, slots=True)
@@ -260,14 +262,69 @@ def attempt_immediate_replacement(
     return ReplacementOutcome(fallback_site, fallback_job_id, replaced=False)
 
 
+def race_queued_replacements(
+    *,
+    fallback_site: str,
+    fallback_job_id: int,
+    attempt: Callable[[str, int], ReplacementOutcome],
+    status: Callable[[str, int], JobStatus],
+    emit: Callable[[str], None],
+    sleep: Callable[[float], None],
+    wall_clock: Callable[[], datetime],
+    rescan_seconds: float = QUEUED_RESCAN_SECONDS,
+) -> ReplacementOutcome:
+    """Keep racing one queued fallback until it starts or becomes imminent.
+
+    Each ``attempt`` may temporarily submit one durably recorded trial while
+    retaining the current fallback. A failed scan therefore leaves exactly one
+    queued allocation. The next scan re-probes live capacity instead of waiting
+    indefinitely on a distant or unpredicted queue entry.
+    """
+
+    if fallback_job_id <= 0:
+        raise ValueError("fallback_job_id must be positive")
+    if rescan_seconds <= 0:
+        raise ValueError("rescan interval must be positive")
+    site = fallback_site
+    job_id = fallback_job_id
+    replaced = False
+    while True:
+        outcome = attempt(site, job_id)
+        site = outcome.site
+        job_id = outcome.job_id
+        replaced = replaced or outcome.replaced
+        # ``attempt_immediate_replacement`` only adopts after observing the
+        # trial in RUNNING, so another network status round-trip is redundant.
+        if outcome.replaced:
+            return ReplacementOutcome(site, job_id, replaced=True)
+        observed = status(site, job_id)
+        if observed.state is not JobState.QUEUED:
+            return ReplacementOutcome(site, job_id, replaced)
+        now = wall_clock()
+        distant = observed.scheduled_start is None or should_seek_replacement(
+            observed,
+            now=now,
+        )
+        if not distant:
+            return ReplacementOutcome(site, job_id, replaced)
+        emit(
+            f"Job {job_id} on {site} remains queued; checking every site "
+            f"again in {int(rescan_seconds)} seconds"
+        )
+        sleep(rescan_seconds)
+
+
 __all__ = [
     "IMMEDIATE_START_LIMIT",
+    "IMMEDIATE_TRIAL_WALLTIME_SECONDS",
+    "QUEUED_RESCAN_SECONDS",
     "UNPREDICTED_TRIAL_SECONDS",
     "ReplacementCandidate",
     "ReplacementOutcome",
     "attempt_immediate_replacement",
     "forecast_exceeds_immediate_window",
     "policy_type_for",
+    "race_queued_replacements",
     "rank_replacement_candidates",
     "should_seek_replacement",
 ]

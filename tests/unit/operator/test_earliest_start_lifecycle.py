@@ -8,10 +8,13 @@ from datetime import datetime
 import pytest
 
 from osm_polygon_sentence_relevance.operator.earliest_start import (
+    QUEUED_RESCAN_SECONDS,
     ReplacementCandidate,
     ReplacementOutcome,
     attempt_immediate_replacement,
+    forecast_exceeds_immediate_window,
     policy_type_for,
+    race_queued_replacements,
 )
 from osm_polygon_sentence_relevance.operator.oar import GRID5000_TZ, JobState, JobStatus
 from osm_polygon_sentence_relevance.operator.sites import SiteProbe
@@ -177,6 +180,7 @@ def test_late_scheduler_forecast_cancels_without_waiting_and_tries_next() -> Non
         (datetime(2026, 7, 30, 18, 50, tzinfo=GRID5000_TZ), "night"),
         (datetime(2026, 7, 30, 8, 50, tzinfo=GRID5000_TZ), "day"),
         (datetime(2026, 7, 30, 8, 30, tzinfo=GRID5000_TZ), "night"),
+        (datetime(2026, 7, 30, 20, 0, tzinfo=GRID5000_TZ), "night"),
         (datetime(2026, 8, 1, 12, 0, tzinfo=GRID5000_TZ), "night"),
     ],
 )
@@ -194,6 +198,68 @@ def test_policy_type_rejects_invalid_inputs() -> None:
             datetime(2026, 7, 30, 10, 0, tzinfo=GRID5000_TZ),
             walltime_seconds=0,
         )
+
+
+def test_forecast_window_rejects_naive_clock() -> None:
+    with pytest.raises(ValueError, match="timezone-aware"):
+        forecast_exceeds_immediate_window(
+            JobStatus(42, JobState.QUEUED),
+            now=datetime(2026, 7, 30, 10, 0),
+        )
+
+
+def test_replacement_rejects_invalid_job_and_durations() -> None:
+    harness = _Harness()
+    common = {
+        "fallback_site": "sophia",
+        "candidates": (),
+        "prepare": harness.prepare,
+        "submit": harness.submit,
+        "status": harness.status,
+        "cancel": harness.cancel,
+        "persist_trial": harness.persist,
+        "adopt_trial": harness.adopt,
+        "clear_trial": harness.clear,
+        "emit": harness.emitted.append,
+        "monotonic": lambda: harness.clock,
+        "sleep": harness.sleep,
+        "wall_clock": lambda: datetime(2026, 7, 30, 14, 0, tzinfo=GRID5000_TZ),
+    }
+    with pytest.raises(ValueError, match="fallback_job_id must be positive"):
+        attempt_immediate_replacement(fallback_job_id=0, **common)
+    with pytest.raises(ValueError, match="trial and poll durations must be positive"):
+        attempt_immediate_replacement(
+            fallback_job_id=42,
+            trial_seconds=0,
+            **common,
+        )
+
+
+def test_existing_trial_is_reattached_without_resubmission() -> None:
+    harness = _Harness(statuses={101: [JobStatus(101, JobState.RUNNING)]})
+    outcome = attempt_immediate_replacement(
+        fallback_site="sophia",
+        fallback_job_id=42,
+        candidates=(),
+        prepare=harness.prepare,
+        submit=harness.submit,
+        status=harness.status,
+        cancel=harness.cancel,
+        persist_trial=harness.persist,
+        adopt_trial=harness.adopt,
+        clear_trial=harness.clear,
+        emit=harness.emitted.append,
+        monotonic=lambda: harness.clock,
+        sleep=harness.sleep,
+        wall_clock=lambda: datetime(2026, 7, 30, 14, 0, tzinfo=GRID5000_TZ),
+        existing_trial=(_candidate("nancy"), 101, 60),
+    )
+    assert outcome == ReplacementOutcome("nancy", 101, replaced=True)
+    assert harness.submitted == []
+    assert harness.emitted == [
+        "Reattaching to immediate-start trial job 101 on nancy",
+        "Trial job 101 is running on nancy; cancelled fallback job 42",
+    ]
 
 
 def test_failed_candidate_preparation_moves_to_next_candidate() -> None:
@@ -249,3 +315,117 @@ def test_fallback_start_cancels_trial_before_it_can_run() -> None:
     assert harness.cancelled == [("nancy", 101)]
     assert harness.adopted == []
     assert harness.clock == 0
+
+
+def test_distant_fallback_is_rescanned_until_a_replacement_starts() -> None:
+    attempts = iter(
+        (
+            ReplacementOutcome("sophia", 42, replaced=False),
+            ReplacementOutcome("nancy", 101, replaced=True),
+        )
+    )
+    observed: list[tuple[str, int]] = []
+    sleeps: list[float] = []
+
+    def status(site: str, job_id: int) -> JobStatus:
+        observed.append((site, job_id))
+        if job_id == 42:
+            return JobStatus(
+                42,
+                JobState.QUEUED,
+                scheduled_start="2026-07-30 19:00:00",
+            )
+        return JobStatus(101, JobState.RUNNING)
+
+    outcome = race_queued_replacements(
+        fallback_site="sophia",
+        fallback_job_id=42,
+        attempt=lambda _site, _job_id: next(attempts),
+        status=status,
+        emit=lambda _message: None,
+        sleep=sleeps.append,
+        wall_clock=lambda: datetime(2026, 7, 30, 14, 0, tzinfo=GRID5000_TZ),
+    )
+
+    assert outcome == ReplacementOutcome("nancy", 101, replaced=True)
+    assert observed == [("sophia", 42)]
+    assert sleeps == [QUEUED_RESCAN_SECONDS]
+
+
+def test_unpredicted_queue_is_rescanned_but_near_forecast_is_not() -> None:
+    attempts = 0
+    sleeps: list[float] = []
+
+    def attempt(site: str, job_id: int) -> ReplacementOutcome:
+        nonlocal attempts
+        attempts += 1
+        return ReplacementOutcome(site, job_id, replaced=False)
+
+    statuses = iter(
+        (
+            JobStatus(42, JobState.QUEUED, scheduled_start=None),
+            JobStatus(
+                42,
+                JobState.QUEUED,
+                scheduled_start="2026-07-30 14:08:00",
+            ),
+        )
+    )
+    outcome = race_queued_replacements(
+        fallback_site="sophia",
+        fallback_job_id=42,
+        attempt=attempt,
+        status=lambda _site, _job_id: next(statuses),
+        emit=lambda _message: None,
+        sleep=sleeps.append,
+        wall_clock=lambda: datetime(2026, 7, 30, 14, 0, tzinfo=GRID5000_TZ),
+    )
+
+    assert outcome == ReplacementOutcome("sophia", 42, replaced=False)
+    assert attempts == 2
+    assert sleeps == [QUEUED_RESCAN_SECONDS]
+
+
+def test_rolling_race_reports_next_scan_and_validates_interval() -> None:
+    emitted: list[str] = []
+    statuses = iter(
+        (
+            JobStatus(42, JobState.QUEUED, scheduled_start=None),
+            JobStatus(42, JobState.RUNNING),
+        )
+    )
+    outcome = race_queued_replacements(
+        fallback_site="sophia",
+        fallback_job_id=42,
+        attempt=lambda site, job_id: ReplacementOutcome(site, job_id, False),
+        status=lambda _site, _job_id: next(statuses),
+        emit=emitted.append,
+        sleep=lambda _seconds: None,
+        wall_clock=lambda: datetime(2026, 7, 30, 14, 0, tzinfo=GRID5000_TZ),
+    )
+    assert outcome == ReplacementOutcome("sophia", 42, replaced=False)
+    assert emitted == [
+        "Job 42 on sophia remains queued; checking every site again in 300 seconds"
+    ]
+
+    with pytest.raises(ValueError, match="rescan interval must be positive"):
+        race_queued_replacements(
+            fallback_site="sophia",
+            fallback_job_id=42,
+            attempt=lambda site, job_id: ReplacementOutcome(site, job_id, False),
+            status=lambda _site, _job_id: JobStatus(42, JobState.RUNNING),
+            emit=lambda _message: None,
+            sleep=lambda _seconds: None,
+            wall_clock=lambda: datetime(2026, 7, 30, 14, 0, tzinfo=GRID5000_TZ),
+            rescan_seconds=0,
+        )
+    with pytest.raises(ValueError, match="fallback_job_id must be positive"):
+        race_queued_replacements(
+            fallback_site="sophia",
+            fallback_job_id=0,
+            attempt=lambda site, job_id: ReplacementOutcome(site, job_id, False),
+            status=lambda _site, _job_id: JobStatus(42, JobState.RUNNING),
+            emit=lambda _message: None,
+            sleep=lambda _seconds: None,
+            wall_clock=lambda: datetime(2026, 7, 30, 14, 0, tzinfo=GRID5000_TZ),
+        )

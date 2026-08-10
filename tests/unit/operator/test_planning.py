@@ -235,6 +235,25 @@ def test_region_split_serializes_exact_shard() -> None:
     assert request.command[-3] == "0"
 
 
+def test_split_trial_serializes_short_scheduler_walltime() -> None:
+    request = split_submission(
+        _config(stage="split"),
+        RemoteLayout(PurePosixPath("/r")),
+        walltime_seconds=900,
+    )
+    assert request.command[-1] == "900"
+
+
+@pytest.mark.parametrize("walltime_seconds", [899, 3_601])
+def test_split_rejects_out_of_contract_walltime(walltime_seconds: int) -> None:
+    with pytest.raises(ValueError, match="between 15 and 60 minutes"):
+        split_submission(
+            _config(stage="split"),
+            RemoteLayout(PurePosixPath("/r")),
+            walltime_seconds=walltime_seconds,
+        )
+
+
 def test_label_serializes_context_and_concurrency() -> None:
     request = label_submission(
         _config(stage="label"),

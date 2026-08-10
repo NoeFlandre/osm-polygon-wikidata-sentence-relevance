@@ -166,7 +166,7 @@ def test_cli_adopts_running_trial_then_cancels_fallback(
     assert durable.facts["replacement_status"] == "adopted"
     assert cancelled == [("sophia", 42)]
     assert len(submitted_requests) == 1
-    assert submitted_requests[0].command[1:3] == ("40000", "00:20:00")
+    assert submitted_requests[0].command[1:3] == ("40000", "00:15:00")
     assert submitted_requests[0].command[3] in {"day", "night"}
 
 
@@ -371,7 +371,13 @@ def test_cli_split_replacement_uses_split_submission_without_llama_runtime(
     monkeypatch.setattr(cli, "_remote_home", lambda _ssh: PurePosixPath("/home/u"))
     monkeypatch.setattr(cli, "_usage_policy_preflight", lambda *_a: None)
     monkeypatch.setattr(cli, "ensure_home_headroom", lambda *_a, **_kw: None)
-    monkeypatch.setattr(cli, "split_submission", lambda *_args: "split-request")
+    split_kwargs: list[dict[str, Any]] = []
+
+    def split_request(*_args: Any, **kwargs: Any) -> str:
+        split_kwargs.append(kwargs)
+        return "split-request"
+
+    monkeypatch.setattr(cli, "split_submission", split_request)
     monkeypatch.setattr(
         cli,
         "probe_site",
@@ -394,6 +400,7 @@ def test_cli_split_replacement_uses_split_submission_without_llama_runtime(
     )
     assert prepared == ["split"]
     assert submitted == ["split-request"]
+    assert split_kwargs == [{"walltime_seconds": 900}]
 
 
 def test_cli_recovers_persisted_running_trial(
@@ -473,8 +480,7 @@ def test_cli_finishes_fallback_cancellation_after_adoption(
             del preflight
 
         def status(self, job_id: int) -> JobStatus:
-            state = JobState.RUNNING if job_id == 101 else JobState.QUEUED
-            return JobStatus(job_id, state)
+            return JobStatus(job_id, JobState.RUNNING)
 
         def cancel(self, job_id: int) -> None:
             cancelled.append((self.site, job_id))
@@ -542,3 +548,107 @@ def test_cli_reoptimizes_adopted_queue_without_start_prediction(
     )
     assert len(submitted) == 1
     assert cancelled == [("sophia", 42)]
+
+
+def test_cli_reoptimizes_adopted_queue_with_distant_forecast(
+    tmp_path: Any,
+    monkeypatch: Any,
+) -> None:
+    config, store = _queued_store(tmp_path)
+    current = store.load()
+    store.transition(
+        expected=current.phase,
+        target=current.phase,
+        facts={
+            "site": "nancy",
+            "job_id": 101,
+            "replacement_status": "adopted",
+            "fallback_site": "sophia",
+            "fallback_job_id": 42,
+            "fallback_cancelled": False,
+        },
+    )
+    cancelled: list[tuple[str, int]] = []
+    submitted: list[Any] = []
+
+    class _Oar:
+        def __init__(self, ssh: _Ssh, *, preflight: Any = None) -> None:
+            self.site = ssh.target
+            self.preflight = preflight
+
+        def status(self, job_id: int) -> JobStatus:
+            if job_id in {42, 101}:
+                return JobStatus(
+                    job_id,
+                    JobState.QUEUED,
+                    scheduled_start="2099-07-29 19:00:00",
+                )
+            return JobStatus(job_id, JobState.RUNNING)
+
+        def submit(self, request: Any) -> int:
+            submitted.append(request)
+            return 102
+
+        def cancel(self, job_id: int) -> None:
+            cancelled.append((self.site, job_id))
+
+    monkeypatch.setattr(cli, "SshClient", _Ssh)
+    monkeypatch.setattr(cli, "OarClient", _Oar)
+    monkeypatch.setattr(cli, "Stager", _Stager)
+    monkeypatch.setattr(cli, "_remote_home", lambda _ssh: PurePosixPath("/home/u"))
+    monkeypatch.setattr(cli, "_usage_policy_preflight", lambda *_a: None)
+    monkeypatch.setattr(cli, "ensure_home_headroom", lambda *_a, **_kw: None)
+    monkeypatch.setattr(cli, "probe_site", lambda site, *_a, **_kw: _ready_probe(site))
+    args = SimpleNamespace(site=["rennes"], gpu_memory_mb=40_000)
+
+    assert cli._optimize_queued_start(args, store, config, "nancy", 101) == (
+        "rennes",
+        102,
+    )
+    assert len(submitted) == 1
+    assert cancelled == [("sophia", 42), ("nancy", 101)]
+
+
+def test_cli_race_reprobes_after_waiting_without_duplicate_fallback(
+    tmp_path: Any,
+    monkeypatch: Any,
+) -> None:
+    config, store = _queued_store(tmp_path)
+    attempts: list[tuple[str, int]] = []
+    sleeps: list[float] = []
+
+    def optimize(
+        _args: Any,
+        _store: StateStore,
+        _config: OperatorConfig,
+        site: str,
+        job_id: int,
+    ) -> tuple[str, int]:
+        attempts.append((site, job_id))
+        return (site, job_id) if len(attempts) == 1 else ("nancy", 101)
+
+    class _Oar:
+        def __init__(self, _ssh: _Ssh, *, preflight: Any = None) -> None:
+            del preflight
+
+        def status(self, job_id: int) -> JobStatus:
+            return JobStatus(
+                job_id,
+                JobState.QUEUED,
+                scheduled_start="2099-07-29 19:00:00",
+            )
+
+    monkeypatch.setattr(cli, "_optimize_queued_start", optimize)
+    monkeypatch.setattr(cli, "SshClient", _Ssh)
+    monkeypatch.setattr(cli, "OarClient", _Oar)
+    monkeypatch.setattr(cli.time, "sleep", sleeps.append)
+
+    assert cli._race_queued_start(
+        SimpleNamespace(site=["nancy"], gpu_memory_mb=40_000),
+        store,
+        config,
+        "sophia",
+        42,
+    ) == ("nancy", 101)
+    assert attempts == [("sophia", 42), ("sophia", 42)]
+    assert sleeps == [300.0]

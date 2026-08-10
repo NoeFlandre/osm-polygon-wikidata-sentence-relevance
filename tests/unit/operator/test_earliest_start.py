@@ -88,6 +88,12 @@ def test_naive_now_is_rejected() -> None:
     now = datetime(2026, 7, 29, 14, 0)
     with pytest.raises(ValueError, match="now must be timezone-aware"):
         should_seek_replacement(_status(), now=now)
+    with pytest.raises(ValueError, match="immediate_start_limit must be positive"):
+        should_seek_replacement(
+            _status(),
+            now=datetime(2026, 7, 29, 14, 0, tzinfo=GRID5000_TZ),
+            immediate_start_limit=timedelta(0),
+        )
 
 
 def test_candidates_require_factual_idle_compatible_capacity() -> None:

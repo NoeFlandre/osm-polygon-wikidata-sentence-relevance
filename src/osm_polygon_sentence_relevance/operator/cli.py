@@ -35,10 +35,14 @@ from osm_polygon_sentence_relevance.operator.controller import (
     LiveProgress,
 )
 from osm_polygon_sentence_relevance.operator.earliest_start import (
+    IMMEDIATE_TRIAL_WALLTIME_SECONDS,
+    QUEUED_RESCAN_SECONDS,
     UNPREDICTED_TRIAL_SECONDS,
     ReplacementCandidate,
+    ReplacementOutcome,
     attempt_immediate_replacement,
     policy_type_for,
+    race_queued_replacements,
     rank_replacement_candidates,
     should_seek_replacement,
 )
@@ -53,6 +57,7 @@ from osm_polygon_sentence_relevance.operator.oar import (
     GRID5000_TZ,
     ExitClass,
     JobState,
+    JobStatus,
     OarClient,
     is_live_state,
 )
@@ -965,7 +970,7 @@ def _classify_or_continue(
             new_job_id = controller_d.submit(component=Stage.SPLIT)
             continuation_log_name = "build.stdout.log"
         if getattr(args, "optimize_continuations", False):
-            optimized_site, optimized_job_id = _optimize_queued_start(
+            optimized_site, optimized_job_id = _race_queued_start(
                 args,
                 store,
                 config,
@@ -1180,22 +1185,21 @@ def _optimize_queued_start(
     active_stage = durable.facts.get("active_stage", config.stage.value)
     requires_label_runtime = active_stage == Stage.LABEL.value
     replacement_status = durable.facts.get("replacement_status")
-    adopted_unpredicted_queue = (
-        replacement_status == "adopted"
-        and fallback_status.state is JobState.QUEUED
-        and fallback_status.scheduled_start is None
+    adopted_queue = (
+        replacement_status == "adopted" and fallback_status.state is JobState.QUEUED
     )
-    if replacement_status == "adopted" and not adopted_unpredicted_queue:
+    if replacement_status == "adopted":
         old_site = durable.facts.get("fallback_site")
         old_job = durable.facts.get("fallback_job_id")
         if (
             isinstance(old_site, str)
             and type(old_job) is int
             and old_job > 0
+            and (old_site, old_job) != (fallback_site, fallback_job_id)
             and durable.facts.get("fallback_cancelled") is not True
         ):
             old_status = client(old_site)[2].status(old_job)
-            if old_status.state is JobState.QUEUED:
+            if is_live_state(old_status.state):
                 client(old_site)[2].cancel(old_job)
             current = store.load()
             store.transition(
@@ -1203,8 +1207,8 @@ def _optimize_queued_start(
                 target=current.phase,
                 facts={"fallback_cancelled": True},
             )
-        return fallback_site, fallback_job_id
-    if adopted_unpredicted_queue:
+        if not adopted_queue:
+            return fallback_site, fallback_job_id
         current = store.load()
         store.transition(
             expected=current.phase,
@@ -1328,7 +1332,13 @@ def _optimize_queued_start(
         if hasattr(stager, "clean_generated_python_caches"):
             stager.clean_generated_python_caches(layout)
         if not requires_label_runtime:
-            return oar.submit(split_submission(config, layout))
+            return oar.submit(
+                split_submission(
+                    config,
+                    layout,
+                    walltime_seconds=IMMEDIATE_TRIAL_WALLTIME_SECONDS,
+                )
+            )
         label_assets = assets[site]
         label_plan = _current_label_plan(store, config, layout)
         return oar.submit(
@@ -1338,10 +1348,10 @@ def _optimize_queued_start(
                 input_parquet=label_assets.input_parquet,
                 model_file=label_assets.model_file,
                 tokenizer_dir=label_assets.tokenizer_dir,
-                walltime_seconds=MICRO_LABEL_WALLTIME_SECONDS,
+                walltime_seconds=IMMEDIATE_TRIAL_WALLTIME_SECONDS,
                 policy_type=policy_type_for(
                     datetime.now(tz=GRID5000_TZ),
-                    walltime_seconds=MICRO_LABEL_WALLTIME_SECONDS,
+                    walltime_seconds=IMMEDIATE_TRIAL_WALLTIME_SECONDS,
                 ),
                 gpu_memory_mb=getattr(args, "gpu_memory_mb", 40_000),
                 label_plan=label_plan,
@@ -1406,6 +1416,51 @@ def _optimize_queued_start(
         wall_clock=lambda: datetime.now(tz=GRID5000_TZ),
         existing_trial=existing_trial,
         trial_seconds=UNPREDICTED_TRIAL_SECONDS,
+    )
+    return outcome.site, outcome.job_id
+
+
+def _race_queued_start(
+    args: SimpleNamespace,
+    store: StateStore,
+    config: OperatorConfig,
+    fallback_site: str,
+    fallback_job_id: int,
+) -> tuple[str, int]:
+    """Re-probe every site while a distant fallback remains queued."""
+
+    status_clients: dict[str, OarClient] = {}
+
+    def status(site: str, job_id: int) -> JobStatus:
+        client = status_clients.get(site)
+        if client is None:
+            client = OarClient(SshClient(target=site, command_timeout=1800))
+            status_clients[site] = client
+        return client.status(job_id)
+
+    def attempt(site: str, job_id: int) -> ReplacementOutcome:
+        optimized_site, optimized_job_id = _optimize_queued_start(
+            args,
+            store,
+            config,
+            site,
+            job_id,
+        )
+        return ReplacementOutcome(
+            optimized_site,
+            optimized_job_id,
+            replaced=(optimized_site, optimized_job_id) != (site, job_id),
+        )
+
+    outcome = race_queued_replacements(
+        fallback_site=fallback_site,
+        fallback_job_id=fallback_job_id,
+        attempt=attempt,
+        status=status,
+        emit=_milestone,
+        sleep=time.sleep,
+        wall_clock=lambda: datetime.now(tz=GRID5000_TZ),
+        rescan_seconds=QUEUED_RESCAN_SECONDS,
     )
     return outcome.site, outcome.job_id
 
@@ -1554,7 +1609,7 @@ def _resume_run(run_id: str, args: SimpleNamespace) -> int:
         )
         return 0
     site, job_id = candidate
-    site, job_id = _optimize_queued_start(
+    site, job_id = _race_queued_start(
         args,
         store,
         config,
@@ -1753,7 +1808,7 @@ def _run(args: SimpleNamespace) -> int:
     if config.stage in {Stage.SPLIT, Stage.ALL} and not split_done:
         for allocation in range(1, 101):
             job_id = controller.submit(component=Stage.SPLIT)
-            optimized_site, optimized_job_id = _optimize_queued_start(
+            optimized_site, optimized_job_id = _race_queued_start(
                 args,
                 store,
                 config,
@@ -1866,7 +1921,7 @@ def _run(args: SimpleNamespace) -> int:
                     label_plan=label_plan,
                 )
                 if config.stage is Stage.LABEL:
-                    optimized_site, optimized_job_id = _optimize_queued_start(
+                    optimized_site, optimized_job_id = _race_queued_start(
                         args,
                         store,
                         config,

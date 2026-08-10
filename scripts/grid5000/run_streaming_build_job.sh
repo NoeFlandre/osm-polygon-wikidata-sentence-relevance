@@ -113,18 +113,25 @@ fi
     2>"${JOB_LOG_DIR}/gpu_preflight.stderr.log"
 
 set +e
-# A validated reusable environment leaves enough of the 30-minute allocation
-# for 28 minutes of CUDA segmentation, one minute of graceful SIGINT handling,
-# and one minute of scheduler margin. A rebuilt environment keeps the measured
-# conservative 25/4/1-minute budget. Completed section batches are durable, so
-# either path resumes from the last validated batch after a forced stop.
-if [ "${COMPUTE_ENVIRONMENT_REUSED:-0}" -eq 1 ]; then
-    DEADLINE_DURATION="28m"
-    DEADLINE_GRACE="1m"
-else
-    DEADLINE_DURATION="25m"
-    DEADLINE_GRACE="4m"
+# Derive the payload deadline from the scheduler request. A reusable environment
+# reserves one minute each for graceful SIGINT and scheduler margin. A rebuilt
+# environment reserves four minutes for SIGINT plus one scheduler minute.
+# Completed section batches are durable across either path.
+STREAMING_WALLTIME_SECONDS="${STREAMING_WALLTIME_SECONDS:-1800}"
+if ! [[ "${STREAMING_WALLTIME_SECONDS}" =~ ^[0-9]+$ ]] || \
+   [ "${STREAMING_WALLTIME_SECONDS}" -lt 900 ] || \
+   [ "${STREAMING_WALLTIME_SECONDS}" -gt 3600 ]; then
+    echo "run_streaming_build_job: invalid scheduler walltime" >&2
+    exit 2
 fi
+if [ "${COMPUTE_ENVIRONMENT_REUSED:-0}" -eq 1 ]; then
+    grace_seconds=60
+else
+    grace_seconds=240
+fi
+deadline_seconds=$((STREAMING_WALLTIME_SECONDS - grace_seconds - 60))
+DEADLINE_DURATION="${deadline_seconds}s"
+DEADLINE_GRACE="${grace_seconds}s"
 readonly DEADLINE_DURATION DEADLINE_GRACE
 deadline_helper_run "${DEADLINE_DURATION}" "${DEADLINE_GRACE}" "${PAYLOAD}" \
     "${REPO_ROOT}" "${HF_HOME}" "${WORK_DIR}" \

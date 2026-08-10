@@ -46,17 +46,16 @@ exact session and log path.
 
 ## Earliest policy-compliant start
 
-When a fresh split submission, a regional label submission, or `resume` finds
-a queued job whose OAR start forecast is more than ten minutes away, it checks
-every configured site for a compatible GPU that is factually idle now. A site
-is eligible only when the required immutable runtime is staged there and the
-live usage-policy and home-quota checks pass. Worldwide `all` runs optimize
-the split allocation first; labeling then stays with the site holding the
-validated split output.
+When a fresh submission or `resume` finds a queued job whose OAR start forecast
+is more than ten minutes away, it checks every configured site for a compatible
+GPU that is factually idle now. It repeats that live scan every five minutes
+until the fallback starts, its forecast moves inside ten minutes, or a trial
+starts elsewhere. A site is eligible only when its required immutable runtime
+is staged and the live usage-policy and home-quota checks pass.
 
-The queued job remains the fallback. Replacement trials request a 20-minute
-allocation, which is easier for OAR to backfill than the normal 55-minute
-allocation. If OAR already forecasts a start more than ten minutes away, the
+The queued job remains the fallback. Replacement trials request a 15-minute
+allocation, which is easier for OAR to backfill than the normal allocation.
+If OAR already forecasts a start more than ten minutes away, the
 operator cancels that trial immediately and checks the next site. When OAR
 provides no forecast, the operator observes the trial for at most two minutes.
 Only after a trial is confirmed `Running` does it adopt that job ID and cancel
@@ -64,15 +63,15 @@ the old queued reservation. During the trial it also watches the fallback; if
 the fallback starts first, the trial is cancelled.
 
 The trial is tagged `day` or `night` using Europe/Paris time and its complete
-20-minute walltime. Near the 09:00 and 19:00 weekday boundaries, the operator
+15-minute walltime. Near the 09:00 and 19:00 weekday boundaries, the operator
 selects the next window when the job cannot fit entirely in the current one.
-Inside the allocation, inference receives ten minutes, followed by five
-minutes for graceful checkpointing and five minutes of scheduler margin. The
-same immutable run identity and checkpoint directory are reused by every
-allocation.
+The same immutable run identity and checkpoint directory are reused by every
+allocation. Split trials derive their processing deadline from the requested
+walltime, reserving one scheduler minute and either one or four minutes for
+graceful interruption depending on whether the compute environment is reused.
 
 This uses Grid'5000's documented exception for immediately available jobs of
-at most one hour. It does not infer an ETA from queue depth and does not submit
-speculative jobs to several sites. Ctrl-C leaves both job IDs in durable state;
+at most one hour. It does not infer an ETA from queue depth and never retains
+more than one fallback plus one trial. Ctrl-C leaves both job IDs in durable state;
 running the same `resume RUN_ID` command recovers the trial decision without a
 duplicate submission.

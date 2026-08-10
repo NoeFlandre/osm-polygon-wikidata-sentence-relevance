@@ -902,7 +902,7 @@ def test_fresh_v2_all_runs_smoke_then_full_without_replaying_split(
             return 80
 
     monkeypatch.setattr(cli, "Controller", LaneController)
-    monkeypatch.setattr(cli, "_optimize_queued_start", lambda *_args: ("sophia", 80))
+    monkeypatch.setattr(cli, "_race_queued_start", lambda *_args: ("sophia", 80))
     monkeypatch.setattr(cli, "preserve_label", lambda *_args: tmp_path / "smoke")
     monkeypatch.setattr(
         cli,
@@ -943,7 +943,7 @@ def test_fresh_split_submission_optimizes_before_monitoring(
         calls.append((fallback_site, fallback_job_id))
         return fallback_site, fallback_job_id
 
-    monkeypatch.setattr(cli, "_optimize_queued_start", fake_optimize)
+    monkeypatch.setattr(cli, "_race_queued_start", fake_optimize)
 
     assert cli._run(_run_args(stage="split", sites=["nancy"])) == 0
     assert calls == [("nancy", 80)]
@@ -988,7 +988,7 @@ def test_fresh_split_rebinds_monitoring_after_site_replacement(
         )
         return "sophia", 81
 
-    monkeypatch.setattr(cli, "_optimize_queued_start", replace_with_sophia)
+    monkeypatch.setattr(cli, "_race_queued_start", replace_with_sophia)
 
     assert cli._run(_run_args(stage="split", sites=["nancy", "sophia"])) == 0
     assert attached == ["sophia"]
@@ -1033,7 +1033,7 @@ def test_fresh_label_rebind_restages_candidate_assets(
         )
         return "sophia", 81
 
-    monkeypatch.setattr(cli, "_optimize_queued_start", replace_with_sophia)
+    monkeypatch.setattr(cli, "_race_queued_start", replace_with_sophia)
 
     args = _run_args(stage="label", sites=["nancy", "sophia"])
     args.sampling_target = None

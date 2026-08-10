@@ -4,8 +4,8 @@
 set -euo pipefail
 umask 077
 
-if [ "$#" -ne 12 ]; then
-    echo "submit_streaming_build: exactly twelve positional arguments are required" >&2
+if [ "$#" -lt 12 ] || [ "$#" -gt 13 ]; then
+    echo "submit_streaming_build: twelve or thirteen positional arguments are required" >&2
     exit 2
 fi
 
@@ -21,6 +21,7 @@ BATCH_SIZE="$9"; readonly BATCH_SIZE
 MAX_SHARDS="${10}"; readonly MAX_SHARDS
 SHARD_KEY="${11}"; readonly SHARD_KEY
 DATA_SOURCE_COMMIT="${12}"; readonly DATA_SOURCE_COMMIT
+WALLTIME_SECONDS="${13:-1800}"; readonly WALLTIME_SECONDS
 
 for path in "${REPO_ROOT}" "${HF_HOME}" "${LOG_ROOT}"; do
     case "${path}" in /*) ;; *) echo "submit_streaming_build: persistent path must be absolute" >&2; exit 2 ;; esac
@@ -42,7 +43,9 @@ if ! [[ "${OUTPUT_REPO_ID}" =~ ^[^/[:space:]]+/[^/[:space:]]+$ ]] || \
 fi
 if ! [[ "${RUN_ID}" =~ ^[a-z0-9][a-z0-9._-]*$ ]] || \
    ! [[ "${BATCH_SIZE}" =~ ^[1-9][0-9]*$ ]] || \
-   ! [[ "${MAX_SHARDS}" =~ ^(0|[1-9][0-9]*)$ ]]; then
+   ! [[ "${MAX_SHARDS}" =~ ^(0|[1-9][0-9]*)$ ]] || \
+   ! [[ "${WALLTIME_SECONDS}" =~ ^[0-9]+$ ]] || \
+   [ "${WALLTIME_SECONDS}" -lt 900 ] || [ "${WALLTIME_SECONDS}" -gt 3600 ]; then
     echo "submit_streaming_build: invalid run ID or numeric argument" >&2
     exit 2
 fi
@@ -66,14 +69,14 @@ shell_quote() {
     printf "'%s'" "${1//\'/\'\\\'\'}"
 }
 
-command_string="exec $(shell_quote "${WRAPPER}")"
-for value in "$@"; do
+command_string="exec env $(shell_quote "STREAMING_WALLTIME_SECONDS=${WALLTIME_SECONDS}") $(shell_quote "${WRAPPER}")"
+for value in "${@:1:12}"; do
     command_string="${command_string} $(shell_quote "${value}")"
 done
 
 # Keep streaming allocations small so OAR can backfill them quickly.  The
 # policy type is derived from the current Europe/Paris window and the full
-# 30-minute walltime, so a weekday job never crosses 09:00 or 19:00.
+# requested walltime, so a weekday job never crosses 09:00 or 19:00.
 read -r policy_weekday policy_hour policy_minute < <(
     TZ=Europe/Paris date '+%u %H %M'
 )
@@ -87,8 +90,13 @@ policy_type=night
 now_seconds=$((10#${policy_hour} * 3600 + 10#${policy_minute} * 60))
 if [ "${policy_weekday}" -le 5 ] &&
    [ "${now_seconds}" -ge $((9 * 3600)) ] &&
-   [ "$((now_seconds + 30 * 60))" -le $((19 * 3600)) ]; then
+   [ "$((now_seconds + WALLTIME_SECONDS))" -le $((19 * 3600)) ]; then
     policy_type=day
 fi
 
-exec "${HELPER}" "40000" "00:30:00" "${policy_type}" "${command_string}"
+printf -v walltime '%02d:%02d:%02d' \
+    "$((WALLTIME_SECONDS / 3600))" \
+    "$(((WALLTIME_SECONDS % 3600) / 60))" \
+    "$((WALLTIME_SECONDS % 60))"
+readonly walltime
+exec "${HELPER}" "40000" "${walltime}" "${policy_type}" "${command_string}"

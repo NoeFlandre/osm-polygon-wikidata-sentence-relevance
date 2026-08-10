@@ -53,9 +53,9 @@ def test_guide_documents_bounded_storage_and_resume() -> None:
 
 def test_guide_documents_environment_aware_split_deadlines() -> None:
     text = _text()
-    assert "28 minutes for segmentation" in text
+    assert "derives its processing deadline from the requested walltime" in text
     assert "one minute for graceful checkpointing" in text
-    assert "25-minute segmentation and four-minute checkpoint budget" in text
+    assert "four minutes when it must be rebuilt" in text
 
 
 def test_guide_uses_placeholders_without_personal_paths() -> None:
