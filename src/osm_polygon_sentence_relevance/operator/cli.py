@@ -9,7 +9,7 @@ import time
 from collections.abc import Callable, Mapping
 from dataclasses import replace
 from datetime import datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 from typing import Annotated, Any, Final
 
@@ -20,7 +20,7 @@ from osm_polygon_sentence_relevance.labeling.v2_contracts import (
     V2_LOGIT_PROMPT_VERSION,
 )
 from osm_polygon_sentence_relevance.operator import preflight as _preflight
-from osm_polygon_sentence_relevance.operator import recorded_job, relay
+from osm_polygon_sentence_relevance.operator import recorded_job, relay, split_relay
 from osm_polygon_sentence_relevance.operator.config import (
     DATA_ROOT,
     DEFAULT_SAMPLING_H3_RESOLUTION,
@@ -298,6 +298,97 @@ def _checkpoint_root(
     return str(label_plan.work_dir if label_plan is not None else layout.label_work)
 
 
+def _split_state_identity(config: OperatorConfig) -> dict[str, str | int]:
+    """Return the exact identity persisted by the streaming split driver."""
+
+    revision = config.input_dataset_revision
+    if revision is None:
+        raise RuntimeError("immutable input revision is required for split relay")
+    return {
+        "repo_id": config.output_dataset_id,
+        "resolved_revision": revision,
+        "source_commit": config.source_commit,
+        "run_id": config.run_id,
+        "staging_revision": f"checkpoints/{config.run_id}",
+        "pipeline_version": config.pipeline_version,
+        "model_name": config.split_model,
+        "batch_size": config.requirements.batch_size,
+    }
+
+
+def _recorded_split_resume_bundle(store: StateStore) -> PurePosixPath | None:
+    value = store.load().facts.get("split_resume_bundle")
+    return PurePosixPath(value) if isinstance(value, str) and value else None
+
+
+def _clear_consumed_split_resume_bundle(store: StateStore) -> None:
+    """Forget a one-shot bundle after its allocation reached a terminal state."""
+
+    if _recorded_split_resume_bundle(store) is None:
+        return
+    current = store.load()
+    store.transition(
+        expected=current.phase,
+        target=current.phase,
+        facts={"split_resume_bundle": ""},
+    )
+
+
+def _stage_split_snapshot(
+    *,
+    config: OperatorConfig,
+    source_site: str,
+    destination_site: str,
+) -> tuple[Path, str]:
+    """Relay one immutable split acceleration snapshot between frontends."""
+
+    source_ssh = SshClient(target=source_site, command_timeout=600)
+    source_layout = RemoteLayout(
+        _remote_home(source_ssh) / "osm-polygon-operator" / config.run_id
+    )
+    inventory = split_relay.retrieve_to_seagate(
+        source=relay.RemoteTransfer(ssh_target=source_site),
+        source_work_root=str(source_layout.split_work),
+        destination_root=DATA_ROOT / "runs",
+        run_id=config.run_id,
+        expected_identity=_split_state_identity(config),
+    )
+    destination_ssh = SshClient(target=destination_site, command_timeout=600)
+    destination_layout = RemoteLayout(
+        _remote_home(destination_ssh) / "osm-polygon-operator" / config.run_id
+    )
+    remote_bundle = split_relay.stage_to_destination(
+        inventory=inventory,
+        destination=relay.RemoteTransfer(ssh_target=destination_site),
+        destination_resume_root=str(destination_layout.split_resume),
+        expected_identity=_split_state_identity(config),
+    )
+    return inventory.root, remote_bundle
+
+
+def _restage_split_snapshot(
+    *,
+    config: OperatorConfig,
+    local_root: Path,
+    destination_site: str,
+) -> str:
+    """Stage an already validated Seagate snapshot to another trial site."""
+
+    from scripts.streaming.resume_bundle import validate_resume_bundle
+
+    inventory = validate_resume_bundle(local_root, _split_state_identity(config))
+    destination_ssh = SshClient(target=destination_site, command_timeout=600)
+    destination_layout = RemoteLayout(
+        _remote_home(destination_ssh) / "osm-polygon-operator" / config.run_id
+    )
+    return split_relay.stage_to_destination(
+        inventory=inventory,
+        destination=relay.RemoteTransfer(ssh_target=destination_site),
+        destination_resume_root=str(destination_layout.split_resume),
+        expected_identity=_split_state_identity(config),
+    )
+
+
 def _current_label_plan(
     store: StateStore,
     config: OperatorConfig,
@@ -370,6 +461,7 @@ def _prepare_destination_for_resume(
     """
 
     current = store.load()
+    is_label = current.facts.get("active_stage") == Stage.LABEL.value
     if current.phase is not RunPhase.REMOTE_PREPARED:
         store.transition(
             expected=current.phase,
@@ -390,7 +482,7 @@ def _prepare_destination_for_resume(
     stager = Stager(ssh)
     stager.prepare(config, layout)
     _stage_hf_token(stager, layout)
-    if relay_root is not None:
+    if relay_root is not None and is_label:
         assets = stager.prepare_label_assets(config, layout, download_input=True)
         if not assets.llama_server_ready:
 
@@ -407,6 +499,7 @@ def _prepare_destination_for_resume(
                 preflight=submission_preflight,
             )
             ensure_llama_server(ssh, oar, store, layout, poll_seconds)
+    if relay_root is not None:
         store.transition(
             expected=RunPhase.REMOTE_PREPARED,
             target=RunPhase.REMOTE_PREPARED,
@@ -967,7 +1060,10 @@ def _classify_or_continue(
             continuation_log_name = "labeling.stdout.log"
         else:
             iteration_label_plan = None
-            new_job_id = controller_d.submit(component=Stage.SPLIT)
+            new_job_id = controller_d.submit(
+                component=Stage.SPLIT,
+                split_resume_bundle=_recorded_split_resume_bundle(store),
+            )
             continuation_log_name = "build.stdout.log"
         if getattr(args, "optimize_continuations", False):
             optimized_site, optimized_job_id = _race_queued_start(
@@ -1007,6 +1103,8 @@ def _classify_or_continue(
         terminal = controller_d.monitor(new_job_id, log_name=continuation_log_name)
         if not _is_terminal_allocation(terminal):
             raise RuntimeError("continuation allocation failed")
+        if not is_label:
+            _clear_consumed_split_resume_bundle(store)
         status_d = oar_d.status(new_job_id)
         if is_label:
             label_work_root_d = (
@@ -1106,6 +1204,21 @@ def _relay_for_continuation(
 
     current = store.load()
     is_label = current.facts.get("active_stage") == Stage.LABEL.value
+    if not is_label:
+        local_root, remote_bundle = _stage_split_snapshot(
+            config=config,
+            source_site=source_site,
+            destination_site=destination_site,
+        )
+        store.transition(
+            expected=current.phase,
+            target=current.phase,
+            facts={
+                "relay_destination_site": destination_site,
+                "split_resume_bundle": remote_bundle,
+            },
+        )
+        return str(local_root)
     source_ssh = SshClient(target=source_site, command_timeout=600)
     source_layout = RemoteLayout(
         _remote_home(source_ssh) / "osm-polygon-operator" / config.run_id
@@ -1158,6 +1271,7 @@ def _optimize_queued_start(
 
     clients: dict[str, tuple[SshClient, RemoteLayout, OarClient]] = {}
     assets: dict[str, Any] = {}
+    split_bundles: dict[str, PurePosixPath] = {}
 
     def client(site: str) -> tuple[SshClient, RemoteLayout, OarClient]:
         cached = clients.get(site)
@@ -1321,6 +1435,31 @@ def _optimize_queued_start(
             if not label_assets.llama_server_ready:
                 raise RuntimeError("CUDA llama-server is not staged")
             assets[site] = label_assets
+        elif site != fallback_site:
+            source_ssh, source_layout, _source_oar = client(fallback_site)
+            has_split_state = _result_text(
+                source_ssh.run(
+                    f"if test -f {source_layout.split_work}/state.json; "
+                    "then printf yes; else printf no; fi"
+                )
+            )
+            if has_split_state == "yes":
+                _local_root, remote_bundle = _stage_split_snapshot(
+                    config=config,
+                    source_site=fallback_site,
+                    destination_site=site,
+                )
+                split_bundles[site] = PurePosixPath(remote_bundle)
+            else:
+                local_root_value = store.load().facts.get("resume_relay_root")
+                if isinstance(local_root_value, str) and local_root_value:
+                    split_bundles[site] = PurePosixPath(
+                        _restage_split_snapshot(
+                            config=config,
+                            local_root=Path(local_root_value),
+                            destination_site=site,
+                        )
+                    )
 
     def submit(candidate: ReplacementCandidate) -> int:
         site = candidate.site.name
@@ -1337,6 +1476,7 @@ def _optimize_queued_start(
                     config,
                     layout,
                     walltime_seconds=IMMEDIATE_TRIAL_WALLTIME_SECONDS,
+                    resume_bundle=split_bundles.get(site),
                 )
             )
         label_assets = assets[site]
@@ -1372,6 +1512,11 @@ def _optimize_queued_start(
                 "replacement_job_id": job_id,
                 "replacement_deadline_at": time.time() + remaining,
                 "replacement_status": "trial",
+                **(
+                    {"split_resume_bundle": str(split_bundles[site])}
+                    if site in split_bundles
+                    else {}
+                ),
             },
         )
 
@@ -1385,6 +1530,11 @@ def _optimize_queued_start(
                 "job_id": job_id,
                 "replacement_status": "adopted",
                 "fallback_cancelled": False,
+                **(
+                    {"split_resume_bundle": str(split_bundles[site])}
+                    if site in split_bundles
+                    else {}
+                ),
             },
         )
 
@@ -1543,7 +1693,10 @@ def _resume_run(run_id: str, args: SimpleNamespace) -> int:
         _stage_hf_token(stager, layout)
         active_stage = durable.facts.get("active_stage")
         if active_stage == Stage.SPLIT.value:
-            job_id = controller.submit(component=Stage.SPLIT)
+            job_id = controller.submit(
+                component=Stage.SPLIT,
+                split_resume_bundle=_recorded_split_resume_bundle(store),
+            )
             print(f"Submitted split continuation job {job_id}", flush=True)
             candidate = (site_value, job_id)
         else:
@@ -1835,6 +1988,7 @@ def _run(args: SimpleNamespace) -> int:
             outcome = controller.monitor(job_id, log_name="build.stdout.log")
             if outcome is not JobState.TERMINATED:
                 raise RuntimeError("sentence splitting allocation failed")
+            _clear_consumed_split_resume_bundle(store)
             split_exit_code = remote_exit_code(ssh, layout, job_id, "build.exit_code")
             if split_exit_code == 0:
                 break

@@ -230,9 +230,9 @@ def test_region_split_serializes_exact_shard() -> None:
     request = split_submission(
         _config(stage="split"), RemoteLayout(PurePosixPath("/r"))
     )
-    assert request.command[-1] == "a" * 40
-    assert request.command[-2] == "afghanistan-latest"
-    assert request.command[-3] == "0"
+    assert request.command[-3] == "a" * 40
+    assert request.command[-4] == "afghanistan-latest"
+    assert request.command[-5] == "0"
 
 
 def test_split_trial_serializes_short_scheduler_walltime() -> None:
@@ -241,7 +241,17 @@ def test_split_trial_serializes_short_scheduler_walltime() -> None:
         RemoteLayout(PurePosixPath("/r")),
         walltime_seconds=900,
     )
-    assert request.command[-1] == "900"
+    assert request.command[-2:] == ("900", "")
+
+
+def test_split_serializes_validated_resume_bundle() -> None:
+    request = split_submission(
+        _config(stage="split"),
+        RemoteLayout(PurePosixPath("/r")),
+        resume_bundle=PurePosixPath("/r/split-resume/" + "c" * 20),
+    )
+
+    assert request.command[-2:] == ("1800", "/r/split-resume/" + "c" * 20)
 
 
 @pytest.mark.parametrize("walltime_seconds", [899, 3_601])
@@ -613,7 +623,8 @@ def test_workflow_layout_and_finalization_commands() -> None:
     assert layout.repo == PurePosixPath("/r/repo")
     assert layout.hf_home == PurePosixPath("/r/hf_home")
     assert layout.logs == PurePosixPath("/r/logs")
-    assert layout.split_work == PurePosixPath("/r/split-work")
+    assert layout.split_work == PurePosixPath("/r/work")
+    assert layout.split_resume == PurePosixPath("/r/split-resume")
     assert layout.label_work == PurePosixPath("/r/label-work")
     assert layout.label_output == PurePosixPath("/r/label-output")
     final = split_finalization_submission(_config(stage="split"), layout)

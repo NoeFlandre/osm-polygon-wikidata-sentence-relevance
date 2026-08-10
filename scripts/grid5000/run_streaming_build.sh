@@ -4,8 +4,8 @@
 set -euo pipefail
 umask 077
 
-if [ "$#" -ne 12 ]; then
-    echo "run_streaming_build: exactly twelve positional arguments are required" >&2
+if [ "$#" -ne 13 ]; then
+    echo "run_streaming_build: exactly thirteen positional arguments are required" >&2
     exit 2
 fi
 
@@ -21,6 +21,7 @@ BATCH_SIZE="$9"; readonly BATCH_SIZE
 MAX_SHARDS="${10}"; readonly MAX_SHARDS
 SHARD_KEY="${11}"; readonly SHARD_KEY
 DATA_SOURCE_COMMIT="${12}"; readonly DATA_SOURCE_COMMIT
+RESUME_BUNDLE="${13}"; readonly RESUME_BUNDLE
 
 if ! [[ "${DATA_SOURCE_COMMIT}" =~ ^[0-9a-f]{40}$ ]]; then
     echo "run_streaming_build: data source commit must be 40 lowercase hex characters" >&2
@@ -61,6 +62,9 @@ if [ "${MAX_SHARDS}" -gt 0 ]; then
 fi
 if [ -n "${SHARD_KEY}" ]; then
     args+=(--shard "${SHARD_KEY}")
+fi
+if [ -n "${RESUME_BUNDLE}" ]; then
+    args+=(--resume-bundle "${RESUME_BUNDLE}")
 fi
 
 exec "${PYTHON}" "${args[@]}"

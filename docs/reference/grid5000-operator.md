@@ -28,7 +28,11 @@ run identity from the external-volume state, reattaches a recorded live OAR job
 without submitting a duplicate, and continues only from validated checkpoint
 pairs after a terminal allocation. When a compatible site changes, checkpoints
 are validated, relayed through the external volume, independently read back,
-and installed before one new bounded allocation is submitted.
+and installed before one new bounded allocation is submitted. Sentence
+splitting relays only its verified completed-shard ledger and, when present,
+the single active partial shard; immutable input Parquet files are downloaded
+again on the destination site. Labeling continues to relay its validated batch
+checkpoint pairs.
 
 `cleanup` previews pipeline-owned completed or failed remote runs unless
 `--execute` is supplied. Ctrl-C during `run` or `resume` stops local monitoring

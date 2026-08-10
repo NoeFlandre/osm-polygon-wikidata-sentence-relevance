@@ -108,6 +108,7 @@ class Controller:
         policy_type: str | None = None,
         gpu_memory_mb: int = 40_000,
         label_plan: LabelLanePlan | None = None,
+        split_resume_bundle: PurePosixPath | None = None,
     ) -> int:
         """Submit exactly once from REMOTE_PREPARED."""
 
@@ -135,7 +136,11 @@ class Controller:
         if hasattr(self.stager, "clean_generated_python_caches"):
             self.stager.clean_generated_python_caches(self.layout)
         if selected is Stage.SPLIT:
-            request = split_submission(self.config, self.layout)
+            request = split_submission(
+                self.config,
+                self.layout,
+                resume_bundle=split_resume_bundle,
+            )
         elif selected is Stage.LABEL:
             if input_parquet is None or model_file is None or tokenizer_dir is None:
                 raise ControllerError("label assets are required")
@@ -169,6 +174,11 @@ class Controller:
                 **(
                     {"requested_walltime_seconds": walltime_seconds}
                     if selected is Stage.LABEL
+                    else {}
+                ),
+                **(
+                    {"split_resume_bundle": str(split_resume_bundle)}
+                    if selected is Stage.SPLIT and split_resume_bundle is not None
                     else {}
                 ),
             },

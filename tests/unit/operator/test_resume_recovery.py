@@ -442,6 +442,74 @@ def test_cross_site_relay_uses_current_v2_lane_identity_and_paths(
     assert identity["row_limit"] == expected_row_limit
 
 
+def test_cross_site_split_relay_uses_actual_work_root_and_resume_namespace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = OperatorConfig.build(
+        scope="all",
+        stage="all",
+        source_commit="a" * 40,
+        input_revision="b" * 40,
+        sampling_target=200_000,
+    )
+
+    class FakeStore:
+        value = SimpleNamespace(
+            phase=RunPhase.REMOTE_PREPARED,
+            facts={"active_stage": "split"},
+        )
+
+        def load(self) -> SimpleNamespace:
+            return self.value
+
+        def transition(self, **kwargs: object) -> None:
+            facts = kwargs["facts"]
+            assert isinstance(facts, dict)
+            self.value = SimpleNamespace(
+                phase=self.value.phase,
+                facts={**self.value.facts, **facts},
+            )
+
+    captured: dict[str, object] = {}
+    inventory = SimpleNamespace(root=tmp_path / "split-relay", snapshot_id="f" * 20)
+    monkeypatch.setattr(cli, "DATA_ROOT", tmp_path)
+    monkeypatch.setattr(cli, "SshClient", lambda **_kwargs: object())
+    monkeypatch.setattr(cli, "_remote_home", lambda _ssh: PurePosixPath("/home/u"))
+    monkeypatch.setattr(
+        cli.split_relay,
+        "retrieve_to_seagate",
+        lambda **kwargs: captured.setdefault("source", kwargs) and inventory,
+    )
+
+    def stage(**kwargs: object) -> str:
+        captured["destination"] = kwargs
+        return f"/home/u/osm-polygon-operator/{config.run_id}/split-resume/{'f' * 20}"
+
+    monkeypatch.setattr(cli.split_relay, "stage_to_destination", stage)
+    monkeypatch.setattr(
+        cli.relay,
+        "retrieve_to_seagate",
+        lambda **_kwargs: pytest.fail("label relay must not handle split state"),
+    )
+    store = FakeStore()
+
+    assert cli._relay_for_continuation(
+        store=store,  # type: ignore[arg-type]
+        config=config,
+        source_site="sophia",
+        destination_site="grenoble",
+    ) == str(inventory.root)
+
+    source = captured["source"]
+    destination = captured["destination"]
+    assert isinstance(source, dict)
+    assert isinstance(destination, dict)
+    run_root = f"/home/u/osm-polygon-operator/{config.run_id}"
+    assert source["source_work_root"] == f"{run_root}/work"
+    assert destination["destination_resume_root"] == f"{run_root}/split-resume"
+    assert store.value.facts["split_resume_bundle"].endswith("f" * 20)
+
+
 def test_resume_refuses_prepared_state_without_site(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -472,7 +540,7 @@ def test_prepare_cross_site_runs_build_when_binary_is_missing(
     config, store = _store_at(
         tmp_path,
         RunPhase.QUEUED,
-        facts={"site": "sophia", "job_id": 1},
+        facts={"site": "sophia", "job_id": 1, "active_stage": "label"},
     )
     calls: list[str] = []
     fake_ssh = object()

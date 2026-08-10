@@ -55,7 +55,18 @@ def test_streaming_split_separates_checkout_and_data_source_commits() -> None:
     ):
         text = _text(name)
         assert "DATA_SOURCE_COMMIT" in text
-        assert "twelve" in text or '"$#" -ne 12' in text
+
+
+def test_split_job_imports_only_an_explicit_managed_resume_bundle() -> None:
+    submit = _text("submit_streaming_build.sh")
+    wrapper = _text("run_streaming_build_job.sh")
+    payload = _text("run_streaming_build.sh")
+
+    assert 'RESUME_BUNDLE="${14:-}"' in submit
+    assert 'RESUME_BUNDLE="${13}"' in wrapper
+    assert 'RESUME_BUNDLE="${13}"' in payload
+    assert 'args+=(--resume-bundle "${RESUME_BUNDLE}")' in payload
+    assert '"${RUN_ROOT}/split-resume/"*' in wrapper
 
 
 def test_job_rebuilds_environment_on_compute_node() -> None:

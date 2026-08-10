@@ -51,6 +51,49 @@ def test_streaming_sat_batching_rejects_invalid_batch_size() -> None:
         sat_split_kwargs(0)
 
 
+def test_driver_imports_split_resume_bundle_before_loading_pending_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from scripts.streaming.resume_bundle import create_resume_bundle
+    from tests.unit.scripts.streaming.test_resume_bundle import _write_state
+
+    source = tmp_path / "source-work"
+    destination = tmp_path / "destination-work"
+    destination.mkdir()
+    identity = {
+        "repo_id": "owner/output",
+        "resolved_revision": VALID_REVISION,
+        "source_commit": VALID_COMMIT,
+        "run_id": "resume-run",
+        "staging_revision": "checkpoints/resume-run",
+        "pipeline_version": "0.1.0",
+        "model_name": "sat-12l-sm",
+        "batch_size": 128,
+    }
+    _write_state(source, "afghanistan-latest", identity=identity)
+    bundle = create_resume_bundle(source, tmp_path / "bundle", identity)
+    monkeypatch.setenv("OAR_JOB_ID", "123")
+
+    driver = StreamDriver(
+        repo_id="owner/output",
+        resolved_revision=VALID_REVISION,
+        source_commit=VALID_COMMIT,
+        work_dir=destination,
+        input_root=destination,
+        upstream_repo_id="owner/input",
+        hub_api=object(),
+        run_id="resume-run",
+        staging_revision="checkpoints/resume-run",
+        offload_local_cache_dir=destination / "cache",
+        max_disk_bytes=1,
+        pipeline_version="0.1.0",
+        resume_bundle=bundle.root,
+    )
+
+    assert driver.has_verified_checkpoint("afghanistan-latest")
+    assert not bundle.root.exists()
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

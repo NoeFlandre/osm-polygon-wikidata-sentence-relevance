@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import shlex
 from dataclasses import dataclass
 from pathlib import PurePosixPath
@@ -48,7 +49,15 @@ class RemoteLayout:
 
     @property
     def split_work(self) -> PurePosixPath:
-        return self.root / "split-work"
+        """Persistent splitter work used by the production shell wrapper."""
+
+        return self.root / "work"
+
+    @property
+    def split_resume(self) -> PurePosixPath:
+        """Content-addressed cross-site split resume snapshots."""
+
+        return self.root / "split-resume"
 
     @property
     def label_work(self) -> PurePosixPath:
@@ -72,6 +81,7 @@ def split_submission(
     layout: RemoteLayout,
     *,
     walltime_seconds: int = DEFAULT_SPLIT_WALLTIME_SECONDS,
+    resume_bundle: PurePosixPath | None = None,
 ) -> SubmissionRequest:
     """Build one resumable splitter submission."""
 
@@ -81,6 +91,20 @@ def split_submission(
     shard = (config.region or "") if config.scope is Scope.REGION else ""
     if not 900 <= walltime_seconds <= 3_600:
         raise ValueError("split walltime must be between 15 and 60 minutes")
+    resume_value = ""
+    if resume_bundle is not None:
+        try:
+            relative = resume_bundle.relative_to(layout.split_resume)
+        except ValueError as exc:
+            raise ValueError(
+                "split resume bundle must be under the managed root"
+            ) from exc
+        if (
+            len(relative.parts) != 1
+            or re.fullmatch(r"[0-9a-f]{20}", relative.name) is None
+        ):
+            raise ValueError("split resume bundle must use a content-addressed ID")
+        resume_value = str(resume_bundle)
     command: tuple[str, ...] = (
         str(layout.repo / "scripts/grid5000/submit_streaming_build.sh"),
         str(layout.repo),
@@ -95,9 +119,9 @@ def split_submission(
         "0",
         shard,
         config.source_commit,
+        str(walltime_seconds),
+        resume_value,
     )
-    if walltime_seconds != DEFAULT_SPLIT_WALLTIME_SECONDS:
-        command += (str(walltime_seconds),)
     return SubmissionRequest(command)
 
 

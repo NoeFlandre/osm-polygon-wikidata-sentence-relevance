@@ -9,8 +9,8 @@ if ! [[ "${OAR_JOB_ID}" =~ ^[0-9]+$ ]]; then
     echo "run_streaming_build_job: OAR_JOB_ID must be numeric" >&2
     exit 2
 fi
-if [ "$#" -ne 12 ]; then
-    echo "run_streaming_build_job: exactly twelve positional arguments are required" >&2
+if [ "$#" -ne 13 ]; then
+    echo "run_streaming_build_job: exactly thirteen positional arguments are required" >&2
     exit 2
 fi
 
@@ -26,6 +26,7 @@ BATCH_SIZE="$9"; readonly BATCH_SIZE
 MAX_SHARDS="${10}"; readonly MAX_SHARDS
 SHARD_KEY="${11}"; readonly SHARD_KEY
 DATA_SOURCE_COMMIT="${12}"; readonly DATA_SOURCE_COMMIT
+RESUME_BUNDLE="${13}"; readonly RESUME_BUNDLE
 
 RUN_ROOT="$(cd "${REPO_ROOT}/.." && pwd -P)"; readonly RUN_ROOT
 case "${RUN_ROOT}" in
@@ -35,6 +36,16 @@ case "${RUN_ROOT}" in
         exit 1
         ;;
 esac
+if [ -n "${RESUME_BUNDLE}" ]; then
+    case "${RESUME_BUNDLE}" in
+        "${RUN_ROOT}/split-resume/"*) ;;
+        *) echo "run_streaming_build_job: resume bundle is outside the managed run" >&2; exit 2 ;;
+    esac
+    if [ ! -d "${RESUME_BUNDLE}" ] || [ -L "${RESUME_BUNDLE}" ]; then
+        echo "run_streaming_build_job: resume bundle must be a real directory" >&2
+        exit 2
+    fi
+fi
 MARKER="${RUN_ROOT}/.operator-managed.json"; readonly MARKER
 mark_failed_on_exit() {
     rc=$?
@@ -137,7 +148,7 @@ deadline_helper_run "${DEADLINE_DURATION}" "${DEADLINE_GRACE}" "${PAYLOAD}" \
     "${REPO_ROOT}" "${HF_HOME}" "${WORK_DIR}" \
     "${OUTPUT_REPO_ID}" "${INPUT_REPO_ID}" "${EXPECTED_SOURCE_COMMIT}" \
     "${INPUT_REVISION}" "${RUN_ID}" "${BATCH_SIZE}" "${MAX_SHARDS}" \
-    "${SHARD_KEY}" "${DATA_SOURCE_COMMIT}" \
+    "${SHARD_KEY}" "${DATA_SOURCE_COMMIT}" "${RESUME_BUNDLE}" \
     >"${JOB_LOG_DIR}/build.stdout.log" \
     2>"${JOB_LOG_DIR}/build.stderr.log"
 build_rc=$?

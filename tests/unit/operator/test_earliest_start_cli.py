@@ -400,7 +400,7 @@ def test_cli_split_replacement_uses_split_submission_without_llama_runtime(
     )
     assert prepared == ["split"]
     assert submitted == ["split-request"]
-    assert split_kwargs == [{"walltime_seconds": 900}]
+    assert split_kwargs == [{"walltime_seconds": 900, "resume_bundle": None}]
 
 
 def test_cli_recovers_persisted_running_trial(

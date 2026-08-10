@@ -61,6 +61,7 @@ from scripts.streaming.offload import (
     OffloadHandle,
     inspect_remote_checkpoint,
 )
+from scripts.streaming.resume_bundle import ResumeBundleError, merge_resume_bundle
 
 log = logging.getLogger(__name__)
 
@@ -230,6 +231,7 @@ class StreamDriver:
         local_input_root: Path | None = None,
         optional_shard_keys: frozenset[str] | set[str] | None = None,
         progress_callback: Callable[[str, int, int], None] | None = None,
+        resume_bundle: Path | None = None,
     ) -> None:
         if not isinstance(repo_id, str) or "/" not in repo_id or not repo_id.strip():
             raise ValueError("repo_id must be a non-blank owner/name string")
@@ -310,6 +312,21 @@ class StreamDriver:
             else:
                 raise
         self.work_dir = resolved_work
+
+        if resume_bundle is not None:
+            try:
+                merged = merge_resume_bundle(
+                    self.work_dir,
+                    Path(resume_bundle),
+                    self._state_identity(),
+                )
+            except ResumeBundleError as exc:
+                raise DriverError(f"split resume bundle is invalid: {exc}") from exc
+            log.info(
+                "imported split resume bundle: completed=%d partial=%s",
+                merged.completed_shards,
+                merged.partial_shard or "none",
+            )
 
         state_path = self.work_dir / "state.json"
         if state_path.exists():
@@ -696,6 +713,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--model-name", default="sat-12l-sm")
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--device", choices=["cuda"], default="cuda")
+    parser.add_argument("--resume-bundle")
 
     args = parser.parse_args(argv)
 
@@ -755,6 +773,7 @@ def main(argv: list[str] | None = None) -> int:
         batch_size=args.batch_size,
         optional_shard_keys=optional_shard_keys,
         progress_callback=_emit_shard_progress,
+        resume_bundle=Path(args.resume_bundle) if args.resume_bundle else None,
     )
 
     if args.command == "process-shard":

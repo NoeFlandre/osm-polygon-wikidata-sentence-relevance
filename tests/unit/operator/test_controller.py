@@ -135,6 +135,18 @@ def test_submit_split_and_reuse_existing_job() -> None:
     assert len(oar.requests) == 1
 
 
+def test_submit_split_serializes_and_persists_resume_bundle() -> None:
+    controller, state, oar, _stager, _emitted = _controller(
+        phase=RunPhase.REMOTE_PREPARED
+    )
+    bundle = PurePosixPath("/remote/run/split-resume/" + "c" * 20)
+
+    assert controller.submit(component=Stage.SPLIT, split_resume_bundle=bundle) == 42
+
+    assert oar.requests[0].command[-1] == str(bundle)  # type: ignore[union-attr]
+    assert state.value.facts["split_resume_bundle"] == str(bundle)
+
+
 def test_submit_label_requires_assets_and_all_requires_component() -> None:
     controller, _state, _oar, _stager, _emitted = _controller(
         stage="label", phase=RunPhase.REMOTE_PREPARED

@@ -4,8 +4,8 @@
 set -euo pipefail
 umask 077
 
-if [ "$#" -lt 12 ] || [ "$#" -gt 13 ]; then
-    echo "submit_streaming_build: twelve or thirteen positional arguments are required" >&2
+if [ "$#" -lt 12 ] || [ "$#" -gt 14 ]; then
+    echo "submit_streaming_build: twelve to fourteen positional arguments are required" >&2
     exit 2
 fi
 
@@ -22,6 +22,7 @@ MAX_SHARDS="${10}"; readonly MAX_SHARDS
 SHARD_KEY="${11}"; readonly SHARD_KEY
 DATA_SOURCE_COMMIT="${12}"; readonly DATA_SOURCE_COMMIT
 WALLTIME_SECONDS="${13:-1800}"; readonly WALLTIME_SECONDS
+RESUME_BUNDLE="${14:-}"; readonly RESUME_BUNDLE
 
 for path in "${REPO_ROOT}" "${HF_HOME}" "${LOG_ROOT}"; do
     case "${path}" in /*) ;; *) echo "submit_streaming_build: persistent path must be absolute" >&2; exit 2 ;; esac
@@ -57,6 +58,12 @@ if [ -n "${SHARD_KEY}" ] && [ "${MAX_SHARDS}" -ne 0 ]; then
     echo "submit_streaming_build: shard key conflicts with max shards" >&2
     exit 2
 fi
+if [ -n "${RESUME_BUNDLE}" ]; then
+    case "${RESUME_BUNDLE}" in
+        /*/split-resume/[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
+        *) echo "submit_streaming_build: resume bundle path is invalid" >&2; exit 2 ;;
+    esac
+fi
 
 WRAPPER="${REPO_ROOT}/scripts/grid5000/run_streaming_build_job.sh"
 HELPER="${REPO_ROOT}/scripts/grid5000/_submit_gpu_job.sh"
@@ -73,6 +80,7 @@ command_string="exec env $(shell_quote "STREAMING_WALLTIME_SECONDS=${WALLTIME_SE
 for value in "${@:1:12}"; do
     command_string="${command_string} $(shell_quote "${value}")"
 done
+command_string="${command_string} $(shell_quote "${RESUME_BUNDLE}")"
 
 # Keep streaming allocations small so OAR can backfill them quickly.  The
 # policy type is derived from the current Europe/Paris window and the full
