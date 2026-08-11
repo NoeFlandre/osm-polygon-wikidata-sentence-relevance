@@ -5,13 +5,13 @@ from __future__ import annotations
 import json
 from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, NoReturn
 
 import pytest
 
 from osm_polygon_sentence_relevance.operator import cli
 from osm_polygon_sentence_relevance.operator.config import OperatorConfig
-from osm_polygon_sentence_relevance.operator.oar import ExitClass
+from osm_polygon_sentence_relevance.operator.oar import ExitClass, JobState, JobStatus
 from osm_polygon_sentence_relevance.operator.staging import LabelAssets
 from osm_polygon_sentence_relevance.operator.state import RunPhase, StateStore
 
@@ -118,6 +118,87 @@ def test_resume_live_job_reattaches_without_submission(
     assert cli._resume_run(config.run_id, args) == 0
     assert optimized == [("sophia", 123)]
     assert seen == [("nancy", 456, "nancy")]
+
+
+def test_resume_failed_finalization_requeues_from_complete_split_checkpoints(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed finalizer must be replaced without rerunning sentence splitting."""
+
+    config, store = _store_at(
+        tmp_path,
+        RunPhase.RUNNING,
+        facts={"site": "grenoble", "active_stage": "split", "job_id": 2999510},
+        stage="split",
+    )
+    store.transition(
+        expected=RunPhase.RUNNING,
+        target=RunPhase.CHECKPOINTED,
+        facts={"split_job_id": 2999510},
+    )
+    store.transition(
+        expected=RunPhase.CHECKPOINTED,
+        target=RunPhase.FINALIZING,
+        facts={"finalization_job_id": 2999511},
+    )
+    monkeypatch.setattr(cli, "DATA_ROOT", tmp_path)
+    monkeypatch.setattr(cli, "_git_head", lambda: config.source_commit)
+    monkeypatch.setattr(cli, "_usage_policy_preflight", lambda *_args: None)
+    monkeypatch.setattr(cli, "ensure_home_headroom", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(cli, "_stage_hf_token", lambda *_args: None)
+
+    class FakeSsh:
+        pass
+
+    class FakeOar:
+        def status(self, job_id: int) -> JobStatus:
+            assert job_id == 2999511
+            return JobStatus(job_id, JobState.ERROR, exit_code=256)
+
+    class FakeStager:
+        def __init__(self, _ssh: object) -> None:
+            pass
+
+        def prepare(self, _config: object, _layout: object) -> object:
+            return SimpleNamespace(reused=True)
+
+    layout = SimpleNamespace(root=Path("/home/u/osm-polygon-operator/run"))
+    monkeypatch.setattr(
+        cli,
+        "_attach_to_site",
+        lambda *_args, **_kwargs: (FakeSsh(), layout, FakeOar(), object()),
+    )
+    monkeypatch.setattr(cli, "Stager", FakeStager)
+
+    def fail_exit(*_args: object, **_kwargs: object) -> NoReturn:
+        raise RuntimeError("remote payload returned non-zero status")
+
+    monkeypatch.setattr(
+        cli,
+        "assert_remote_exit_zero",
+        fail_exit,
+    )
+    finalized: list[int] = []
+
+    def requeue_finalization(**kwargs: object) -> int:
+        resumed_config = kwargs["config"]
+        resumed_store = kwargs["store"]
+        assert isinstance(resumed_config, OperatorConfig)
+        assert resumed_config.run_id == config.run_id
+        assert isinstance(resumed_store, StateStore)
+        finalized.append(1)
+        resumed_store.transition(
+            expected=RunPhase.CHECKPOINTED,
+            target=RunPhase.COMPLETE,
+            facts={"published": True},
+        )
+        return 2999520
+
+    monkeypatch.setattr(cli, "_finalize_split_checkpointed", requeue_finalization)
+
+    assert cli._resume_run(config.run_id, _resume_args(config.run_id)) == 0
+    assert finalized == [1]
+    assert store.load().phase is RunPhase.COMPLETE
 
 
 def test_resume_prepared_continuation_validates_assets_and_submits(

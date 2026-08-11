@@ -1615,6 +1615,118 @@ def _race_queued_start(
     return outcome.site, outcome.job_id
 
 
+def _resume_split_finalization(
+    *,
+    run_id: str,
+    args: SimpleNamespace,
+    store: StateStore,
+    config: OperatorConfig,
+) -> int:
+    """Recover or submit the idempotent finalizer after split checkpoints exist.
+
+    A finalizer is a separate allocation from sentence splitting.  If that
+    allocation disappears after the split state reached ``FINALIZING``, the
+    ordinary allocation reattachment path has no ``job_id`` it can classify.
+    Re-open the recorded site, classify the finalizer, and retry only after a
+    terminal failure.  The split checkpoints are already complete and are
+    never recomputed.
+    """
+
+    durable = store.load()
+    site = durable.facts.get("site")
+    if not isinstance(site, str) or not site:
+        raise RuntimeError("split finalization recovery has no recorded site")
+    ssh, layout, oar, controller = _attach_to_site(
+        store,
+        config,
+        site,
+        poll_seconds=args.poll_seconds,
+    )
+    _usage_policy_preflight(ssh, site)
+    ensure_home_headroom(
+        ssh,
+        protected_root=layout.root,
+        minimum_headroom_bytes=_SUBMISSION_HEADROOM_BYTES,
+    )
+    stager = Stager(ssh)
+    stager.prepare(config, layout)
+    _stage_hf_token(stager, layout)
+
+    if durable.phase is RunPhase.FINALIZING:
+        final_job = durable.facts.get("finalization_job_id")
+        if type(final_job) is not int or final_job <= 0:
+            raise RuntimeError("split finalization has no recorded job")
+        status = oar.status(final_job)
+        if is_live_state(status.state):
+            _monitor_until_terminal(
+                controller,
+                final_job,
+                log_name="finalize.stdout.log",
+            )
+            status = oar.status(final_job)
+        if status.state not in {
+            JobState.TERMINATED,
+            JobState.ERROR,
+            JobState.MISSING,
+        }:
+            raise RuntimeError(
+                f"split finalization job {final_job} ended in {status.state.value}"
+            )
+        try:
+            assert_remote_exit_zero(ssh, layout, final_job, "finalize.exit_code")
+        except RuntimeError:
+            store.transition(
+                expected=RunPhase.FINALIZING,
+                target=RunPhase.CHECKPOINTED,
+                facts={
+                    "recovered_finalization_job_id": final_job,
+                    "finalization_recovery_reason": "terminal allocation failed",
+                },
+            )
+        else:
+            store.transition(
+                expected=RunPhase.FINALIZING,
+                target=RunPhase.VALIDATED,
+                facts={"split_output_job_id": final_job},
+            )
+            if config.stage is Stage.SPLIT:
+                output_dir = layout.logs / str(final_job) / "output"
+                hub_commit = publish_split(
+                    ssh,
+                    layout,
+                    output_dir,
+                    config.output_dataset_id,
+                )
+                store.transition(
+                    expected=RunPhase.VALIDATED,
+                    target=RunPhase.COMPLETE,
+                    facts={"published": True, "hub_commit": hub_commit},
+                )
+                mark_remote_status(ssh, layout, "complete")
+                return 0
+            store.transition(
+                expected=RunPhase.VALIDATED,
+                target=RunPhase.REMOTE_PREPARED,
+                facts={"active_stage": Stage.LABEL.value},
+            )
+            return _resume_run(run_id, args)
+
+    if store.load().phase is not RunPhase.CHECKPOINTED:
+        raise RuntimeError("split finalization recovery reached an invalid phase")
+    _milestone("Re-submitting failed split finalization from complete checkpoints")
+    _finalize_split_checkpointed(
+        store=store,
+        config=config,
+        ssh=ssh,
+        layout=layout,
+        oar=oar,
+        poll_seconds=args.poll_seconds,
+    )
+    if config.stage is Stage.ALL:
+        return _resume_run(run_id, args)
+    return 0
+
+
 def _resume_run(run_id: str, args: SimpleNamespace) -> int:
     """Resume or classify a historical run by its durable run ID.
 
@@ -1674,6 +1786,13 @@ def _resume_run(run_id: str, args: SimpleNamespace) -> int:
     _ACTIVE_RUN_ID = run_id
     durable = store.load()
     candidate = _reattach_decision(durable)
+    if durable.phase in {RunPhase.CHECKPOINTED, RunPhase.FINALIZING}:
+        return _resume_split_finalization(
+            run_id=run_id,
+            args=args,
+            store=store,
+            config=config,
+        )
     if candidate is None and durable.phase is RunPhase.REMOTE_PREPARED:
         site_value = durable.facts.get("site")
         if not isinstance(site_value, str) or not site_value:
