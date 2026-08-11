@@ -46,6 +46,7 @@ from scripts.streaming.offload import (  # noqa: E402
     CheckpointOffloadError,
     OffloadHandle,
     discover_run,
+    materialize_checkpoint,
 )
 
 from osm_polygon_sentence_relevance.application.checkpoint import (  # noqa: E402
@@ -555,6 +556,54 @@ def test_discover_run_reconstructs_handles_from_staging_branch(
     keys = sorted(h.shard_key for h in handles)
     assert keys == ["bavaria-latest", "italy-latest"]
     assert all(name.endswith("metadata.json") for name in downloaded)
+
+
+def test_materialize_checkpoint_reuses_verified_handle_without_remote_reinspection(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Materialization must not repeat the inventory metadata round-trip."""
+
+    source_dir = tmp_path / "source"
+    metadata = _write_checkpoint(source_dir)
+    source_table = source_dir / "segmented.parquet"
+    run_id = "run-materialize"
+    shard_key = "italy-latest"
+    metadata["shard_key"] = shard_key
+    handle = OffloadHandle(
+        repo_id="owner/repo",
+        run_id=run_id,
+        shard_key=shard_key,
+        staging_revision="checkpoints/run-materialize",
+        folder_path=f"checkpoints/{run_id}/{shard_key}",
+        expected_table_sha256=hashlib.sha256(source_table.read_bytes()).hexdigest(),
+        computed_table_sha256=hashlib.sha256(source_table.read_bytes()).hexdigest(),
+        table_bytes=source_table.stat().st_size,
+        metadata=metadata,
+    )
+    downloads: list[str] = []
+
+    def download(*, filename: str, local_dir: Path, **_: object) -> Path:
+        downloads.append(filename)
+        target = local_dir / "segmented.parquet"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(source_table.read_bytes())
+        return target
+
+    monkeypatch.setattr("scripts.streaming.offload._download_file", download)
+    monkeypatch.setattr(
+        "scripts.streaming.offload._list_files",
+        lambda **_: pytest.fail("materialization must reuse the verified handle"),
+    )
+
+    materialized = materialize_checkpoint(
+        handle,
+        hub_api=mock.Mock(),
+        local_cache_dir=tmp_path / "cache",
+    )
+
+    assert downloads == [f"checkpoints/{run_id}/{shard_key}/segmented.parquet"]
+    assert materialized.local_table_path is not None
+    assert materialized.local_table_path.is_file()
 
 
 # ---------------------------------------------------------------------------

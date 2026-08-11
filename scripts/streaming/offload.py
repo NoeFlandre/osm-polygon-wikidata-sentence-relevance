@@ -15,7 +15,7 @@ import json
 import os
 import re
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -341,23 +341,51 @@ def inspect_remote_checkpoint(
 def materialize_checkpoint(
     handle: OffloadHandle, *, hub_api: Any, local_cache_dir: Path
 ) -> OffloadHandle:
-    """Download and revalidate the Parquet bytes for ``handle``."""
+    """Download and revalidate the Parquet bytes for ``handle``.
 
-    result = inspect_remote_checkpoint(
-        hub_api=hub_api,
-        repo_id=handle.repo_id,
-        staging_revision=handle.staging_revision,
-        run_id=handle.run_id,
-        shard_key=handle.shard_key,
-        local_cache_dir=local_cache_dir,
-        expected_identity=handle.metadata,
-        materialize=True,
-    )
-    if result is None:  # pragma: no cover - concurrent remote deletion
+    ``discover_run`` has already validated the checkpoint inventory and its
+    metadata.  Repeating that Hub listing and metadata download for every
+    shard adds hundreds of round trips to finalization.  The handle carries
+    the verified identity and content hash, so materialization only downloads
+    the Parquet payload and independently rechecks its size, hash, and schema.
+    """
+
+    expected_folder = f"checkpoints/{handle.run_id}/{handle.shard_key}"
+    if handle.folder_path != expected_folder:
         raise CheckpointOffloadError(
-            f"checkpoint {handle.shard_key!r} disappeared during materialisation"
+            f"checkpoint {handle.shard_key!r} has an invalid folder path"
         )
-    return result
+    cache = _phys(local_cache_dir) / handle.run_id / handle.shard_key
+    table_path = _download_file(
+        repo_id=handle.repo_id,
+        revision=handle.staging_revision,
+        filename=f"{handle.folder_path}/segmented.parquet",
+        local_dir=cache,
+    )
+    try:
+        if table_path.stat().st_size != handle.table_bytes:
+            raise CheckpointOffloadError(
+                f"checkpoint {handle.shard_key!r} downloaded byte size mismatch"
+            )
+        if _sha256_file(table_path) != handle.expected_table_sha256:
+            raise CheckpointOffloadError(
+                f"checkpoint {handle.shard_key!r} readback SHA-256 mismatch"
+            )
+        import pyarrow.parquet as pq
+
+        if not pq.read_schema(table_path).equals(SEGMENTED_SENTENCES_SCHEMA):
+            raise CheckpointOffloadError(
+                f"checkpoint {handle.shard_key!r} Parquet schema mismatch"
+            )
+    except CheckpointOffloadError:
+        table_path.unlink(missing_ok=True)
+        raise
+    except (OSError, ValueError) as exc:
+        table_path.unlink(missing_ok=True)
+        raise CheckpointOffloadError(
+            f"checkpoint {handle.shard_key!r} could not be validated"
+        ) from exc
+    return replace(handle, local_table_path=table_path)
 
 
 class CheckpointOffloader:
