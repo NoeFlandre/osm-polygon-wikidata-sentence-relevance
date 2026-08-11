@@ -20,6 +20,14 @@ from scripts.streaming.finalization import (
     main,
 )
 from scripts.streaming.offload import OffloadHandle
+from scripts.streaming.v2_finalization import (
+    _aggregate_reports as _aggregate_v2_reports,
+)
+from scripts.streaming.v2_finalization import (
+    _report_dict,
+    _report_from_metadata,
+    finalize_v2_resumable,
+)
 
 from osm_polygon_sentence_relevance.contracts.schemas import (
     OUTPUT_SENTENCE_SCHEMA,
@@ -278,6 +286,206 @@ def test_worldwide_finalization_persists_only_bounded_enriched_sample(
         "target": 1,
     }
     assert not list(output.parent.rglob("all-sentences.parquet"))
+
+
+def test_v2_finalization_persists_sampling_state_and_reuses_durable_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("OAR_JOB_ID", "123")
+    handle = _handle(tmp_path, "a-latest")
+
+    class _FakeOffloader:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        def inspect(self, *_: object, **__: object) -> None:
+            return None
+
+        def upload_and_verify(self, **_: object) -> None:
+            return None
+
+    monkeypatch.setattr(
+        "scripts.streaming.v2_finalization.FinalizedArtifactOffloader",
+        _FakeOffloader,
+    )
+
+    def materialize(value: OffloadHandle, **_: object) -> OffloadHandle:
+        destination = tmp_path / "cache-copy" / f"{value.shard_key}-{id(value)}.parquet"
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        assert value.local_table_path is not None
+        destination.write_bytes(value.local_table_path.read_bytes())
+        return replace(value, local_table_path=destination)
+
+    monkeypatch.setattr(
+        "scripts.streaming.v2_finalization.materialize_checkpoint", materialize
+    )
+    monkeypatch.setattr(
+        "scripts.streaming.v2_finalization.download_v2_polygon_metadata",
+        lambda **_: pa.table(
+            {
+                "polygon_id": ["a-latest:1"],
+                "area_km2": [20.0],
+                "area_bucket": ["10-100km2"],
+            }
+        ),
+    )
+    output = finalize_v2_resumable(
+        hub_api=mock.Mock(),
+        ordered_handles=[handle],
+        repo_id="owner/output",
+        upstream_repo_id="owner/input",
+        run_id="run-1",
+        staging_revision="checkpoints/run-1",
+        source_commit=SOURCE_COMMIT,
+        input_dataset_revision=REVISION,
+        pipeline_version="0.1.0",
+        model_name="sat-3l-sm",
+        batch_size=128,
+        local_cache_dir=tmp_path / "cache",
+        scratch_dir=tmp_path / "scratch",
+        persistent_dir=tmp_path / "persistent",
+        output_dir=tmp_path / "output",
+        sampling_target=1,
+        sampling_seed="worldwide-v2",
+    )
+
+    assert pq.read_table(output / "sentences.parquet").num_rows == 1
+    assert (tmp_path / "persistent" / "sampling" / "state.json").exists()
+
+
+def test_v2_report_helpers_validate_and_aggregate() -> None:
+    from osm_polygon_sentence_relevance.sentences.finalization import (
+        FinalizationReport,
+    )
+
+    report = FinalizationReport(5, 4, 1, 2)
+    assert _report_dict(report) == {
+        "input_sentence_occurrence_count": 5,
+        "output_sentence_count": 4,
+        "duplicate_occurrence_count_removed": 1,
+        "cross_source_duplicate_group_count": 2,
+    }
+    assert (
+        _report_from_metadata({"finalization_report": _report_dict(report)}) == report
+    )
+    assert _aggregate_v2_reports([report, report]) == FinalizationReport(10, 8, 2, 4)
+    with pytest.raises(ValueError, match="no finalization report"):
+        _report_from_metadata({})
+    invalid = {
+        "finalization_report": _report_dict(report) | {"output_sentence_count": True}
+    }
+    with pytest.raises(ValueError, match="report is invalid"):
+        _report_from_metadata(invalid)
+
+
+def test_v2_finalization_reuses_durable_finalized_artifact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("OAR_JOB_ID", "123")
+    table = pa.table(
+        {
+            "sentence_id": ["s1"],
+            "polygon_id": ["p1"],
+            "lat": [1.0],
+            "lon": [2.0],
+            "area_km2": [20.0],
+            "area_bucket": ["large"],
+            "language": ["en"],
+            "osm_primary_tag": ["natural=wood"],
+        }
+    )
+    path = tmp_path / "durable.parquet"
+    pq.write_table(table, path)
+    report = {
+        "input_sentence_occurrence_count": 1,
+        "output_sentence_count": 1,
+        "duplicate_occurrence_count_removed": 0,
+        "cross_source_duplicate_group_count": 0,
+    }
+    durable_metadata = {"finalization_report": report}
+
+    class _ReuseOffloader:
+        def __init__(self, **_: object) -> None:
+            self.calls = 0
+
+        def inspect(self, *_: object, **__: object) -> object:
+            self.calls += 1
+            copy = tmp_path / "cache" / f"reuse-{self.calls}.parquet"
+            copy.parent.mkdir(parents=True, exist_ok=True)
+            copy.write_bytes(path.read_bytes())
+            return mock.Mock(local_table_path=copy, metadata=durable_metadata)
+
+    monkeypatch.setattr(
+        "scripts.streaming.v2_finalization.FinalizedArtifactOffloader", _ReuseOffloader
+    )
+    monkeypatch.setattr(
+        "scripts.streaming.v2_finalization.materialize_checkpoint",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("re-materialized")
+        ),
+    )
+    handle = _handle(tmp_path, "a-latest")
+    output = finalize_v2_resumable(
+        hub_api=mock.Mock(),
+        ordered_handles=[handle],
+        repo_id="owner/output",
+        upstream_repo_id="owner/input",
+        run_id="run-1",
+        staging_revision="checkpoints/run-1",
+        source_commit=SOURCE_COMMIT,
+        input_dataset_revision=REVISION,
+        pipeline_version="0.1.0",
+        model_name="sat-3l-sm",
+        batch_size=128,
+        local_cache_dir=tmp_path / "cache",
+        scratch_dir=tmp_path / "scratch",
+        persistent_dir=tmp_path / "persistent",
+        output_dir=tmp_path / "output",
+        sampling_target=1,
+        sampling_seed="worldwide-v2",
+    )
+    assert pq.read_table(output / "sentences.parquet")["sentence_id"].to_pylist() == [
+        "s1"
+    ]
+
+
+def test_v2_finalization_rejects_unmaterialized_durable_handle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("OAR_JOB_ID", "123")
+    handle = _handle(tmp_path, "a-latest")
+
+    class _MissingOffloader:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        def inspect(self, *_: object, **__: object) -> object:
+            return mock.Mock(local_table_path=None)
+
+    monkeypatch.setattr(
+        "scripts.streaming.v2_finalization.FinalizedArtifactOffloader",
+        _MissingOffloader,
+    )
+    with pytest.raises(ValueError, match="not materialized"):
+        finalize_v2_resumable(
+            hub_api=mock.Mock(),
+            ordered_handles=[handle],
+            repo_id="owner/output",
+            upstream_repo_id="owner/input",
+            run_id="run-1",
+            staging_revision="checkpoints/run-1",
+            source_commit=SOURCE_COMMIT,
+            input_dataset_revision=REVISION,
+            pipeline_version="0.1.0",
+            model_name="sat-3l-sm",
+            batch_size=128,
+            local_cache_dir=tmp_path / "cache",
+            scratch_dir=tmp_path / "scratch",
+            persistent_dir=tmp_path / "persistent",
+            output_dir=tmp_path / "output",
+            sampling_target=1,
+            sampling_seed="worldwide-v2",
+        )
 
 
 def test_finalization_requires_oar(

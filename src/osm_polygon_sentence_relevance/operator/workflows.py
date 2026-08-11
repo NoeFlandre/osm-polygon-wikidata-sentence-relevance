@@ -48,6 +48,12 @@ class RemoteLayout:
         return self.root / "logs"
 
     @property
+    def finalization_state(self) -> PurePosixPath:
+        """Persistent sampler state that survives allocation scratch cleanup."""
+
+        return self.root / "finalization-state"
+
+    @property
     def split_work(self) -> PurePosixPath:
         """Persistent splitter work used by the production shell wrapper."""
 
@@ -152,6 +158,7 @@ def split_finalization_submission(
         config.requirements.sampling_seed,
         "02:00:00",
         "cpu",
+        str(layout.finalization_state),
     )
     return SubmissionRequest(command)
 

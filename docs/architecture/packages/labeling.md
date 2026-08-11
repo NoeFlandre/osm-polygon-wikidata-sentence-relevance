@@ -28,6 +28,12 @@ split output, fetches the pinned upstream polygon metadata one region at a time,
 canonicalizes area buckets, and atomically writes the separate V2 sampling
 input. V1 output files are never rewritten.
 
+`v2_resumable_sampling.py` keeps the expensive V2 planning and candidate scans
+in a persistent SQLite ledger. Finalized shards are verified and staged one at
+a time, then reused by identity on the next allocation. A terminated job can
+therefore resume without restarting completed shards or accepting an incomplete
+output.
+
 ## Invariants
 
 Identity binds input, model, prompt, engine, and concurrency. Batches are

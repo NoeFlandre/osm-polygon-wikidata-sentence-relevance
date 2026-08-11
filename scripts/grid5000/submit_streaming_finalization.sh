@@ -6,8 +6,8 @@
 set -euo pipefail
 umask 077
 
-if [ "$#" -ne 14 ]; then
-    echo "submit_streaming_finalization: exactly fourteen positional arguments are required" >&2
+if [ "$#" -ne 15 ]; then
+    echo "submit_streaming_finalization: exactly fifteen positional arguments are required" >&2
     exit 2
 fi
 
@@ -25,6 +25,7 @@ SAMPLING_TARGET="${11}"; readonly SAMPLING_TARGET
 SAMPLING_SEED="${12}"; readonly SAMPLING_SEED
 WALLTIME="${13}"; readonly WALLTIME
 NODE_TYPE="${14}"; readonly NODE_TYPE
+PERSIST_DIR="${15}"; readonly PERSIST_DIR
 
 for path in "${REPO_ROOT}" "${HF_HOME}" "${LOG_ROOT}"; do
     case "${path}" in /*) ;; *) echo "submit_streaming_finalization: persistent path must be absolute" >&2; exit 2 ;; esac
@@ -47,7 +48,8 @@ if ! [[ "${RUN_ID}" =~ ^[a-z0-9][a-z0-9._-]*$ ]] || \
    ! [[ "${EXPECTED_SHARD}" =~ ^[a-z0-9][a-z0-9._-]*$ ]] || \
    ! [[ "${SAMPLING_TARGET}" =~ ^[0-9]+$ ]] || \
    [ -z "${SAMPLING_SEED}" ] || \
-   ! [[ "${WALLTIME}" =~ ^[0-9]+:[0-5][0-9]:[0-5][0-9]$ ]]; then
+   ! [[ "${WALLTIME}" =~ ^[0-9]+:[0-5][0-9]:[0-5][0-9]$ ]] || \
+   ! [[ "${PERSIST_DIR}" = /* ]]; then
     echo "submit_streaming_finalization: invalid run-id/shard/sampling/walltime" >&2
     exit 2
 fi

@@ -9,8 +9,8 @@ if ! [[ "${OAR_JOB_ID}" =~ ^[0-9]+$ ]]; then
     echo "run_streaming_finalization_job: OAR_JOB_ID must be numeric" >&2
     exit 2
 fi
-if [ "$#" -ne 14 ]; then
-    echo "run_streaming_finalization_job: exactly fourteen positional arguments are required" >&2
+if [ "$#" -ne 15 ]; then
+    echo "run_streaming_finalization_job: exactly fifteen positional arguments are required" >&2
     exit 2
 fi
 
@@ -28,11 +28,16 @@ SAMPLING_TARGET="${11}"; readonly SAMPLING_TARGET
 SAMPLING_SEED="${12}"; readonly SAMPLING_SEED
 WALLTIME="${13}"; readonly WALLTIME
 NODE_TYPE="${14}"; readonly NODE_TYPE
+PERSIST_DIR="${15}"; readonly PERSIST_DIR
 
 RUN_ROOT="$(cd "${REPO_ROOT}/.." && pwd -P)"; readonly RUN_ROOT
 case "${RUN_ROOT}" in
     "${HOME}/osm-polygon-operator/"*) ;;
     *) echo "run_streaming_finalization_job: managed run root is outside the operator directory" >&2; exit 1 ;;
+esac
+case "${PERSIST_DIR}" in
+    "${RUN_ROOT}/"*) ;;
+    *) echo "run_streaming_finalization_job: persistent state is outside managed root" >&2; exit 1 ;;
 esac
 # shellcheck source=_checkout_guard.sh
 source "$(dirname "${BASH_SOURCE[0]}")/_checkout_guard.sh"
@@ -84,6 +89,7 @@ esac
 mkdir -p -m 0700 -- "${SCRATCH_BASE}"
 WORK_DIR="${SCRATCH_BASE}/osm_finalize_${RUN_ID}"
 mkdir -m 0700 -- "${WORK_DIR}"
+mkdir -m 0700 -p -- "${PERSIST_DIR}"
 
 prepare_compute_environment "${REPO_ROOT}" "${SCRATCH_BASE}" "${JOB_LOG_DIR}" \
     "run_streaming_finalization_job"
@@ -93,6 +99,7 @@ set +e
     "${OUTPUT_REPO_ID}" "${INPUT_REPO_ID}" "${EXPECTED_SOURCE_COMMIT}" \
     "${INPUT_REVISION}" "${RUN_ID}" "${STAGING_REVISION}" "${EXPECTED_SHARD}" \
     "${SAMPLING_TARGET}" "${SAMPLING_SEED}" \
+    "${PERSIST_DIR}" \
     >"${JOB_LOG_DIR}/finalize.stdout.log" \
     2>"${JOB_LOG_DIR}/finalize.stderr.log"
 finalize_rc=$?

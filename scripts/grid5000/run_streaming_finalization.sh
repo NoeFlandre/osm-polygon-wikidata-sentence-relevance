@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Compute-node payload for one bounded one-shard streaming finalization.
+# Compute-node payload for one bounded, resumable streaming finalization.
 
 set -euo pipefail
 umask 077
 
-if [ "$#" -ne 12 ]; then
-    echo "run_streaming_finalization: exactly twelve positional arguments are required" >&2
+if [ "$#" -ne 13 ]; then
+    echo "run_streaming_finalization: exactly thirteen positional arguments are required" >&2
     exit 2
 fi
 
@@ -21,6 +21,7 @@ STAGING_REVISION="$9"; readonly STAGING_REVISION
 EXPECTED_SHARD="${10}"; readonly EXPECTED_SHARD
 SAMPLING_TARGET="${11}"; readonly SAMPLING_TARGET
 SAMPLING_SEED="${12}"; readonly SAMPLING_SEED
+PERSIST_DIR="${13}"; readonly PERSIST_DIR
 
 PYTHON="${REPO_ROOT}/.venv/bin/python"
 if [ ! -x "${PYTHON}" ]; then
@@ -57,5 +58,6 @@ if [ "${SAMPLING_TARGET}" != "0" ]; then
     args+=(--sampling-target "${SAMPLING_TARGET}")
 fi
 args+=(--sampling-seed "${SAMPLING_SEED}")
+args+=(--persistent-dir "${PERSIST_DIR}")
 
 exec "${PYTHON}" "${args[@]}"

@@ -4,7 +4,7 @@ The submission adapter ``scripts/grid5000/submit_streaming_finalization.sh``
 runs on the Grid'5000 frontend and validates its positional arguments
 before invoking ``oarsub``.  These tests assert the public contract:
 
-* Exactly 14 positional arguments are required.
+* Exactly 15 positional arguments are required.
 * All persistent paths must be absolute real directories.
 * Revision SHAs must be 40 lowercase hexadecimal characters.
 * Repository IDs must be owner/name without spaces or slashes in
@@ -54,6 +54,7 @@ def _good_args(tmp_path: Path) -> list[str]:
         "v2-worldwide",
         "00:15:00",
         "cpu",
+        str(tmp_path / "finalization-state"),
     ]
 
 
@@ -72,7 +73,7 @@ def test_submit_rejects_wrong_arity(tmp_path: Path) -> None:
         text=True,
     )
     assert result.returncode == 2
-    assert "exactly fourteen positional arguments" in result.stderr
+    assert "exactly fifteen positional arguments" in result.stderr
 
 
 def test_submit_rejects_non_absolute_repo_path(tmp_path: Path) -> None:

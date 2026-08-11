@@ -169,11 +169,13 @@ def finalize_streamed_run(
     expected_shard_keys: Sequence[str] | None = None,
     sampling_target: int | None = None,
     sampling_seed: str = "v2-worldwide",
+    persistent_dir: Path | None = None,
 ) -> Path:
     """Build and atomically install the three final public artifacts.
 
-    At most one segmented checkpoint and one per-shard finalized Arrow table
-    are resident at a time.  The final Parquet stream itself is written once.
+    For the V2 sampled workflow, finalized shards and sampling state are
+    checkpointed outside allocation scratch.  The legacy non-sampled path
+    keeps its bounded streamed writer for the V1 contract.
     """
 
     if os.environ.get("OAR_JOB_ID", "").isdigit() is False:
@@ -216,6 +218,29 @@ def finalize_streamed_run(
         expected_identity=identity,
     )
     ordered = _validate_inventory(handles, expected_shard_keys)
+
+    if sampling_target is not None and persistent_dir is not None:
+        from scripts.streaming.v2_finalization import finalize_v2_resumable
+
+        return finalize_v2_resumable(
+            hub_api=hub_api,
+            ordered_handles=ordered,
+            repo_id=repo_id,
+            upstream_repo_id=upstream_repo_id,
+            run_id=run_id,
+            staging_revision=staging_revision,
+            source_commit=source_commit,
+            input_dataset_revision=input_dataset_revision,
+            pipeline_version=pipeline_version,
+            model_name=model_name,
+            batch_size=batch_size,
+            local_cache_dir=cache,
+            scratch_dir=scratch,
+            persistent_dir=Path(persistent_dir),
+            output_dir=output,
+            sampling_target=sampling_target,
+            sampling_seed=sampling_seed,
+        )
 
     tmp_dir = Path(tempfile.mkdtemp(prefix=".finalizing-", dir=output.parent))
     backup: Path | None = None
@@ -360,6 +385,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--sampling-target", type=int, default=None)
     parser.add_argument("--sampling-seed", default="v2-worldwide")
+    parser.add_argument("--persistent-dir", default=None)
     parser.add_argument(
         "--expected-shard",
         action="append",
@@ -392,6 +418,7 @@ def main(argv: list[str] | None = None) -> int:
         expected_shard_keys=args.expected_shard,
         sampling_target=args.sampling_target,
         sampling_seed=args.sampling_seed,
+        persistent_dir=(Path(args.persistent_dir) if args.persistent_dir else None),
     )
     print(json.dumps({"output_dir": str(result)}, sort_keys=True), flush=True)
     return 0
