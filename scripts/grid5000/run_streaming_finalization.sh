@@ -30,6 +30,20 @@ if [ ! -x "${PYTHON}" ]; then
 fi
 
 export HF_HOME
+HF_TOKEN_FILE="${REPO_ROOT}/.hf-token"; readonly HF_TOKEN_FILE
+if [ ! -f "${HF_TOKEN_FILE}" ] || [ -L "${HF_TOKEN_FILE}" ]; then
+    echo "run_streaming_finalization: Hugging Face credential file is missing or unsafe" >&2
+    exit 1
+fi
+if [ "$(stat -c %a -- "${HF_TOKEN_FILE}")" != 600 ]; then
+    echo "run_streaming_finalization: Hugging Face credential file must be mode 0600" >&2
+    exit 1
+fi
+export HF_TOKEN="$(cat -- "${HF_TOKEN_FILE}")"
+[ -n "${HF_TOKEN}" ] || {
+    echo "run_streaming_finalization: Hugging Face credential is empty" >&2
+    exit 1
+}
 unset HF_HUB_OFFLINE
 unset TRANSFORMERS_OFFLINE
 export PYTHONPATH="${REPO_ROOT}/src:${REPO_ROOT}"

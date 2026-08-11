@@ -87,6 +87,9 @@ def test_finalization_job_rebuilds_environment_on_compute_node() -> None:
 
 def test_finalization_payload_treats_all_as_inventory_sentinel() -> None:
     text = _text("run_streaming_finalization.sh")
+    assert 'HF_TOKEN_FILE="${REPO_ROOT}/.hf-token"' in text
+    assert 'export HF_TOKEN="$(cat -- "${HF_TOKEN_FILE}")"' in text
+    assert 'stat -c %a -- "${HF_TOKEN_FILE}"' in text
     assert 'if [ "${EXPECTED_SHARD}" != "all" ]; then' in text
     assert 'args+=(--expected-shard "${EXPECTED_SHARD}")' in text
     assert 'args+=(--sampling-target "${SAMPLING_TARGET}")' in text
