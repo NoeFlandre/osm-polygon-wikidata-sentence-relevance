@@ -41,9 +41,10 @@ repository.
 
 The worldwide `all` label stage defaults to the separate V2 sampling contract: a target of
 `200000` rows, seed `sentence-relevance-v2`, and H3 resolution `3`. Rows are
-grouped by the H3 cell containing their coordinates, language, and OSM primary
-tag. A seeded weighted allocation selects a deterministic proportional prefix
-of each joint stratum while preserving the input order in the output. Every
+grouped only by the H3 cell containing their coordinates. A seeded weighted
+allocation selects a deterministic proportional prefix of each H3-cell stratum
+while preserving the input order in the output. Language and OSM primary tag
+remain required metadata columns and are never quota dimensions. Every
 large polygon (10 km² and above) enters the candidate pool; tiny, small, and
 medium polygons are interleaved proportionally across occupied H3 cells. The
 upstream `10-100km2` and `>100km2` labels both map to `large`. Each
@@ -55,7 +56,8 @@ that kind of place description. The model is asked for one token only. The
 stored score evidence is the first-token log-probability returned for
 `yes` and `no`, their difference, and its sigmoid two-class score. There are no
 JSON explanations, reason codes, evidence excerpts, or `uncertain` labels in
-V2. Missing coordinates, languages, and tags remain explicit `(missing)`
+V2. Missing coordinates remain in the explicit `(missing)` H3 cell; missing
+language and tag values remain row metadata rather than creating additional
 strata.
 
 Increase `--sampling-target` on `run` or `resume RUN_ID` to extend the same sample. With the same immutable

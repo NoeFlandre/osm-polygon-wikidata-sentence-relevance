@@ -41,12 +41,27 @@ def test_stratified_selection_is_deterministic_bounded_and_ordered() -> None:
     assert ids == sorted(ids, key=lambda value: int(value.split("-")[1]))
 
 
-def test_joint_strata_cover_each_requested_dimension_when_budget_allows() -> None:
-    selected = select_stratified_rows(_table(), target=24, seed="coverage")
+def test_selection_is_invariant_to_language_and_primary_tag_values() -> None:
+    table = _table()
+    metadata_only = table.set_column(
+        table.schema.get_field_index("language"),
+        "language",
+        pa.array(["same-language"] * table.num_rows),
+    ).set_column(
+        table.schema.get_field_index("osm_primary_tag"),
+        "osm_primary_tag",
+        pa.array(["same-tag"] * table.num_rows),
+    )
 
-    assert len(set(selected["language"].to_pylist())) == 3
-    assert len(set(selected["osm_primary_tag"].to_pylist())) == 2
-    assert len(set(selected["lat"].to_pylist())) >= 4
+    selected = select_stratified_rows(table, target=24, seed="coverage")
+    selected_with_changed_metadata = select_stratified_rows(
+        metadata_only, target=24, seed="coverage"
+    )
+
+    assert (
+        selected["sentence_id"].to_pylist()
+        == selected_with_changed_metadata["sentence_id"].to_pylist()
+    )
 
 
 def test_larger_target_is_a_nested_proportional_continuation() -> None:
@@ -59,7 +74,7 @@ def test_larger_target_is_a_nested_proportional_continuation() -> None:
     )
 
 
-def test_continuation_allocates_each_joint_stratum_proportionally() -> None:
+def test_continuation_allocates_each_h3_cell_proportionally() -> None:
     rows = [
         {
             "sentence_id": f"major-{index:02d}",
@@ -147,7 +162,7 @@ def test_sampling_config_rejects_invalid_types_and_version() -> None:
             SamplingConfig(**values)  # type: ignore[arg-type]
 
 
-def test_missing_values_are_normalized_to_an_explicit_stratum() -> None:
+def test_metadata_normalization_remains_available_for_legacy_callers() -> None:
     assert _normalized(None) == "(missing)"
     assert _normalized(" ") == "(missing)"
     assert _normalized(" en ") == "en"
@@ -241,4 +256,4 @@ def test_invalid_coordinate_is_rejected() -> None:
 def test_public_sampling_contract_is_pinned() -> None:
     assert DEFAULT_H3_RESOLUTION == 3
     assert DEFAULT_SAMPLE_TARGET == 200_000
-    assert SAMPLING_VERSION == "labeling-v2-h3-language-osm-primary"
+    assert SAMPLING_VERSION == "labeling-v2-h3-cell"

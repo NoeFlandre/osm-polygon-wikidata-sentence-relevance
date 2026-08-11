@@ -78,16 +78,27 @@ def test_v2_keeps_large_polygons_and_samples_other_buckets_deterministically() -
     assert len(selected) == 6
 
 
-def test_v2_orders_rows_across_language_and_primary_tag_strata() -> None:
-    selected = select_v2_rows(_table(), target=8, seed="seed")
-    strata = set(
-        zip(
-            selected["language"].to_pylist(),
-            selected["osm_primary_tag"].to_pylist(),
-            strict=True,
-        )
+def test_v2_selection_is_invariant_to_language_and_primary_tag_values() -> None:
+    table = _table()
+    metadata_only = table.set_column(
+        table.schema.get_field_index("language"),
+        "language",
+        pa.array(["same-language"] * table.num_rows),
+    ).set_column(
+        table.schema.get_field_index("osm_primary_tag"),
+        "osm_primary_tag",
+        pa.array(["same-tag"] * table.num_rows),
     )
-    assert strata == {("en", "landuse=forest"), ("fr", "natural=wood")}
+
+    selected = select_v2_rows(table, target=8, seed="seed")
+    selected_with_changed_metadata = select_v2_rows(
+        metadata_only, target=8, seed="seed"
+    )
+
+    assert (
+        selected["sentence_id"].to_pylist()
+        == selected_with_changed_metadata["sentence_id"].to_pylist()
+    )
 
 
 def test_v2_larger_target_is_a_prefix_of_smaller_target() -> None:

@@ -77,6 +77,49 @@ def test_bounded_parquet_selection_matches_in_memory_reference(
     assert not list((tmp_path / "scratch").glob("*.sqlite3"))
 
 
+def test_bounded_selection_is_invariant_to_language_and_primary_tag_values(
+    tmp_path: Path,
+) -> None:
+    table = _table()
+    metadata_only = table.set_column(
+        table.schema.get_field_index("language"),
+        "language",
+        pa.array(["same-language"] * table.num_rows),
+    ).set_column(
+        table.schema.get_field_index("osm_primary_tag"),
+        "osm_primary_tag",
+        pa.array(["same-tag"] * table.num_rows),
+    )
+    source = tmp_path / "source.parquet"
+    changed_source = tmp_path / "changed-source.parquet"
+    output = tmp_path / "selected.parquet"
+    changed_output = tmp_path / "selected-changed.parquet"
+    pq.write_table(table, source, row_group_size=5)
+    pq.write_table(metadata_only, changed_source, row_group_size=5)
+
+    select_v2_parquet_bounded(
+        source,
+        output,
+        target=17,
+        seed="seed",
+        scratch_dir=tmp_path / "scratch",
+        batch_size=7,
+    )
+    select_v2_parquet_bounded(
+        changed_source,
+        changed_output,
+        target=17,
+        seed="seed",
+        scratch_dir=tmp_path / "scratch-changed",
+        batch_size=7,
+    )
+
+    assert (
+        pq.read_table(output)["sentence_id"].to_pylist()
+        == pq.read_table(changed_output)["sentence_id"].to_pylist()
+    )
+
+
 def test_bounded_selection_rejects_duplicate_ids_across_batches(
     tmp_path: Path,
 ) -> None:
@@ -258,11 +301,7 @@ def test_candidate_scan_detects_source_change_and_unfulfillable_plan() -> None:
         for row in batch.to_pylist()
     }
     polygon_order = {polygon_id: index for index, polygon_id in enumerate(metadata)}
-    stratum = (
-        next(iter(metadata.values()))[1],
-        str(batch.column("language")[0].as_py()),
-        str(batch.column("osm_primary_tag")[0].as_py()),
-    )
+    stratum = next(iter(metadata.values()))[1]
 
     changed = SamplingPlan(polygon_order, metadata, (), {}, total_rows=3)
     with pytest.raises(ValueError, match="changed between sampling passes"):

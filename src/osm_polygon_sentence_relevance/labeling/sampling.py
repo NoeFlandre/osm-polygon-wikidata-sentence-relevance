@@ -1,4 +1,4 @@
-"""Deterministic H3, language, and OSM-tag stratified row selection."""
+"""Deterministic H3-cell stratified row selection."""
 
 from __future__ import annotations
 
@@ -13,11 +13,9 @@ import pyarrow as pa
 DEFAULT_SAMPLE_TARGET = 200_000
 DEFAULT_SAMPLE_SEED = "sentence-relevance-v2"
 DEFAULT_H3_RESOLUTION = 3
-SAMPLING_VERSION = "labeling-v2-h3-language-osm-primary"
+SAMPLING_VERSION = "labeling-v2-h3-cell"
 MISSING_STRATUM = "(missing)"
-_REQUIRED_COLUMNS = frozenset(
-    {"sentence_id", "lat", "lon", "language", "osm_primary_tag"}
-)
+_REQUIRED_COLUMNS = frozenset({"sentence_id", "lat", "lon"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,9 +85,7 @@ def _rank(seed: str, value: str) -> str:
     return hashlib.sha256(f"{seed}\0{value}".encode()).hexdigest()
 
 
-def _allocation(
-    capacities: dict[tuple[str, str, str], int], target: int, seed: str
-) -> dict[tuple[str, str, str], int]:
+def _allocation(capacities: dict[str, int], target: int, seed: str) -> dict[str, int]:
     """Allocate a nested proportional prefix with a weighted fair queue.
 
     The next row always comes from the stratum with the smallest prospective
@@ -98,8 +94,8 @@ def _allocation(
     """
 
     result = dict.fromkeys(capacities, 0)
-    heap: list[tuple[float, str, tuple[str, str, str]]] = [
-        (1.0 / capacity, _rank(seed, "\0".join(key)), key)
+    heap: list[tuple[float, str, str]] = [
+        (1.0 / capacity, _rank(seed, key), key)
         for key, capacity in capacities.items()
         if capacity > 0
     ]
@@ -120,12 +116,13 @@ def select_stratified_rows(
     seed: str = DEFAULT_SAMPLE_SEED,
     h3_resolution: int = DEFAULT_H3_RESOLUTION,
 ) -> pa.Table:
-    """Select up to ``target`` rows across H3, language, and primary-tag strata.
+    """Select up to ``target`` rows proportionally across H3-cell strata.
 
     The H3 resolution and all selection parameters are explicit so a future
     larger sample can be reproduced exactly. Rows retain their original order;
-    only the selected IDs change. Missing coordinates, language, or tags are
-    kept in an explicit ``(missing)`` stratum rather than silently discarded.
+    only the selected IDs change. Missing coordinates are kept in an explicit
+    ``(missing)`` H3 cell rather than silently discarded. Language and OSM
+    primary tag columns, when present, are retained as metadata only.
     """
 
     config = SamplingConfig(target=target, seed=seed, h3_resolution=h3_resolution)
@@ -147,21 +144,15 @@ def select_stratified_rows(
             f"sampling input is missing required columns: {sorted(missing)}"
         )
 
-    groups: dict[tuple[str, str, str], list[int]] = defaultdict(list)
-    for index, (lat, lon, language, tag) in enumerate(
+    groups: dict[str, list[int]] = defaultdict(list)
+    for index, (lat, lon) in enumerate(
         zip(
             table["lat"].to_pylist(),
             table["lon"].to_pylist(),
-            table["language"].to_pylist(),
-            table["osm_primary_tag"].to_pylist(),
             strict=True,
         )
     ):
-        key = (
-            _h3_cell(lat, lon, config.h3_resolution),
-            _normalized(language),
-            _normalized(tag),
-        )
+        key = _h3_cell(lat, lon, config.h3_resolution)
         groups[key].append(index)
     allocations = _allocation(
         {key: len(indexes) for key, indexes in groups.items()},

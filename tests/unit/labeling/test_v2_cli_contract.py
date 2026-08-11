@@ -43,7 +43,7 @@ def test_v2_identity_uses_standard_model_and_logit_prompt(tmp_path: Path) -> Non
     assert identity.sampling_version == "v2-area-h3-logit"
 
 
-def test_v2_input_requires_language_and_primary_tag_for_stratification(
+def test_v2_input_requires_language_and_primary_tag_metadata(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "input.parquet"

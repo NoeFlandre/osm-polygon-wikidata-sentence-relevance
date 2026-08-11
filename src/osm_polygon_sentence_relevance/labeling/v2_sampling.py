@@ -3,6 +3,8 @@
 Large polygons are all retained in the candidate pool. Tiny, small, and
 medium polygons are ordered proportionally across occupied H3 cells before
 their sentences are ranked. A larger target extends the same ordered prefix.
+Language and OSM primary tags remain row metadata, but never define sampling
+quotas or ordering strata.
 """
 
 from __future__ import annotations
@@ -234,17 +236,11 @@ def _ordered_polygons(table: pa.Table, seed: str) -> list[str]:
 def _ordered_rows(
     table: pa.Table, *, polygon_order: dict[str, int], seed: str
 ) -> list[int]:
-    """Return a proportional nested order across H3/language/tag strata."""
+    """Return a proportional nested order across H3-cell strata."""
 
-    rows_by_stratum: dict[tuple[str, str, str], list[int]] = defaultdict(list)
+    rows_by_stratum: dict[str, list[int]] = defaultdict(list)
     for index, row in enumerate(table.to_pylist()):
-        cell = _cell(row["lat"], row["lon"])
-        stratum = (
-            cell,
-            _normalized(row["language"]),
-            _normalized(row["osm_primary_tag"]),
-        )
-        rows_by_stratum[stratum].append(index)
+        rows_by_stratum[_cell(row["lat"], row["lon"])].append(index)
     for indexes in rows_by_stratum.values():
         indexes.sort(
             key=lambda index: (
@@ -256,7 +252,7 @@ def _ordered_rows(
     queues = {key: deque(indexes) for key, indexes in rows_by_stratum.items()}
     schedule = _weighted_schedule(
         {key: len(indexes) for key, indexes in rows_by_stratum.items()},
-        rank=lambda key: _rank(seed, "\0".join(key)),
+        rank=lambda key: _rank(seed, key),
         limit=sum(len(indexes) for indexes in rows_by_stratum.values()),
     )
     return [queues[stratum].popleft() for stratum in schedule]

@@ -3,7 +3,9 @@
 The in-memory :func:`v2_sampling.select_v2_rows` function remains the
 reference contract. This module reproduces its exact sentence order while
 holding only polygon metadata, stratum counts, and at most ``target`` rows in
-memory. Sentence-ID uniqueness is enforced with a temporary SQLite index.
+memory. The only stratum is the H3 cell; language and OSM primary tag columns
+are retained metadata. Sentence-ID uniqueness is enforced with a temporary
+SQLite index.
 """
 
 from __future__ import annotations
@@ -23,7 +25,6 @@ import pyarrow.parquet as pq
 
 from .v2_sampling import (
     _cell,
-    _normalized,
     _rank,
     _weighted_schedule,
     canonical_area_bucket,
@@ -42,7 +43,7 @@ _REQUIRED = frozenset(
         "osm_primary_tag",
     }
 )
-_Stratum = tuple[str, str, str]
+_Stratum = str
 _Candidate = tuple[int, int, int, dict[str, Any]]
 
 
@@ -103,13 +104,7 @@ class _Planner:
             if prior is not None and prior != metadata:
                 raise ValueError("polygon metadata is inconsistent")
             self.polygon_metadata.setdefault(polygon_id, metadata)
-            counts[
-                (
-                    metadata[1],
-                    _normalized(row["language"]),
-                    _normalized(row["osm_primary_tag"]),
-                )
-            ] += 1
+            counts[metadata[1]] += 1
         try:
             self.connection.executemany(
                 "INSERT INTO sentence_ids(value) VALUES (?)", identifiers
@@ -126,7 +121,7 @@ class _Planner:
         ordered = ordered_polygon_ids(self.polygon_metadata, seed=self.seed)
         schedule = _weighted_schedule(
             self.stratum_sizes,
-            rank=lambda key: _rank(self.seed, "\0".join(key)),
+            rank=lambda key: _rank(self.seed, key),
             limit=min(self.target, self.total_rows),
         )
         return SamplingPlan(
@@ -174,11 +169,7 @@ def _retain_candidates(
         for row in batch.to_pylist():
             polygon_id = str(row["polygon_id"])
             metadata = plan.polygon_metadata[polygon_id]
-            stratum = (
-                metadata[1],
-                _normalized(row["language"]),
-                _normalized(row["osm_primary_tag"]),
-            )
+            stratum = metadata[1]
             quota = plan.quotas.get(stratum, 0)
             if quota:
                 candidate: _Candidate = (
