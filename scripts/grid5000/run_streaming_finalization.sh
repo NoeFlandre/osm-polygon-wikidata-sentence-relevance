@@ -30,7 +30,8 @@ if [ ! -x "${PYTHON}" ]; then
 fi
 
 export HF_HOME
-HF_TOKEN_FILE="${REPO_ROOT}/.hf-token"; readonly HF_TOKEN_FILE
+RUN_ROOT="$(cd "${REPO_ROOT}/.." && pwd -P)"; readonly RUN_ROOT
+HF_TOKEN_FILE="${RUN_ROOT}/.hf-token"; readonly HF_TOKEN_FILE
 if [ ! -f "${HF_TOKEN_FILE}" ] || [ -L "${HF_TOKEN_FILE}" ]; then
     echo "run_streaming_finalization: Hugging Face credential file is missing or unsafe" >&2
     exit 1
