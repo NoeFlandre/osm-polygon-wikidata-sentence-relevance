@@ -4,8 +4,9 @@ The in-memory :func:`v2_sampling.select_v2_rows` function remains the
 reference contract. This module reproduces its exact sentence order while
 holding only polygon metadata, stratum counts, and at most ``target`` rows in
 memory. The only stratum is the H3 cell; language and OSM primary tag columns
-are retained metadata. Sentence-ID uniqueness is enforced with a temporary
-SQLite index.
+are retained metadata. Rows without both coordinates are excluded from the
+candidate pool. Sentence-ID uniqueness is enforced with a temporary SQLite
+index.
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from .v2_sampling import (
+    _MISSING_CELL,
     _cell,
     _rank,
     _weighted_schedule,
@@ -96,9 +98,12 @@ class _Planner:
             if not isinstance(polygon_id, str) or not polygon_id:
                 raise ValueError("polygon_id must be non-empty")
             identifiers.append((sentence_id,))
+            cell = _cell(row["lat"], row["lon"])
+            if cell == _MISSING_CELL:
+                continue
             metadata = (
                 canonical_area_bucket(row["area_km2"], row["area_bucket"]),
-                _cell(row["lat"], row["lon"]),
+                cell,
             )
             prior = self.polygon_metadata.get(polygon_id)
             if prior is not None and prior != metadata:
@@ -119,10 +124,11 @@ class _Planner:
 
     def build(self) -> SamplingPlan:
         ordered = ordered_polygon_ids(self.polygon_metadata, seed=self.seed)
+        eligible_rows = sum(self.stratum_sizes.values())
         schedule = _weighted_schedule(
             self.stratum_sizes,
             rank=lambda key: _rank(self.seed, key),
-            limit=min(self.target, self.total_rows),
+            limit=min(self.target, eligible_rows),
         )
         return SamplingPlan(
             polygon_order={value: index for index, value in enumerate(ordered)},
@@ -167,6 +173,9 @@ def _retain_candidates(
     global_index = 0
     for batch in parquet.iter_batches(batch_size=batch_size):
         for row in batch.to_pylist():
+            if _cell(row["lat"], row["lon"]) == _MISSING_CELL:
+                global_index += 1
+                continue
             polygon_id = str(row["polygon_id"])
             metadata = plan.polygon_metadata[polygon_id]
             stratum = metadata[1]

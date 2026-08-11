@@ -56,9 +56,9 @@ that kind of place description. The model is asked for one token only. The
 stored score evidence is the first-token log-probability returned for
 `yes` and `no`, their difference, and its sigmoid two-class score. There are no
 JSON explanations, reason codes, evidence excerpts, or `uncertain` labels in
-V2. Missing coordinates remain in the explicit `(missing)` H3 cell; missing
-language and tag values remain row metadata rather than creating additional
-strata.
+V2. Rows with missing latitude or longitude are discarded before the candidate
+pool is stratified. Missing language and tag values remain row metadata rather
+than creating additional strata.
 
 Increase `--sampling-target` on `run` or `resume RUN_ID` to extend the same sample. With the same immutable
 input, seed, and H3 resolution, the smaller selection is always contained in

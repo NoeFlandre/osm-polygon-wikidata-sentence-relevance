@@ -216,14 +216,14 @@ def test_small_input_without_coordinate_columns_is_accepted() -> None:
     assert select_stratified_rows(table, target=2).equals(table)
 
 
-def test_missing_coordinates_are_retained_in_explicit_missing_stratum() -> None:
+def test_missing_coordinates_are_discarded_from_candidate_pool() -> None:
     table = _table()
     table = table.set_column(
         1, "lat", pa.array([None] + table["lat"].to_pylist()[1:], type=pa.float64())
     )
     selected = select_stratified_rows(table, target=48)
-    assert selected.num_rows == table.num_rows
-    assert selected["sentence_id"][0].as_py() == "s-000"
+    assert selected.num_rows == table.num_rows - 1
+    assert "s-000" not in selected["sentence_id"].to_pylist()
 
 
 @pytest.mark.parametrize(

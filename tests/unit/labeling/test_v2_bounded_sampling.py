@@ -120,6 +120,33 @@ def test_bounded_selection_is_invariant_to_language_and_primary_tag_values(
     )
 
 
+def test_bounded_selection_discards_missing_coordinate_rows(
+    tmp_path: Path,
+) -> None:
+    table = _table()
+    table = table.set_column(
+        table.schema.get_field_index("lat"),
+        "lat",
+        pa.array([None] + table["lat"].to_pylist()[1:], type=pa.float64()),
+    )
+    source = tmp_path / "source.parquet"
+    output = tmp_path / "selected.parquet"
+    pq.write_table(table, source, row_group_size=5)
+
+    result = select_v2_parquet_bounded(
+        source,
+        output,
+        target=table.num_rows,
+        seed="seed",
+        scratch_dir=tmp_path / "scratch",
+        batch_size=7,
+    )
+
+    selected = pq.read_table(result)
+    assert selected.num_rows == table.num_rows - 1
+    assert "sentence-0000" not in selected["sentence_id"].to_pylist()
+
+
 def test_bounded_selection_rejects_duplicate_ids_across_batches(
     tmp_path: Path,
 ) -> None:

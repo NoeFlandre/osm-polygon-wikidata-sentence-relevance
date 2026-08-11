@@ -120,23 +120,17 @@ def select_stratified_rows(
 
     The H3 resolution and all selection parameters are explicit so a future
     larger sample can be reproduced exactly. Rows retain their original order;
-    only the selected IDs change. Missing coordinates are kept in an explicit
-    ``(missing)`` H3 cell rather than silently discarded. Language and OSM
-    primary tag columns, when present, are retained as metadata only.
+    only the selected IDs change. Rows with missing coordinates are excluded
+    from the candidate pool. Language and OSM primary tag columns, when
+    present, are retained as metadata only.
     """
 
     config = SamplingConfig(target=target, seed=seed, h3_resolution=h3_resolution)
     ids = table["sentence_id"].to_pylist()
     if len(ids) != len(set(ids)):
         raise ValueError("sampling input contains duplicate sentence IDs")
-    if table.num_rows <= config.target:
-        # Still validate every coordinate so an invalid row cannot be hidden by
-        # the target being larger than the input.
-        if {"lat", "lon"}.issubset(table.column_names):
-            for lat, lon in zip(
-                table["lat"].to_pylist(), table["lon"].to_pylist(), strict=True
-            ):
-                _h3_cell(lat, lon, config.h3_resolution)
+    has_coordinates = {"lat", "lon"}.issubset(table.column_names)
+    if not has_coordinates and table.num_rows <= config.target:
         return table
     missing = _REQUIRED_COLUMNS.difference(table.column_names)
     if missing:
@@ -145,6 +139,7 @@ def select_stratified_rows(
         )
 
     groups: dict[str, list[int]] = defaultdict(list)
+    eligible_indexes: list[int] = []
     for index, (lat, lon) in enumerate(
         zip(
             table["lat"].to_pylist(),
@@ -153,10 +148,14 @@ def select_stratified_rows(
         )
     ):
         key = _h3_cell(lat, lon, config.h3_resolution)
-        groups[key].append(index)
+        if key != MISSING_STRATUM:
+            groups[key].append(index)
+            eligible_indexes.append(index)
+    if table.num_rows <= config.target:
+        return table.take(pa.array(eligible_indexes, type=pa.int64()))
     allocations = _allocation(
         {key: len(indexes) for key, indexes in groups.items()},
-        config.target,
+        min(config.target, len(eligible_indexes)),
         config.seed,
     )
     selected: list[int] = []

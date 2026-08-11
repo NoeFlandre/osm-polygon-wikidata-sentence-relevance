@@ -104,7 +104,8 @@ V2 is a separate worldwide release stored below `v2-worldwide/` in the same
 Hugging Face dataset `main` revision. It defaults to 200,000 sentences selected
 by a deterministic proportional prefix across global H3 resolution 3 cells.
 Language and OSM primary tag are retained as row metadata and are not sampling
-dimensions. Increase `--sampling-target` on `run` or
+dimensions. Rows with missing latitude or longitude are discarded before H3
+allocation. Increase `--sampling-target` on `run` or
 `resume RUN_ID` to extend the same sample without reshuffling earlier rows; the
 run identity and checkpoints stay stable. The generated V2 card includes an H3
 hexagon map of labeled-sentence coverage and links to a separate worldwide

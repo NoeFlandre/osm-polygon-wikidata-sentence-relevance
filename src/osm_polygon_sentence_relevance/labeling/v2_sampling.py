@@ -4,7 +4,8 @@ Large polygons are all retained in the candidate pool. Tiny, small, and
 medium polygons are ordered proportionally across occupied H3 cells before
 their sentences are ranked. A larger target extends the same ordered prefix.
 Language and OSM primary tags remain row metadata, but never define sampling
-quotas or ordering strata.
+quotas or ordering strata. Rows without both coordinates are excluded before
+polygon ordering and H3 allocation.
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ import pyarrow as pa
 
 V2_H3_RESOLUTION = 3
 V2_SAMPLING_VERSION = "v2-area-h3-logit"
+_MISSING_CELL = "(missing)"
 AREA_BUCKETS: dict[str, tuple[float, float]] = {
     "tiny": (0.0, 0.1),
     "small": (0.1, 1.0),
@@ -115,7 +117,7 @@ def weighted_schedule(sizes: Mapping[str, int], *, seed: str, limit: int) -> lis
 
 def _cell(lat: object, lon: object) -> str:
     if lat is None or lon is None:
-        return "(missing)"
+        return _MISSING_CELL
     if not isinstance(lat, (int, float, str)) or not isinstance(lon, (int, float, str)):
         raise ValueError("coordinates must be numeric")
     try:
@@ -222,9 +224,12 @@ def _ordered_polygons(table: pa.Table, seed: str) -> list[str]:
         polygon_id = row["polygon_id"]
         if not isinstance(polygon_id, str) or not polygon_id:
             raise ValueError("polygon_id must be non-empty")
+        cell = _cell(row["lat"], row["lon"])
+        if cell == _MISSING_CELL:
+            continue
         candidate = (
             _bucket(row["area_km2"], row["area_bucket"]),
-            _cell(row["lat"], row["lon"]),
+            cell,
         )
         current = by_polygon.get(polygon_id)
         if current is not None and current != candidate:
@@ -240,7 +245,9 @@ def _ordered_rows(
 
     rows_by_stratum: dict[str, list[int]] = defaultdict(list)
     for index, row in enumerate(table.to_pylist()):
-        rows_by_stratum[_cell(row["lat"], row["lon"])].append(index)
+        cell = _cell(row["lat"], row["lon"])
+        if cell != _MISSING_CELL:
+            rows_by_stratum[cell].append(index)
     for indexes in rows_by_stratum.values():
         indexes.sort(
             key=lambda index: (

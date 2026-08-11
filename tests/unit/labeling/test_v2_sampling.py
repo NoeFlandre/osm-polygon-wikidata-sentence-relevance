@@ -107,6 +107,19 @@ def test_v2_larger_target_is_a_prefix_of_smaller_target() -> None:
     assert larger["sentence_id"].to_pylist()[:5] == smaller["sentence_id"].to_pylist()
 
 
+def test_v2_discards_missing_coordinate_rows_before_polygon_ordering() -> None:
+    table = _table().set_column(
+        2,
+        "lat",
+        pa.array([None] + _table()["lat"].to_pylist()[1:], type=pa.float64()),
+    )
+
+    selected = select_v2_rows(table, target=table.num_rows, seed="seed")
+
+    assert selected.num_rows == table.num_rows - 1
+    assert "tiny-0" not in selected["sentence_id"].to_pylist()
+
+
 def _reference_weighted_schedule(
     sizes: Mapping[str, int], *, seed: str, limit: int
 ) -> list[str]:
