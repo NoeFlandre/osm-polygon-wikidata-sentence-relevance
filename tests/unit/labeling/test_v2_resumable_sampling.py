@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 
 import pyarrow as pa
@@ -11,6 +12,7 @@ from osm_polygon_sentence_relevance.labeling.v2_resumable_sampling import (
     FinalizedShard,
     ResumableSamplingError,
     _build_plan,
+    _heaps_from_database,
     _load_state,
     _materialize_heaps,
     _PersistentPlanner,
@@ -226,6 +228,14 @@ def test_resumable_sampling_rejects_invalid_shard_inventory(tmp_path: Path) -> N
             seed="s",
             state_dir=tmp_path / "state",
         )
+    with pytest.raises(ValueError, match="identity"):
+        select_v2_shards_resumable(
+            [FinalizedShard("", None, "id")],
+            tmp_path / "selected-missing-identity.parquet",
+            target=1,
+            seed="s",
+            state_dir=tmp_path / "state-missing-identity",
+        )
 
 
 def test_resumable_sampling_rejects_corrupt_state_and_orphan_database(
@@ -277,6 +287,14 @@ def test_persistent_planner_rejects_bad_rows_and_duplicate_ids(tmp_path: Path) -
             planner.observe(missing)
         planner.rollback()
         table = _table(1)
+        missing_coordinates = table.to_pylist()[0]
+        missing_coordinates["lat"] = None
+        planner.begin()
+        assert (
+            planner.observe(pa.Table.from_pylist([missing_coordinates]).to_batches()[0])
+            == 1
+        )
+        planner.rollback()
         duplicate = pa.Table.from_pylist(table.to_pylist() * 2)
         planner.begin()
         with pytest.raises(ValueError, match="duplicate"):
@@ -342,6 +360,139 @@ def test_retain_shard_requires_planning_checkpoint(tmp_path: Path) -> None:
                 planner,
                 shards[0],
                 plan,
+                _heaps_from_database(planner, plan),
+                seed="seed",
+                batch_size=4,
+                materialize_shard=None,
+            )
+    finally:
+        planner.close()
+
+
+def test_retain_shard_checkpoints_within_a_shard_and_resumes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    shards, _ = _shards(tmp_path)
+    planner = _PersistentPlanner(tmp_path / "sampling.sqlite3")
+    try:
+        offset = 0
+        for shard in shards:
+            planner.begin()
+            row_count = pq.ParquetFile(shard.path).metadata.num_rows
+            for batch in pq.ParquetFile(shard.path).iter_batches(batch_size=64):
+                planner.observe(batch)
+            planner.finish_planning_shard(shard, row_count, offset)
+            offset += row_count
+        plan = _build_plan(planner, target=11, seed="seed")
+        heaps = _heaps_from_database(planner, plan)
+        real_parquet_file = v2_resumable_sampling.pq.ParquetFile
+
+        class FailingParquetFile:
+            def __init__(self, path: Path) -> None:
+                self._inner = real_parquet_file(path)
+
+            def iter_batches(self, *, batch_size: int):
+                for index, batch in enumerate(
+                    self._inner.iter_batches(batch_size=batch_size)
+                ):
+                    yield batch
+                    if index == 0:
+                        raise RuntimeError("interrupt retention")
+
+        monkeypatch.setattr(v2_resumable_sampling.pq, "ParquetFile", FailingParquetFile)
+        with pytest.raises(RuntimeError, match="interrupt retention"):
+            _retain_shard(
+                planner,
+                shards[0],
+                plan,
+                heaps,
+                seed="seed",
+                batch_size=4,
+                materialize_shard=None,
+            )
+        retained_offset, retained = planner.retention_progress()[shards[0].shard_key]
+        assert retained_offset == 4
+        assert not retained
+
+        monkeypatch.setattr(v2_resumable_sampling.pq, "ParquetFile", real_parquet_file)
+        _retain_shard(
+            planner,
+            shards[0],
+            plan,
+            _heaps_from_database(planner, plan),
+            seed="seed",
+            batch_size=4,
+            materialize_shard=None,
+        )
+        retained_offset, retained = planner.retention_progress()[shards[0].shard_key]
+        assert retained_offset == 23
+        assert retained
+    finally:
+        planner.close()
+
+
+def test_retention_checkpoint_validates_offsets_and_migrates_old_database(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "old.sqlite3"
+    connection = sqlite3.connect(database)
+    connection.execute(
+        "CREATE TABLE shard_progress ("
+        "shard_key TEXT PRIMARY KEY, row_count INTEGER NOT NULL DEFAULT 0, "
+        "row_offset INTEGER NOT NULL DEFAULT 0, planned INTEGER NOT NULL DEFAULT 0, "
+        "retained INTEGER NOT NULL DEFAULT 0) WITHOUT ROWID"
+    )
+    connection.commit()
+    connection.close()
+    planner = _PersistentPlanner(database)
+    try:
+        assert "retain_offset" in {
+            str(row[1])
+            for row in planner.connection.execute("PRAGMA table_info(shard_progress)")
+        }
+        with pytest.raises(ValueError, match="integer"):
+            planner.checkpoint_retaining_shard("missing", True)
+        with pytest.raises(ValueError, match="non-negative"):
+            planner.checkpoint_retaining_shard("missing", -1)
+    finally:
+        planner.close()
+
+
+def test_retain_shard_rejects_invalid_checkpoint_and_skips_completed_shard(
+    tmp_path: Path,
+) -> None:
+    shards, _ = _shards(tmp_path)
+    planner = _PersistentPlanner(tmp_path / "sampling.sqlite3")
+    try:
+        planner.begin()
+        planner.finish_planning_shard(shards[0], 23, 0)
+        plan = _build_plan(planner, target=1, seed="seed")
+        planner.connection.execute(
+            "UPDATE shard_progress SET retain_offset = row_count, retained = 1 "
+            "WHERE shard_key = ?",
+            (shards[0].shard_key,),
+        )
+        planner.connection.commit()
+        _retain_shard(
+            planner,
+            shards[0],
+            plan,
+            {},
+            seed="seed",
+            batch_size=4,
+            materialize_shard=None,
+        )
+        planner.connection.execute(
+            "UPDATE shard_progress SET retain_offset = row_count + 1, retained = 0 "
+            "WHERE shard_key = ?",
+            (shards[0].shard_key,),
+        )
+        planner.connection.commit()
+        with pytest.raises(ResumableSamplingError, match="invalid retention"):
+            _retain_shard(
+                planner,
+                shards[0],
+                plan,
                 {},
                 seed="seed",
                 batch_size=4,
@@ -349,6 +500,67 @@ def test_retain_shard_requires_planning_checkpoint(tmp_path: Path) -> None:
             )
     finally:
         planner.close()
+
+
+def test_retain_shard_rolls_back_finish_failure_and_detects_source_change(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    shards, _ = _shards(tmp_path)
+    planner = _PersistentPlanner(tmp_path / "sampling.sqlite3")
+    try:
+        planner.begin()
+        for batch in pq.ParquetFile(shards[0].path).iter_batches(batch_size=64):
+            planner.observe(batch)
+        planner.finish_planning_shard(shards[0], 22, 0)
+        plan = _build_plan(planner, target=1, seed="seed")
+        with pytest.raises(ValueError, match="source changed"):
+            _retain_shard(
+                planner,
+                shards[0],
+                plan,
+                _heaps_from_database(planner, plan),
+                seed="seed",
+                batch_size=64,
+                materialize_shard=None,
+            )
+
+        planner.connection.execute(
+            "UPDATE shard_progress SET retain_offset = 0, row_count = 23 "
+            "WHERE shard_key = ?",
+            (shards[0].shard_key,),
+        )
+        planner.connection.commit()
+        real_finish = planner.finish_retaining_shard
+
+        def fail_finish(shard_key: str) -> None:
+            raise RuntimeError(f"finish {shard_key}")
+
+        monkeypatch.setattr(planner, "finish_retaining_shard", fail_finish)
+        with pytest.raises(RuntimeError, match="finish"):
+            _retain_shard(
+                planner,
+                shards[0],
+                plan,
+                _heaps_from_database(planner, plan),
+                seed="seed",
+                batch_size=64,
+                materialize_shard=None,
+            )
+        assert not planner.connection.in_transaction
+        monkeypatch.setattr(planner, "finish_retaining_shard", real_finish)
+    finally:
+        planner.close()
+
+
+def test_public_sampler_rejects_missing_planning_source(tmp_path: Path) -> None:
+    with pytest.raises(ResumableSamplingError, match="missing source"):
+        select_v2_shards_resumable(
+            [FinalizedShard("missing", None, "identity")],
+            tmp_path / "selected.parquet",
+            target=1,
+            seed="seed",
+            state_dir=tmp_path / "state",
+        )
 
 
 def test_load_state_rejects_unsupported_schema(tmp_path: Path) -> None:

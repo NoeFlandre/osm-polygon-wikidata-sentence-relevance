@@ -139,7 +139,8 @@ class _PersistentPlanner:
                 row_count INTEGER NOT NULL DEFAULT 0,
                 row_offset INTEGER NOT NULL DEFAULT 0,
                 planned INTEGER NOT NULL DEFAULT 0,
-                retained INTEGER NOT NULL DEFAULT 0
+                retained INTEGER NOT NULL DEFAULT 0,
+                retain_offset INTEGER NOT NULL DEFAULT 0
             ) WITHOUT ROWID;
             CREATE TABLE IF NOT EXISTS candidates (
                 stratum TEXT NOT NULL,
@@ -152,6 +153,14 @@ class _PersistentPlanner:
             ) WITHOUT ROWID;
             """
         )
+        progress_columns = {
+            str(row[1])
+            for row in self.connection.execute("PRAGMA table_info(shard_progress)")
+        }
+        if "retain_offset" not in progress_columns:
+            self.connection.execute(
+                "ALTER TABLE shard_progress ADD COLUMN retain_offset INTEGER NOT NULL DEFAULT 0"
+            )
         self.connection.commit()
         self.total_rows = int(self._meta("total_rows", "0"))
         self.polygon_metadata = {
@@ -250,7 +259,22 @@ class _PersistentPlanner:
 
     def finish_retaining_shard(self, shard_key: str) -> None:
         self.connection.execute(
-            "UPDATE shard_progress SET retained=1 WHERE shard_key = ?", (shard_key,)
+            "UPDATE shard_progress SET retained=1, retain_offset=row_count "
+            "WHERE shard_key = ?",
+            (shard_key,),
+        )
+        self.connection.commit()
+
+    def checkpoint_retaining_shard(self, shard_key: str, row_offset: int) -> None:
+        """Persist progress after one bounded retention batch."""
+
+        if isinstance(row_offset, bool) or not isinstance(row_offset, int):
+            raise ValueError("retention row offset must be an integer")
+        if row_offset < 0:
+            raise ValueError("retention row offset must be non-negative")
+        self.connection.execute(
+            "UPDATE shard_progress SET retain_offset = ? WHERE shard_key = ?",
+            (row_offset, shard_key),
         )
         self.connection.commit()
 
@@ -276,9 +300,19 @@ class _PersistentPlanner:
             )
         }
 
+    def retention_progress(self) -> dict[str, tuple[int, bool]]:
+        """Return the local row offset and completion flag for each shard."""
+
+        return {
+            key: (offset, bool(retained))
+            for key, offset, retained in self.connection.execute(
+                "SELECT shard_key, retain_offset, retained FROM shard_progress"
+            )
+        }
+
     def clear_candidates(self) -> None:
         self.connection.execute("DELETE FROM candidates")
-        self.connection.execute("UPDATE shard_progress SET retained=0")
+        self.connection.execute("UPDATE shard_progress SET retained=0, retain_offset=0")
         self.connection.commit()
 
     def load_candidate_locators(self) -> list[_CandidateLocator]:
@@ -344,76 +378,100 @@ def _retain_shard(
             f"missing planning checkpoint for {shard.shard_key}"
         )
     offset = progress[1]
+    retain_offset, retained = planner.retention_progress().get(
+        shard.shard_key, (0, False)
+    )
+    if retained:
+        return
+    if retain_offset < 0 or retain_offset > progress[0]:
+        raise ResumableSamplingError(
+            f"invalid retention checkpoint for {shard.shard_key}"
+        )
     source = (
         materialize_shard(shard)
         if materialize_shard is not None
         else nullcontext(shard.path)
     )
-    planner.begin()
     try:
         with source as path:
             if path is None:
                 raise ResumableSamplingError(
                     f"missing source path for {shard.shard_key}"
                 )
-            global_index = offset
             local_row_index = 0
             for batch in pq.ParquetFile(path).iter_batches(batch_size=batch_size):
-                for row in batch.to_pylist():
-                    row_index = local_row_index
-                    local_row_index += 1
-                    if _cell(row["lat"], row["lon"]) == _MISSING_CELL:
-                        global_index += 1
-                        continue
-                    polygon_id = str(row["polygon_id"])
-                    stratum = plan.polygon_metadata[polygon_id][1]
-                    quota = plan.quotas.get(stratum, 0)
-                    if quota:
-                        rank_hex = _rank(seed, str(row["sentence_id"]))
-                        candidate = (
-                            -plan.polygon_order[polygon_id],
-                            -int(rank_hex, 16),
-                            -global_index,
-                            shard.shard_key,
-                            row_index,
-                        )
-                        heap = heaps[stratum]
-                        if len(heap) < quota:
-                            heapq.heappush(heap, candidate)
-                            planner.connection.execute(
-                                "INSERT INTO candidates VALUES (?, ?, ?, ?, ?, ?)",
-                                (
-                                    stratum,
-                                    -candidate[0],
-                                    rank_hex,
-                                    global_index,
-                                    shard.shard_key,
-                                    row_index,
-                                ),
+                rows = batch.to_pylist()
+                batch_start = local_row_index
+                batch_end = batch_start + len(rows)
+                local_row_index = batch_end
+                if batch_end <= retain_offset:
+                    continue
+                planner.begin()
+                try:
+                    for relative_index, row in enumerate(
+                        rows[max(0, retain_offset - batch_start) :],
+                        start=max(retain_offset, batch_start),
+                    ):
+                        row_index = relative_index
+                        global_index = offset + row_index
+                        if _cell(row["lat"], row["lon"]) == _MISSING_CELL:
+                            continue
+                        polygon_id = str(row["polygon_id"])
+                        stratum = plan.polygon_metadata[polygon_id][1]
+                        quota = plan.quotas.get(stratum, 0)
+                        if quota:
+                            rank_hex = _rank(seed, str(row["sentence_id"]))
+                            candidate = (
+                                -plan.polygon_order[polygon_id],
+                                -int(rank_hex, 16),
+                                -global_index,
+                                shard.shard_key,
+                                row_index,
                             )
-                        elif candidate[:3] > heap[0][:3]:
-                            old = heapq.heapreplace(heap, candidate)
-                            planner.connection.execute(
-                                "DELETE FROM candidates WHERE stratum=? AND global_index=?",
-                                (stratum, -old[2]),
-                            )
-                            planner.connection.execute(
-                                "INSERT INTO candidates VALUES (?, ?, ?, ?, ?, ?)",
-                                (
-                                    stratum,
-                                    -candidate[0],
-                                    rank_hex,
-                                    global_index,
-                                    shard.shard_key,
-                                    row_index,
-                                ),
-                            )
-                    global_index += 1
-            if global_index != offset + progress[0]:
+                            heap = heaps[stratum]
+                            if len(heap) < quota:
+                                heapq.heappush(heap, candidate)
+                                planner.connection.execute(
+                                    "INSERT INTO candidates VALUES (?, ?, ?, ?, ?, ?)",
+                                    (
+                                        stratum,
+                                        -candidate[0],
+                                        rank_hex,
+                                        global_index,
+                                        shard.shard_key,
+                                        row_index,
+                                    ),
+                                )
+                            elif candidate[:3] > heap[0][:3]:
+                                old = heapq.heapreplace(heap, candidate)
+                                planner.connection.execute(
+                                    "DELETE FROM candidates WHERE stratum=? AND global_index=?",
+                                    (stratum, -old[2]),
+                                )
+                                planner.connection.execute(
+                                    "INSERT INTO candidates VALUES (?, ?, ?, ?, ?, ?)",
+                                    (
+                                        stratum,
+                                        -candidate[0],
+                                        rank_hex,
+                                        global_index,
+                                        shard.shard_key,
+                                        row_index,
+                                    ),
+                                )
+                    planner.checkpoint_retaining_shard(shard.shard_key, batch_end)
+                except BaseException:
+                    planner.rollback()
+                    raise
+            if local_row_index != progress[0]:
                 raise ValueError("V2 source changed between sampling passes")
-        planner.finish_retaining_shard(shard.shard_key)
+            planner.begin()
+            try:
+                planner.finish_retaining_shard(shard.shard_key)
+            except BaseException:
+                planner.rollback()
+                raise
     except BaseException:
-        planner.rollback()
         raise
 
 

@@ -32,7 +32,8 @@ input. V1 output files are never rewritten.
 in a persistent SQLite ledger. Finalized shards are verified and staged one at
 a time, then reused by identity on the next allocation. A terminated job can
 therefore resume without restarting completed shards or accepting an incomplete
-output.
+output. Candidate retention commits after each Parquet batch, so an interruption
+inside a large shard redoes at most that bounded batch.
 
 ## Invariants
 
