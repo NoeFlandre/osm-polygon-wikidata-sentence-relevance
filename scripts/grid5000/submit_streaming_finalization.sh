@@ -47,7 +47,7 @@ if ! [[ "${RUN_ID}" =~ ^[a-z0-9][a-z0-9._-]*$ ]] || \
    ! [[ "${EXPECTED_SHARD}" =~ ^[a-z0-9][a-z0-9._-]*$ ]] || \
    ! [[ "${SAMPLING_TARGET}" =~ ^[0-9]+$ ]] || \
    [ -z "${SAMPLING_SEED}" ] || \
-   ! [[ "${WALLTIME}" =~ ^[0-9]+:[0-9]+:[0-9]+$ ]]; then
+   ! [[ "${WALLTIME}" =~ ^[0-9]+:[0-5][0-9]:[0-5][0-9]$ ]]; then
     echo "submit_streaming_finalization: invalid run-id/shard/sampling/walltime" >&2
     exit 2
 fi
@@ -68,8 +68,32 @@ for value in "$@"; do
     command_string="${command_string} $(shell_quote "${value}")"
 done
 
+# Keep finalization allocations policy-compliant without forcing every job into
+# the night window. A weekday CPU job may use the day window only when its full
+# requested walltime fits before 19:00; otherwise it remains night-bound.
+IFS=: read -r wall_hours wall_minutes wall_seconds <<<"${WALLTIME}"
+WALLTIME_SECONDS=$((10#${wall_hours} * 3600 + 10#${wall_minutes} * 60 + 10#${wall_seconds}))
+readonly WALLTIME_SECONDS
+read -r policy_weekday policy_hour policy_minute < <(
+    TZ=Europe/Paris date '+%u %H %M'
+)
+if ! [[ "${policy_weekday}" =~ ^[1-7]$ &&
+    "${policy_hour}" =~ ^[0-9]{2}$ &&
+    "${policy_minute}" =~ ^[0-9]{2}$ ]]; then
+    echo "submit_streaming_finalization: invalid Europe/Paris scheduler clock" >&2
+    exit 1
+fi
+policy_type=night
+now_seconds=$((10#${policy_hour} * 3600 + 10#${policy_minute} * 60))
+if [ "${policy_weekday}" -le 5 ] &&
+   [ "${now_seconds}" -ge $((9 * 3600)) ] &&
+   [ "$((now_seconds + WALLTIME_SECONDS))" -le $((19 * 3600)) ]; then
+    policy_type=day
+fi
+readonly policy_type
+
 if [ "${NODE_TYPE}" = "gpu" ]; then
-    exec oarsub -q default -t exotic -t night \
+    exec oarsub -q default -t exotic -t "${policy_type}" \
         -l gpu=1,walltime="${WALLTIME}" "${command_string}"
 fi
-exec oarsub -q default -t night -l walltime="${WALLTIME}" "${command_string}"
+exec oarsub -q default -t "${policy_type}" -l walltime="${WALLTIME}" "${command_string}"

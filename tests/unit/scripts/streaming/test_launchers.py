@@ -135,10 +135,13 @@ def test_streaming_wrapper_derives_deadline_from_scheduler_walltime() -> None:
     assert 'DEADLINE_DURATION="${deadline_seconds}s"' in text
 
 
-def test_finalization_submissions_are_night_bound() -> None:
+def test_finalization_submissions_select_the_current_policy_window() -> None:
     text = _text("submit_streaming_finalization.sh")
     assert text.count("exec oarsub ") == 2
-    for line in text.splitlines():
-        if "exec oarsub " in line:
-            assert "-q default" in line
-            assert "-t night" in line
+    assert "WALLTIME_SECONDS=$((" in text
+    assert "now_seconds=$((" in text
+    assert "policy_type=night" in text
+    assert "policy_type=day" in text
+    assert '"${policy_type}"' in text
+    assert "now_seconds + WALLTIME_SECONDS" in text
+    assert "-t night" not in text

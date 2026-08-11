@@ -172,3 +172,44 @@ def test_submit_rejects_repo_id_with_space(tmp_path: Path) -> None:
     )
     assert result.returncode == 2
     assert "owner/name" in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("policy_clock", "expected_policy"),
+    [("2 14 00", "day"), ("2 18 00", "night"), ("6 14 00", "night")],
+)
+def test_submit_selects_the_earliest_policy_window_that_fits(
+    tmp_path: Path,
+    policy_clock: str,
+    expected_policy: str,
+) -> None:
+    args = _good_args(tmp_path)
+    args[12] = "02:00:00"
+    repo = Path(args[0])
+    wrapper = repo / "scripts" / "grid5000" / "run_streaming_finalization_job.sh"
+    wrapper.parent.mkdir(parents=True, exist_ok=True)
+    wrapper.write_text("#!/usr/bin/env bash\nexit 0\n")
+    wrapper.chmod(0o700)
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    calls = tmp_path / "oarsub.calls"
+    (fake_bin / "oarsub").write_text(
+        f"#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" > {calls!s}\necho 123\\n"
+    )
+    (fake_bin / "oarsub").chmod(0o700)
+    (fake_bin / "date").write_text(
+        f"#!/usr/bin/env bash\nprintf '%s\\n' '{policy_clock}'\n"
+    )
+    (fake_bin / "date").chmod(0o700)
+
+    result = subprocess.run(
+        [str(SUBMIT), *args],
+        env={**os.environ, "PATH": f"{fake_bin}:{os.environ['PATH']}"},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert f"-t {expected_policy}" in calls.read_text()
