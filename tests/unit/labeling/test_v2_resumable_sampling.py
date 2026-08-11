@@ -78,8 +78,101 @@ def test_resumable_shards_match_in_memory_reference(
     expected = select_v2_rows(source, target=target, seed="seed")
     actual = pq.read_table(result)
     assert actual["sentence_id"].to_pylist() == expected["sentence_id"].to_pylist()
+    assert actual.equals(expected)
     assert (tmp_path / "state" / "state.json").exists()
     assert (tmp_path / "state" / "sampling.sqlite3").exists()
+
+
+def test_resumable_scans_project_only_columns_before_materialization(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    shards, _ = _shards(tmp_path)
+    real_parquet_file = v2_resumable_sampling.pq.ParquetFile
+    calls: list[tuple[str, ...] | None] = []
+
+    class TrackingParquetFile:
+        def __init__(self, path: Path) -> None:
+            self._inner = real_parquet_file(path)
+
+        def iter_batches(self, *, batch_size: int, columns: list[str] | None = None):
+            calls.append(tuple(columns) if columns is not None else None)
+            return self._inner.iter_batches(batch_size=batch_size, columns=columns)
+
+        def __getattr__(self, name: str) -> object:
+            return getattr(self._inner, name)
+
+    monkeypatch.setattr(v2_resumable_sampling.pq, "ParquetFile", TrackingParquetFile)
+    select_v2_shards_resumable(
+        shards,
+        tmp_path / "selected.parquet",
+        target=11,
+        seed="seed",
+        state_dir=tmp_path / "state",
+        batch_size=7,
+    )
+
+    assert tuple(v2_resumable_sampling._PLANNING_COLUMNS) in calls
+    assert tuple(v2_resumable_sampling._RETENTION_COLUMNS) in calls
+    assert all(
+        columns
+        in {
+            tuple(v2_resumable_sampling._PLANNING_COLUMNS),
+            tuple(v2_resumable_sampling._RETENTION_COLUMNS),
+        }
+        for columns in calls
+    )
+
+
+def test_materialize_heaps_reads_only_row_groups_with_candidates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    shards, _ = _shards(tmp_path)
+    planner = _PersistentPlanner(tmp_path / "sampling.sqlite3")
+    try:
+        offset = 0
+        for shard in shards:
+            planner.begin()
+            row_count = pq.ParquetFile(shard.path).metadata.num_rows
+            for batch in pq.ParquetFile(shard.path).iter_batches(batch_size=64):
+                planner.observe(batch)
+            planner.finish_planning_shard(shard, row_count, offset)
+            offset += row_count
+        plan = _build_plan(planner, target=1, seed="seed")
+        stratum = next(iter(plan.quotas))
+        planner.connection.execute(
+            "INSERT INTO candidates VALUES (?, ?, ?, ?, ?, ?)",
+            (stratum, 0, "0" * 64, 0, shards[0].shard_key, 0),
+        )
+        planner.connection.commit()
+
+        real_parquet_file = v2_resumable_sampling.pq.ParquetFile
+        read_groups: list[int] = []
+
+        class TrackingParquetFile:
+            def __init__(self, path: Path) -> None:
+                self._inner = real_parquet_file(path)
+
+            def read_row_group(self, index: int):
+                read_groups.append(index)
+                return self._inner.read_row_group(index)
+
+            def __getattr__(self, name: str) -> object:
+                return getattr(self._inner, name)
+
+        monkeypatch.setattr(
+            v2_resumable_sampling.pq, "ParquetFile", TrackingParquetFile
+        )
+        v2_resumable_sampling._materialize_heaps(
+            planner,
+            shards,
+            plan,
+            batch_size=4,
+            materialize_shard=None,
+        )
+
+        assert read_groups == [0]
+    finally:
+        planner.close()
 
 
 def test_resumable_sampling_reuses_plan_when_target_expands(tmp_path: Path) -> None:
@@ -391,9 +484,11 @@ def test_retain_shard_checkpoints_within_a_shard_and_resumes(
             def __init__(self, path: Path) -> None:
                 self._inner = real_parquet_file(path)
 
-            def iter_batches(self, *, batch_size: int):
+            def iter_batches(
+                self, *, batch_size: int, columns: list[str] | None = None
+            ):
                 for index, batch in enumerate(
-                    self._inner.iter_batches(batch_size=batch_size)
+                    self._inner.iter_batches(batch_size=batch_size, columns=columns)
                 ):
                     yield batch
                     if index == 0:
@@ -427,6 +522,39 @@ def test_retain_shard_checkpoints_within_a_shard_and_resumes(
         retained_offset, retained = planner.retention_progress()[shards[0].shard_key]
         assert retained_offset == 23
         assert retained
+    finally:
+        planner.close()
+
+
+def test_retention_does_not_recompute_h3_cells(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    shards, _ = _shards(tmp_path)
+    planner = _PersistentPlanner(tmp_path / "sampling.sqlite3")
+    try:
+        planner.begin()
+        for batch in pq.ParquetFile(shards[0].path).iter_batches(batch_size=64):
+            planner.observe(batch)
+        planner.finish_planning_shard(shards[0], 23, 0)
+        plan = _build_plan(planner, target=1, seed="seed")
+        monkeypatch.setattr(
+            v2_resumable_sampling,
+            "_cell",
+            lambda *_args: (_ for _ in ()).throw(
+                AssertionError("retention should not recompute H3 cells")
+            ),
+        )
+
+        _retain_shard(
+            planner,
+            shards[0],
+            plan,
+            _heaps_from_database(planner, plan),
+            seed="seed",
+            batch_size=4,
+            materialize_shard=None,
+        )
+        assert planner.retention_progress()[shards[0].shard_key][1]
     finally:
         planner.close()
 

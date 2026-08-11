@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
-from collections import Counter
+from collections import Counter, defaultdict
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
@@ -39,6 +39,20 @@ from .v2_sampling import (
 _SCHEMA_VERSION = 1
 _STATE_FILENAME = "state.json"
 _DATABASE_FILENAME = "sampling.sqlite3"
+_PLANNING_COLUMNS: tuple[str, ...] = (
+    "sentence_id",
+    "polygon_id",
+    "lat",
+    "lon",
+    "area_km2",
+    "area_bucket",
+)
+_RETENTION_COLUMNS: tuple[str, ...] = (
+    "sentence_id",
+    "polygon_id",
+    "lat",
+    "lon",
+)
 
 
 class ResumableSamplingError(RuntimeError):
@@ -188,29 +202,41 @@ class _PersistentPlanner:
             raise ResumableSamplingError("sampling transaction is already open")
         self.connection.execute("BEGIN IMMEDIATE")
 
-    def observe(self, batch: pa.RecordBatch) -> int:
-        missing = _REQUIRED.difference(batch.schema.names)
+    def observe(self, batch: pa.RecordBatch, *, validate_schema: bool = True) -> int:
+        required = _REQUIRED if validate_schema else set(_PLANNING_COLUMNS)
+        missing = required.difference(batch.schema.names)
         if missing:
             raise ValueError(
                 f"V2 sampling input is missing required columns: {sorted(missing)}"
             )
-        rows = batch.to_pylist()
+        sentence_ids = batch["sentence_id"].to_pylist()
+        polygon_ids = batch["polygon_id"].to_pylist()
+        latitudes = batch["lat"].to_pylist()
+        longitudes = batch["lon"].to_pylist()
+        areas = batch["area_km2"].to_pylist()
+        buckets = batch["area_bucket"].to_pylist()
         identifiers: list[tuple[str]] = []
         metadata_rows: dict[str, tuple[str, str]] = {}
         counts: dict[str, int] = {}
-        for row in rows:
-            sentence_id = row["sentence_id"]
-            polygon_id = row["polygon_id"]
+        for sentence_id, polygon_id, lat, lon, area, bucket in zip(
+            sentence_ids,
+            polygon_ids,
+            latitudes,
+            longitudes,
+            areas,
+            buckets,
+            strict=True,
+        ):
             if not isinstance(sentence_id, str) or not sentence_id:
                 raise ValueError("sentence_id must be non-empty")
             if not isinstance(polygon_id, str) or not polygon_id:
                 raise ValueError("polygon_id must be non-empty")
             identifiers.append((sentence_id,))
-            cell = _cell(row["lat"], row["lon"])
+            cell = _cell(lat, lon)
             if cell == _MISSING_CELL:
                 continue
             metadata = (
-                canonical_area_bucket(row["area_km2"], row["area_bucket"]),
+                canonical_area_bucket(area, bucket),
                 cell,
             )
             prior = metadata_rows.get(polygon_id, self.polygon_metadata.get(polygon_id))
@@ -224,20 +250,24 @@ class _PersistentPlanner:
             )
         except sqlite3.IntegrityError as exc:
             raise ValueError("sampling input contains duplicate sentence IDs") from exc
+        self.connection.executemany(
+            "INSERT OR IGNORE INTO polygon_metadata VALUES (?, ?, ?)",
+            (
+                (polygon_id, bucket, cell)
+                for polygon_id, (bucket, cell) in metadata_rows.items()
+            ),
+        )
         for polygon_id, (bucket, cell) in metadata_rows.items():
-            self.connection.execute(
-                "INSERT OR IGNORE INTO polygon_metadata VALUES (?, ?, ?)",
-                (polygon_id, bucket, cell),
-            )
             self.polygon_metadata[polygon_id] = (bucket, cell)
-        for stratum, count in counts.items():
+        stratum_rows = list(counts.items())
+        for stratum, count in stratum_rows:
             self.stratum_sizes[stratum] = self.stratum_sizes.get(stratum, 0) + count
-            self.connection.execute(
-                "INSERT INTO stratum_sizes(stratum, row_count) VALUES (?, ?) "
-                "ON CONFLICT(stratum) DO UPDATE SET row_count = row_count + excluded.row_count",
-                (stratum, count),
-            )
-        return len(rows)
+        self.connection.executemany(
+            "INSERT INTO stratum_sizes(stratum, row_count) VALUES (?, ?) "
+            "ON CONFLICT(stratum) DO UPDATE SET row_count = row_count + excluded.row_count",
+            stratum_rows,
+        )
+        return len(sentence_ids)
 
     def finish_planning_shard(
         self, shard: FinalizedShard, row_count: int, offset: int
@@ -399,28 +429,51 @@ def _retain_shard(
                     f"missing source path for {shard.shard_key}"
                 )
             local_row_index = 0
-            for batch in pq.ParquetFile(path).iter_batches(batch_size=batch_size):
-                rows = batch.to_pylist()
+            for batch in pq.ParquetFile(path).iter_batches(
+                batch_size=batch_size, columns=list(_RETENTION_COLUMNS)
+            ):
                 batch_start = local_row_index
-                batch_end = batch_start + len(rows)
+                batch_end = batch_start + batch.num_rows
                 local_row_index = batch_end
                 if batch_end <= retain_offset:
                     continue
+                start = max(0, retain_offset - batch_start)
+                sentence_ids = batch["sentence_id"].to_pylist()[start:]
+                polygon_ids = batch["polygon_id"].to_pylist()[start:]
+                latitudes = batch["lat"].to_pylist()[start:]
+                longitudes = batch["lon"].to_pylist()[start:]
+                pending_deletes: list[tuple[str, int]] = []
+                pending_inserts: list[tuple[str, int, str, int, str, int]] = []
                 planner.begin()
                 try:
-                    for relative_index, row in enumerate(
-                        rows[max(0, retain_offset - batch_start) :],
+                    for relative_index, (
+                        sentence_id,
+                        polygon_id,
+                        lat,
+                        lon,
+                    ) in enumerate(
+                        zip(
+                            sentence_ids,
+                            polygon_ids,
+                            latitudes,
+                            longitudes,
+                            strict=True,
+                        ),
                         start=max(retain_offset, batch_start),
                     ):
                         row_index = relative_index
                         global_index = offset + row_index
-                        if _cell(row["lat"], row["lon"]) == _MISSING_CELL:
+                        # Planning already validates immutable source coordinates
+                        # and records the H3 stratum. Retention only needs to
+                        # preserve the contract that missing coordinates are
+                        # excluded, so avoid recomputing H3 for every row.
+                        if lat is None or lon is None:
                             continue
-                        polygon_id = str(row["polygon_id"])
+                        polygon_id = str(polygon_id)
                         stratum = plan.polygon_metadata[polygon_id][1]
                         quota = plan.quotas.get(stratum, 0)
                         if quota:
-                            rank_hex = _rank(seed, str(row["sentence_id"]))
+                            rank_hex = _rank(seed, str(sentence_id))
                             candidate = (
                                 -plan.polygon_order[polygon_id],
                                 -int(rank_hex, 16),
@@ -431,8 +484,7 @@ def _retain_shard(
                             heap = heaps[stratum]
                             if len(heap) < quota:
                                 heapq.heappush(heap, candidate)
-                                planner.connection.execute(
-                                    "INSERT INTO candidates VALUES (?, ?, ?, ?, ?, ?)",
+                                pending_inserts.append(
                                     (
                                         stratum,
                                         -candidate[0],
@@ -440,16 +492,12 @@ def _retain_shard(
                                         global_index,
                                         shard.shard_key,
                                         row_index,
-                                    ),
+                                    )
                                 )
                             elif candidate[:3] > heap[0][:3]:
                                 old = heapq.heapreplace(heap, candidate)
-                                planner.connection.execute(
-                                    "DELETE FROM candidates WHERE stratum=? AND global_index=?",
-                                    (stratum, -old[2]),
-                                )
-                                planner.connection.execute(
-                                    "INSERT INTO candidates VALUES (?, ?, ?, ?, ?, ?)",
+                                pending_deletes.append((stratum, -old[2]))
+                                pending_inserts.append(
                                     (
                                         stratum,
                                         -candidate[0],
@@ -457,8 +505,16 @@ def _retain_shard(
                                         global_index,
                                         shard.shard_key,
                                         row_index,
-                                    ),
+                                    )
                                 )
+                    planner.connection.executemany(
+                        "DELETE FROM candidates WHERE stratum=? AND global_index=?",
+                        pending_deletes,
+                    )
+                    planner.connection.executemany(
+                        "INSERT INTO candidates VALUES (?, ?, ?, ?, ?, ?)",
+                        pending_inserts,
+                    )
                     planner.checkpoint_retaining_shard(shard.shard_key, batch_end)
                 except BaseException:
                     planner.rollback()
@@ -484,7 +540,11 @@ def _materialize_heaps(
     materialize_shard: Callable[[FinalizedShard], AbstractContextManager[Path]] | None,
 ) -> tuple[dict[str, list[tuple[int, int, int, dict[str, Any]]]], pa.Schema]:
     locators = planner.load_candidate_locators()
-    by_location = {(item.shard_key, item.row_index): item for item in locators}
+    by_shard: dict[str, list[_CandidateLocator]] = defaultdict(list)
+    for item in locators:
+        by_shard[item.shard_key].append(item)
+    for shard_locators in by_shard.values():
+        shard_locators.sort(key=lambda item: item.row_index)
     heaps: dict[str, list[tuple[int, int, int, dict[str, Any]]]] = {
         stratum: [] for stratum in plan.quotas
     }
@@ -505,16 +565,36 @@ def _materialize_heaps(
                 schema = current_schema
             elif current_schema != schema:
                 raise ValueError("V2 source shard schemas do not match")
-            local_row_index = 0
-            for batch in pq.ParquetFile(path).iter_batches(batch_size=batch_size):
-                for row in batch.to_pylist():
-                    row_index = local_row_index
-                    local_row_index += 1
-                    item = by_location.pop((shard.shard_key, row_index), None)
-                    if item is not None:
+            parquet = pq.ParquetFile(path)
+            shard_locators = by_shard.get(shard.shard_key, [])
+            locator_index = 0
+            row_offset = 0
+            for row_group_index in range(parquet.num_row_groups):
+                row_group_rows = parquet.metadata.row_group(row_group_index).num_rows
+                row_group_end = row_offset + row_group_rows
+                selected: list[_CandidateLocator] = []
+                while locator_index < len(shard_locators):
+                    item = shard_locators[locator_index]
+                    if item.row_index >= row_group_end:
+                        break
+                    if item.row_index < row_offset:
+                        raise ValueError(
+                            "V2 sampling candidates no longer exist in their source"
+                        )
+                    selected.append(item)
+                    locator_index += 1
+                if selected:
+                    rows = parquet.read_row_group(row_group_index).to_pylist()
+                    for item in selected:
+                        row = rows[item.row_index - row_offset]
                         heaps[item.stratum].append((*item.heap_value[:3], row))
-    if by_location:
-        raise ValueError("V2 sampling candidates no longer exist in their source")
+                row_offset = row_group_end
+            if row_offset != planner.progress()[shard.shard_key][0]:
+                raise ValueError("V2 source changed between sampling passes")
+            if locator_index != len(shard_locators):
+                raise ValueError(
+                    "V2 sampling candidates no longer exist in their source"
+                )
     if schema is None:
         raise ResumableSamplingError("V2 sampling has no source schema")
     return heaps, schema
@@ -643,10 +723,17 @@ def select_v2_shards_resumable(
                         raise ResumableSamplingError(
                             f"missing source path for {shard.shard_key}"
                         )
+                    source_schema = pq.read_schema(path)
+                    missing = _REQUIRED.difference(source_schema.names)
+                    if missing:
+                        raise ValueError(
+                            "V2 sampling input is missing required columns: "
+                            f"{sorted(missing)}"
+                        )
                     for batch in pq.ParquetFile(path).iter_batches(
-                        batch_size=batch_size
+                        batch_size=batch_size, columns=list(_PLANNING_COLUMNS)
                     ):
-                        row_count += planner.observe(batch)
+                        row_count += planner.observe(batch, validate_schema=False)
                 planner.finish_planning_shard(shard, row_count, offset)
             except BaseException:
                 planner.rollback()
