@@ -25,6 +25,7 @@ from osm_polygon_sentence_relevance.operator import (
     continuation,
     recorded_job,
     relay,
+    remote_preparation,
     split_finalization,
     split_relay,
 )
@@ -451,58 +452,33 @@ def _prepare_destination_for_resume(
     relay_root: Path | None,
     poll_seconds: float,
 ) -> None:
-    """Prepare a continuation site before allowing a new submission.
+    """Adapt CLI seams to the isolated continuation preparation policy."""
 
-    Same-site continuation reuses the already validated checkout and assets.
-    Cross-site continuation performs the normal policy, quota, checkout and
-    immutable-asset preflights before the validated relay is installed.
-    """
-
-    current = store.load()
-    is_label = current.facts.get("active_stage") == Stage.LABEL.value
-    if current.phase is not RunPhase.REMOTE_PREPARED:
-        store.transition(
-            expected=current.phase,
-            target=RunPhase.REMOTE_PREPARED,
-            facts={"site": site, "job_id": current.facts.get("job_id")},
-        )
-    ssh = SshClient(target=site, command_timeout=1800)
-    home = _remote_home(ssh)
-    layout = RemoteLayout(home / "osm-polygon-operator" / config.run_id)
-    _usage_policy_preflight(ssh, site)
-    ensure_home_headroom(
-        ssh,
-        protected_root=layout.root,
-        minimum_headroom_bytes=LABEL_STAGING_HEADROOM_BYTES,
+    return remote_preparation.prepare_destination(
+        store=store,
+        config=config,
+        site=site,
+        relay_root=relay_root,
+        poll_seconds=poll_seconds,
+        services=_remote_preparation_services(),
     )
-    # Refresh the managed checkout even for same-site continuation.  A
-    # resumed run may carry a newer behavior-preserving execution commit.
-    stager = Stager(ssh)
-    stager.prepare(config, layout)
-    _stage_hf_token(stager, layout)
-    if relay_root is not None and is_label:
-        assets = stager.prepare_label_assets(config, layout, download_input=True)
-        if not assets.llama_server_ready:
 
-            def submission_preflight() -> None:
-                _usage_policy_preflight(ssh, site)
-                ensure_home_headroom(
-                    ssh,
-                    protected_root=layout.root,
-                    minimum_headroom_bytes=_SUBMISSION_HEADROOM_BYTES,
-                )
 
-            oar = OarClient(
-                ssh,
-                preflight=submission_preflight,
-            )
-            ensure_llama_server(ssh, oar, store, layout, poll_seconds)
-    if relay_root is not None:
-        store.transition(
-            expected=RunPhase.REMOTE_PREPARED,
-            target=RunPhase.REMOTE_PREPARED,
-            facts={"resume_relay_root": str(relay_root)},
-        )
+def _remote_preparation_services() -> remote_preparation.RemotePreparationServices:
+    """Bind CLI-owned side effects to continuation preparation."""
+
+    return remote_preparation.RemotePreparationServices(
+        ssh_factory=SshClient,
+        remote_home=_remote_home,
+        usage_policy_preflight=_usage_policy_preflight,
+        ensure_home_headroom=ensure_home_headroom,
+        stager_type=Stager,
+        stage_hf_token=_stage_hf_token,
+        oar_type=OarClient,
+        ensure_llama_server=ensure_llama_server,
+        label_staging_headroom_bytes=LABEL_STAGING_HEADROOM_BYTES,
+        submission_headroom_bytes=_SUBMISSION_HEADROOM_BYTES,
+    )
 
 
 def _ensure_relay_at_destination(
