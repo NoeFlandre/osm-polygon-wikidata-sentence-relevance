@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from osm_polygon_sentence_relevance.operator.oar import ExitClass, JobStatus
+from osm_polygon_sentence_relevance.operator.result_text import result_text
 
 
 class SplitResumeError(RuntimeError):
@@ -39,7 +40,7 @@ class SplitResumeInspection:
 def _read_exit_code(ssh: Any, exit_file: str) -> int | None:
     quoted = shlex.quote(exit_file)
     result = ssh.run(f"if test -f {quoted}; then cat {quoted}; fi")
-    text = str(getattr(result, "text", None) or getattr(result, "stdout", ""))
+    text = result_text(result, fallback_on_empty=True)
     stripped = text.strip()
     if not stripped:
         return None

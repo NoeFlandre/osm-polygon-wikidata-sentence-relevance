@@ -7,6 +7,7 @@ from collections.abc import Callable
 
 from osm_polygon_sentence_relevance.operator.job_monitor import monitor_job_with_log
 from osm_polygon_sentence_relevance.operator.oar import JobState, OarClient
+from osm_polygon_sentence_relevance.operator.result_text import result_text
 from osm_polygon_sentence_relevance.operator.ssh import SshClient
 from osm_polygon_sentence_relevance.operator.state import RunPhase, StateStore
 from osm_polygon_sentence_relevance.operator.workflows import (
@@ -15,18 +16,11 @@ from osm_polygon_sentence_relevance.operator.workflows import (
 )
 
 
-def _result_text(result: object) -> str:
-    text_attr = getattr(result, "text", None)
-    if text_attr is not None:
-        return str(text_attr)
-    return str(getattr(result, "stdout", ""))
-
-
 def llama_server_ready(ssh: SshClient, layout: RemoteLayout) -> bool:
     """Check whether the persistent CUDA llama-server binary exists and is executable."""
 
     return (
-        _result_text(
+        result_text(
             ssh.run(
                 "if test -x "
                 f"{layout.root!s}/llama-server-bin/llama-server; "

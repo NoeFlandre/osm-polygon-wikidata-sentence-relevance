@@ -16,6 +16,7 @@ from osm_polygon_sentence_relevance.labeling.v2_finalization import (
 )
 from osm_polygon_sentence_relevance.operator.config import DATA_ROOT
 from osm_polygon_sentence_relevance.operator.relay_transport import RemoteTransfer
+from osm_polygon_sentence_relevance.operator.result_text import result_text
 from osm_polygon_sentence_relevance.operator.ssh import SshClient
 from osm_polygon_sentence_relevance.operator.workflows import RemoteLayout
 
@@ -49,15 +50,6 @@ _V2_MANUAL_EVAL_FIELDS = frozenset(
 )
 
 
-def _result_text(result: object) -> str:
-    """Return ``result.text`` if available, else ``result.stdout``."""
-
-    text_attr = getattr(result, "text", None)
-    if text_attr is not None:
-        return str(text_attr)
-    return str(getattr(result, "stdout", ""))
-
-
 def _publish_local_label_output(directory: Path, dataset_id: str) -> str:
     """Publish a local finalized label directory through the normal validator."""
 
@@ -82,7 +74,7 @@ def remote_exit_code(
     path = layout.logs / str(job_id) / filename
     result = ssh.run(f"test -f {path!s} && cat {path!s}")
     try:
-        return int(_result_text(result).strip())
+        return int(result_text(result).strip())
     except ValueError as exc:
         raise RuntimeError("remote payload exit status is invalid") from exc
 
@@ -125,7 +117,7 @@ def publish_split(
         f'export HF_TOKEN="$(cat -- {token_file})"; '
         f'[ -n "$HF_TOKEN" ]; exec {command}'
     )
-    commit_id = _result_text(result).strip()
+    commit_id = result_text(result).strip()
     if len(commit_id) < 7:
         raise RuntimeError("Hugging Face publication did not return a commit")
     return commit_id
@@ -302,7 +294,7 @@ def label_publication_commit(
     """Read the verified label publisher's immutable Hub commit from its log."""
 
     path = layout.logs / str(job_id) / "labeling.stdout.log"
-    text = _result_text(ssh.run(f"test -f {path!s} && cat {path!s}"))
+    text = result_text(ssh.run(f"test -f {path!s} && cat {path!s}"))
     for line in reversed(text.splitlines()):
         try:
             payload = json.loads(line)

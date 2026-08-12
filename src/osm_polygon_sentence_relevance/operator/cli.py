@@ -98,6 +98,7 @@ from osm_polygon_sentence_relevance.operator.remote_completion import (
     publish_split,
     remote_exit_code,
 )
+from osm_polygon_sentence_relevance.operator.result_text import result_text
 from osm_polygon_sentence_relevance.operator.sampling import (
     sampling_target_for_run as _sampling_target_for_run,
 )
@@ -181,15 +182,6 @@ def _stage_hf_token(stager: object, layout: RemoteLayout) -> None:
 #: ``store.load_or_create`` (or its persisted equivalent) and cleared in
 #: the enclosing ``finally``. Never scanned across unrelated runs.
 _ACTIVE_RUN_ID: str | None = None
-
-
-def _result_text(result: Any) -> str:
-    """Return ``result.text`` if available, else ``result.stdout``."""
-
-    text_attr = getattr(result, "text", None)
-    if text_attr is not None:
-        return text_attr
-    return getattr(result, "stdout", "")
 
 
 # Keep the subprocess module visible through the CLI for existing test seams;
@@ -793,7 +785,7 @@ def _classify_or_continue(
         listing = ssh.run(
             f"test -d {log_dir!s} && find {log_dir!s} -mindepth 1 -maxdepth 1"
         )
-        has_any = bool(_result_text(listing).strip())
+        has_any = bool(result_text(listing).strip())
         if not has_any:
             raise RuntimeError(
                 f"recorded allocation {job_id} is missing from OAR with no "
@@ -1366,7 +1358,7 @@ def _optimize_queued_start(
             assets[site] = label_assets
         elif site != fallback_site:
             source_ssh, source_layout, _source_oar = client(fallback_site)
-            has_split_state = _result_text(
+            has_split_state = result_text(
                 source_ssh.run(
                     f"if test -f {source_layout.split_work}/state.json; "
                     "then printf yes; else printf no; fi"
@@ -2162,7 +2154,7 @@ def _run(args: SimpleNamespace) -> int:
                     else layout.label_output
                 )
                 complete = (
-                    _result_text(
+                    result_text(
                         ssh.run(
                             "if test -f "
                             f"{output_dir!s}/manifest.json; "

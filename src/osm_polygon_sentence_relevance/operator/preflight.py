@@ -6,23 +6,14 @@ import re
 import shlex
 import subprocess
 from pathlib import PurePosixPath
-from typing import Any
 
 from osm_polygon_sentence_relevance.operator.config import (
     INPUT_DATASET_ID,
     OUTPUT_DATASET_ID,
     Stage,
 )
+from osm_polygon_sentence_relevance.operator.result_text import result_text
 from osm_polygon_sentence_relevance.operator.ssh import SshClient
-
-
-def _result_text(result: Any) -> str:
-    """Return compatible text from local subprocess and SSH result objects."""
-
-    text_attr = getattr(result, "text", None)
-    if text_attr is not None:
-        return text_attr
-    return getattr(result, "stdout", "")
 
 
 def git_head() -> str:
@@ -35,7 +26,7 @@ def git_head() -> str:
         check=True,
         timeout=10,
     )
-    value = _result_text(result).strip()
+    value = result_text(result).strip()
     if len(value) != 40:
         raise RuntimeError("current source checkout has no immutable commit")
     dirty = subprocess.run(
@@ -72,7 +63,7 @@ def remote_home(ssh: SshClient) -> PurePosixPath:
     """Read and validate the remote user's home directory."""
 
     result = ssh.run('printf "%s\\n" "$HOME"')
-    value = _result_text(result).strip()
+    value = result_text(result).strip()
     if not value.startswith("/") or "\n" in value or ".." in value.split("/"):
         raise RuntimeError("remote home path is invalid")
     return PurePosixPath(value)

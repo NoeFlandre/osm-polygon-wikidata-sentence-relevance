@@ -43,17 +43,14 @@ from osm_polygon_sentence_relevance.operator.oar import (
 from osm_polygon_sentence_relevance.operator.relay_transport import (
     validate_safe_remote_path,
 )
+from osm_polygon_sentence_relevance.operator.result_text import result_text
 from osm_polygon_sentence_relevance.operator.ssh import SshClient
 
 
 def _ssh_text(ssh: SshClient, command: str) -> str:
     """Run ``command`` and return the result text regardless of shape."""
 
-    result = ssh.run(command)
-    text_attr = getattr(result, "text", None)
-    if text_attr:
-        return text_attr
-    return getattr(result, "stdout", "")
+    return result_text(ssh.run(command), fallback_on_empty=True)
 
 
 class ResumeError(RuntimeError):
@@ -174,12 +171,7 @@ def _read_remote_bytes_digest(ssh: SshClient, remote_path: str) -> str:
 
     validate_safe_remote_path(remote_path)
     chunk = ssh.run(f"sha256sum -- {remote_path}")
-    text_attr = getattr(chunk, "text", None)
-    text = (
-        text_attr.strip()
-        if text_attr is not None
-        else getattr(chunk, "stdout", "").strip()
-    )
+    text = result_text(chunk).strip()
     if not text:
         raise ResumeError(f"remote SHA-256 read returned no output: {remote_path}")
     digest = text.split()[0]
@@ -242,10 +234,7 @@ def _enumerate_remote_checkpoint_files(
         "-printf '%y\\t%f\\n' 2>/dev/null | sort"
     )
     result: list[tuple[int, str, str]] = []
-    listing_attr = getattr(listing, "text", None)
-    listing_text = (
-        listing_attr if listing_attr is not None else getattr(listing, "stdout", "")
-    )
+    listing_text = result_text(listing)
     for line in listing_text.splitlines():
         stripped = line.strip()
         if not stripped:
@@ -295,12 +284,7 @@ def inspect_remote_resume(
         f"if test -f {label_output_root.rstrip('/')}/manifest.json; "
         "then printf yes; else printf no; fi"
     )
-    manifest_attr = getattr(manifest_probe, "text", None)
-    manifest_text = (
-        manifest_attr.strip()
-        if manifest_attr is not None
-        else getattr(manifest_probe, "stdout", "").strip()
-    )
+    manifest_text = result_text(manifest_probe).strip()
     manifest_present = manifest_text == "yes"
 
     progress_payload = _read_progress_payload(ssh, label_work_root)
