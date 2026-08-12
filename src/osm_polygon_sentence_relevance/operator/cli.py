@@ -19,6 +19,9 @@ from osm_polygon_sentence_relevance.labeling.v2_contracts import (
     V2_LOGIT_PROMPT_VERSION,
 )
 from osm_polygon_sentence_relevance.operator import (
+    classification as classification_transitions,
+)
+from osm_polygon_sentence_relevance.operator import (
     continuation,
     recorded_job,
     relay,
@@ -53,7 +56,6 @@ from osm_polygon_sentence_relevance.operator.earliest_start import (
     should_seek_replacement,
 )
 from osm_polygon_sentence_relevance.operator.label_lanes import (
-    LabelLane,
     LabelLanePlan,
     label_lane_plan,
 )
@@ -525,6 +527,20 @@ def _ensure_relay_at_destination(
         )
 
 
+def _classification_services() -> classification_transitions.ClassificationServices:
+    """Bind CLI-owned side effects to the classification state machine."""
+
+    return classification_transitions.ClassificationServices(
+        next_recovery_attempt=_next_recovery_attempt,
+        transition_terminal=_transition_terminal,
+        preserve_label=preserve_label,
+        preserve_manual_eval=preserve_manual_eval,
+        label_publication_commit=label_publication_commit,
+        publish_label=publish_label,
+        mark_remote_status=mark_remote_status,
+    )
+
+
 def _apply_classification(
     *,
     store: StateStore,
@@ -538,196 +554,21 @@ def _apply_classification(
     failure_reason_token: str | None = None,
     label_plan: LabelLanePlan | None = None,
 ) -> None:
-    """Drive durable state transitions for a classified terminal allocation.
+    """Adapt CLI calls to the isolated classification state machine."""
 
-    Re-entering ``FAILED`` is allowed for idempotent reclassification: if the
-    same allocation is re-inspected and the new evidence still proves a
-    deterministic failure, the state stays ``FAILED`` but ``failed_job_id``
-    and the durable sequence advance.
-
-    Re-entering ``FAILED`` and then transitioning to ``REMOTE_PREPARED`` is
-    only permitted when the freshly inspected evidence classifies as
-    ``CONTINUE`` and the previous ``FAILED`` was a misclassification of a
-    walltime-killed allocation. Recovery facts are appended so the run
-    identity is preserved and the recovery is auditable.
-    """
-
-    is_label = active_stage == Stage.LABEL.value
-    current = store.load()
-    is_recovery_from_failed = current.phase is RunPhase.FAILED
-    if classification is ExitClass.FAILED:
-        reason_token = (
-            failure_reason_token if failure_reason_token else "deterministic-failure"
-        )
-        _transition_terminal(
-            store,
-            expected=(RunPhase.RUNNING, RunPhase.QUEUED, RunPhase.FAILED),
-            target=RunPhase.FAILED,
-            facts={"failed_job_id": job_id, "failure_reason": reason_token},
-        )
-        mark_remote_status(ssh, layout, "failed")
-        raise RuntimeError(
-            f"recorded allocation {job_id} failed deterministically "
-            f"[reason={reason_token}]; not resubmitting automatically"
-        )
-    if classification is ExitClass.COMPLETE:
-        if is_label:
-            if label_plan is not None and label_plan.lane is LabelLane.SMOKE:
-                smoke_path = preserve_label(
-                    ssh,
-                    layout,
-                    label_plan.output_dir,
-                )
-                manual_eval_path = preserve_manual_eval(
-                    ssh,
-                    layout,
-                    label_plan.work_dir,
-                    lane=LabelLane.SMOKE.value,
-                )
-                facts: dict[str, object] = {
-                    "smoke_job_id": job_id,
-                    "smoke_completed": True,
-                    "smoke_artifact_path": str(smoke_path),
-                    "smoke_manual_eval_path": str(manual_eval_path),
-                }
-                if is_recovery_from_failed:
-                    facts["recovered_from_job_id"] = job_id
-                    facts["recovery_reason"] = (
-                        "previously-failed smoke allocation re-inspected as complete"
-                    )
-                    facts["recovery_attempt"] = _next_recovery_attempt(current.facts)
-                _transition_terminal(
-                    store,
-                    expected=(RunPhase.RUNNING, RunPhase.QUEUED, RunPhase.FAILED),
-                    target=RunPhase.VALIDATED,
-                    facts=facts,
-                )
-                store.transition(
-                    expected=RunPhase.VALIDATED,
-                    target=RunPhase.REMOTE_PREPARED,
-                    facts={
-                        "active_stage": Stage.LABEL.value,
-                        "label_lane": LabelLane.PRODUCTION.value,
-                    },
-                )
-                print(
-                    "V2 smoke complete and preserved; production labeling is ready.",
-                    flush=True,
-                )
-                return
-            publishes = (
-                label_plan.publishes
-                if label_plan is not None
-                else config.requirements.row_limit == 0
-            )
-            output_dir = (
-                label_plan.output_dir if label_plan is not None else layout.label_output
-            )
-            manual_eval_path = (
-                preserve_manual_eval(
-                    ssh,
-                    layout,
-                    label_plan.work_dir,
-                    lane=label_plan.lane.value,
-                )
-                if label_plan is not None
-                else None
-            )
-            hub_commit: str | None = None
-            if publishes:
-                try:
-                    hub_commit = label_publication_commit(ssh, layout, job_id)
-                except RuntimeError as exc:
-                    if str(exc) != (
-                        "label publication did not report an immutable Hub commit"
-                    ):
-                        raise
-                    hub_commit = publish_label(
-                        ssh,
-                        layout,
-                        output_dir,
-                        config.output_dataset_id,
-                        v2=label_plan is not None,
-                    )
-            facts: dict[str, object] = {"label_job_id": job_id}
-            if manual_eval_path is not None:
-                facts["manual_eval_path"] = str(manual_eval_path)
-            if hub_commit is not None:
-                facts["hub_commit"] = hub_commit
-            if is_recovery_from_failed:
-                facts["recovered_from_job_id"] = job_id
-                facts["recovery_reason"] = (
-                    "previously-failed allocation re-inspected as complete"
-                )
-                facts["recovery_attempt"] = _next_recovery_attempt(current.facts)
-            _transition_terminal(
-                store,
-                expected=(RunPhase.RUNNING, RunPhase.QUEUED, RunPhase.FAILED),
-                target=RunPhase.VALIDATED,
-                facts=facts,
-            )
-            store.transition(
-                expected=RunPhase.VALIDATED,
-                target=RunPhase.VERIFYING,
-                facts={"dataset_id": config.output_dataset_id},
-            )
-            store.transition(
-                expected=RunPhase.VERIFYING,
-                target=RunPhase.COMPLETE,
-                facts={"published": publishes},
-            )
-            print(f"Labeling complete: run {config.run_id}", flush=True)
-            mark_remote_status(ssh, layout, "complete")
-            return
-        if is_recovery_from_failed:
-            _transition_terminal(
-                store,
-                expected=(RunPhase.FAILED,),
-                target=RunPhase.CHECKPOINTED,
-                facts={
-                    "split_job_id": job_id,
-                    "recovered_from_job_id": job_id,
-                    "recovery_reason": (
-                        "previously-failed split allocation re-inspected as complete"
-                    ),
-                    "recovery_attempt": _next_recovery_attempt(current.facts),
-                },
-            )
-        else:
-            _transition_terminal(
-                store,
-                expected=(RunPhase.RUNNING, RunPhase.QUEUED),
-                target=RunPhase.CHECKPOINTED,
-                facts={"split_job_id": job_id},
-            )
-        print(
-            f"Sentence splitting checkpointed: run {config.run_id}; rerun to finalize.",
-            flush=True,
-        )
-        return
-    if classification is ExitClass.CONTINUE:
-        facts = {"continued_after_job": job_id}
-        if resume_artifact_path is not None:
-            facts["resume_relay_path"] = resume_artifact_path
-        if is_recovery_from_failed:
-            facts["recovered_from_job_id"] = job_id
-            facts["recovery_reason"] = (
-                "walltime-killed allocation re-inspected with validated partial checkpoints"
-            )
-            facts["recovery_attempt"] = _next_recovery_attempt(current.facts)
-        _transition_terminal(
-            store,
-            expected=(RunPhase.RUNNING, RunPhase.QUEUED, RunPhase.FAILED),
-            target=RunPhase.REMOTE_PREPARED,
-            facts=facts,
-        )
-        print(
-            "Validated checkpoints preserved; rerun to continue on the next "
-            "allocation (possibly another Grid'5000 site).",
-            flush=True,
-        )
-        return
-    raise RuntimeError(f"unhandled exit class: {classification}")
+    return classification_transitions.apply_classification(
+        store=store,
+        config=config,
+        ssh=ssh,
+        layout=layout,
+        job_id=job_id,
+        active_stage=active_stage,
+        classification=classification,
+        resume_artifact_path=resume_artifact_path,
+        failure_reason_token=failure_reason_token,
+        label_plan=label_plan,
+        services=_classification_services(),
+    )
 
 
 def _relay_for_continuation(
