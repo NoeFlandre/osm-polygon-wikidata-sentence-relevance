@@ -619,25 +619,31 @@ def test_finalize_split_checkpointed_publishes_and_marks_complete(
     oar = _FakeOar(ssh)
     layout = cli.RemoteLayout(PurePosixPath("/run"))
     events: list[str] = []
-    monkeypatch.setattr(cli, "split_finalization_submission", lambda *_: object())
     monkeypatch.setattr(
-        cli,
+        cli.split_finalization,
+        "split_finalization_submission",
+        lambda *_: object(),
+    )
+    monkeypatch.setattr(
+        cli.split_finalization,
         "monitor_job_with_log",
         lambda *_args, **_kwargs: events.append("monitored"),
     )
     monkeypatch.setattr(
-        cli,
+        cli.split_finalization,
         "assert_remote_exit_zero",
         lambda *_args, **_kwargs: events.append("validated"),
     )
-    monkeypatch.setattr(cli, "publish_split", lambda *_args: "c" * 40)
     monkeypatch.setattr(
-        cli,
+        cli.split_finalization, "publish_split", lambda *_args: "c" * 40
+    )
+    monkeypatch.setattr(
+        cli.split_finalization,
         "mark_remote_status",
         lambda *_args: events.append("marked"),
     )
 
-    cli._finalize_split_checkpointed(
+    cli.split_finalization.finalize_split_checkpointed(
         store=store,
         config=config,
         ssh=ssh,
@@ -668,11 +674,23 @@ def test_finalize_split_checkpointed_stage_all_hands_off_to_label(
     ssh = _FakeSsh(target="sophia")
     oar = _FakeOar(ssh)
     layout = cli.RemoteLayout(PurePosixPath("/run"))
-    monkeypatch.setattr(cli, "split_finalization_submission", lambda *_: object())
-    monkeypatch.setattr(cli, "monitor_job_with_log", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(cli, "assert_remote_exit_zero", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        cli.split_finalization,
+        "split_finalization_submission",
+        lambda *_: object(),
+    )
+    monkeypatch.setattr(
+        cli.split_finalization,
+        "monitor_job_with_log",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        cli.split_finalization,
+        "assert_remote_exit_zero",
+        lambda *_args, **_kwargs: None,
+    )
 
-    final_job = cli._finalize_split_checkpointed(
+    final_job = cli.split_finalization.finalize_split_checkpointed(
         store=store,
         config=config,
         ssh=ssh,
@@ -1793,10 +1811,18 @@ def test_reattach_complete_split_runs_finalization(
         "classify_split_terminal",
         lambda *_args, **_kwargs: ExitClass.COMPLETE,
     )
-    monkeypatch.setattr(cli, "monitor_job_with_log", lambda *_a, **_k: None)
-    monkeypatch.setattr(cli, "assert_remote_exit_zero", lambda *_a, **_k: None)
-    monkeypatch.setattr(cli, "publish_split", lambda *_a: "c" * 40)
-    monkeypatch.setattr(cli, "mark_remote_status", lambda *_a: None)
+    monkeypatch.setattr(
+        cli.split_finalization,
+        "monitor_job_with_log",
+        lambda *_a, **_k: None,
+    )
+    monkeypatch.setattr(
+        cli.split_finalization,
+        "assert_remote_exit_zero",
+        lambda *_a, **_k: None,
+    )
+    monkeypatch.setattr(cli.split_finalization, "publish_split", lambda *_a: "c" * 40)
+    monkeypatch.setattr(cli.split_finalization, "mark_remote_status", lambda *_a: None)
 
     result = cli._classify_or_continue(
         _run_args(stage="split"),

@@ -19,8 +19,15 @@ import typer
 from osm_polygon_sentence_relevance.labeling.v2_contracts import (
     V2_LOGIT_PROMPT_VERSION,
 )
-from osm_polygon_sentence_relevance.operator import preflight as _preflight
-from osm_polygon_sentence_relevance.operator import recorded_job, relay, split_relay
+from osm_polygon_sentence_relevance.operator import (
+    preflight as _preflight,
+)
+from osm_polygon_sentence_relevance.operator import (
+    recorded_job,
+    relay,
+    split_finalization,
+    split_relay,
+)
 from osm_polygon_sentence_relevance.operator.config import (
     DATA_ROOT,
     DEFAULT_SAMPLING_H3_RESOLUTION,
@@ -46,7 +53,6 @@ from osm_polygon_sentence_relevance.operator.earliest_start import (
     rank_replacement_candidates,
     should_seek_replacement,
 )
-from osm_polygon_sentence_relevance.operator.job_monitor import monitor_job_with_log
 from osm_polygon_sentence_relevance.operator.label_lanes import (
     LabelLane,
     LabelLanePlan,
@@ -131,7 +137,6 @@ from osm_polygon_sentence_relevance.operator.workflows import (
     MICRO_LABEL_WALLTIME_SECONDS,
     RemoteLayout,
     label_submission,
-    split_finalization_submission,
     split_submission,
 )
 
@@ -734,82 +739,6 @@ def _apply_classification(
     raise RuntimeError(f"unhandled exit class: {classification}")
 
 
-def _finalize_split_checkpointed(
-    *,
-    store: StateStore,
-    config: OperatorConfig,
-    ssh: SshClient,
-    layout: RemoteLayout,
-    oar: OarClient,
-    poll_seconds: float,
-) -> int:
-    """Finalize a complete split checkpoint set and continue the workflow.
-
-    This is shared by a fresh run and a resumed run.  For ``stage=split`` it
-    publishes the validated split release.  For ``stage=all`` it preserves the
-    finalized split output and reopens the durable state for label submission.
-    """
-
-    final_job = oar.submit(split_finalization_submission(config, layout))
-    store.transition(
-        expected=RunPhase.CHECKPOINTED,
-        target=RunPhase.FINALIZING,
-        facts={"finalization_job_id": final_job},
-    )
-    print(f"Submitted finalization job {final_job}", flush=True)
-    monitor_job_with_log(
-        ssh,
-        oar,
-        layout,
-        final_job,
-        "finalize.stdout.log",
-        poll_seconds,
-        sleeper=time.sleep,
-    )
-    assert_remote_exit_zero(ssh, layout, final_job, "finalize.exit_code")
-    store.transition(
-        expected=RunPhase.FINALIZING,
-        target=RunPhase.VALIDATED,
-        facts={"split_output_job_id": final_job},
-    )
-    if config.stage is Stage.SPLIT:
-        output_dir = layout.logs / str(final_job) / "output"
-        hub_commit = publish_split(
-            ssh,
-            layout,
-            output_dir,
-            config.output_dataset_id,
-        )
-        store.transition(
-            expected=RunPhase.VALIDATED,
-            target=RunPhase.COMPLETE,
-            facts={"published": True, "hub_commit": hub_commit},
-        )
-        print(f"Sentence splitting complete: run {config.run_id}", flush=True)
-        mark_remote_status(ssh, layout, "complete")
-    else:
-        store.transition(
-            expected=RunPhase.VALIDATED,
-            target=RunPhase.REMOTE_PREPARED,
-            facts={
-                "active_stage": Stage.LABEL.value,
-                **(
-                    {
-                        "label_lane": label_lane_plan(
-                            config,
-                            layout.root,
-                            {},
-                        ).lane.value
-                    }
-                    if config.scope is Scope.ALL
-                    and config.prompt_version == V2_LOGIT_PROMPT_VERSION
-                    else {}
-                ),
-            },
-        )
-    return final_job
-
-
 def _classify_or_continue(
     args: SimpleNamespace,
     store: StateStore,
@@ -962,7 +891,7 @@ def _classify_or_continue(
     )
 
     if classification is ExitClass.COMPLETE and not is_label:
-        _finalize_split_checkpointed(
+        split_finalization.finalize_split_checkpointed(
             store=store,
             config=config,
             ssh=ssh,
@@ -1714,7 +1643,7 @@ def _resume_split_finalization(
     if store.load().phase is not RunPhase.CHECKPOINTED:
         raise RuntimeError("split finalization recovery reached an invalid phase")
     _milestone("Re-submitting failed split finalization from complete checkpoints")
-    _finalize_split_checkpointed(
+    split_finalization.finalize_split_checkpointed(
         store=store,
         config=config,
         ssh=ssh,
@@ -2130,7 +2059,7 @@ def _run(args: SimpleNamespace) -> int:
             target=RunPhase.CHECKPOINTED,
             facts={"split_job_id": job_id},
         )
-        _finalize_split_checkpointed(
+        split_finalization.finalize_split_checkpointed(
             store=store,
             config=config,
             ssh=ssh,

@@ -194,7 +194,11 @@ def test_resume_failed_finalization_requeues_from_complete_split_checkpoints(
         )
         return 2999520
 
-    monkeypatch.setattr(cli, "_finalize_split_checkpointed", requeue_finalization)
+    monkeypatch.setattr(
+        cli.split_finalization,
+        "finalize_split_checkpointed",
+        requeue_finalization,
+    )
 
     assert cli._resume_run(config.run_id, _resume_args(config.run_id)) == 0
     assert finalized == [1]
