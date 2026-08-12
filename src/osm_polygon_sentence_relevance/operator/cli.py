@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import re
 import sys
 import time
 from collections.abc import Callable, Mapping
@@ -19,15 +18,14 @@ import typer
 from osm_polygon_sentence_relevance.labeling.v2_contracts import (
     V2_LOGIT_PROMPT_VERSION,
 )
-from osm_polygon_sentence_relevance.operator import (
-    preflight as _preflight,
-)
+from osm_polygon_sentence_relevance.operator import preflight as _preflight
 from osm_polygon_sentence_relevance.operator import (
     recorded_job,
     relay,
     split_finalization,
     split_relay,
 )
+from osm_polygon_sentence_relevance.operator import resume as _resume
 from osm_polygon_sentence_relevance.operator.config import (
     DATA_ROOT,
     DEFAULT_SAMPLING_H3_RESOLUTION,
@@ -1536,294 +1534,44 @@ def _race_queued_start(
     return outcome.site, outcome.job_id
 
 
-def _resume_split_finalization(
-    *,
-    run_id: str,
-    args: SimpleNamespace,
-    store: StateStore,
-    config: OperatorConfig,
-) -> int:
-    """Recover or submit the idempotent finalizer after split checkpoints exist.
+def _resume_services() -> _resume.ResumeServices:
+    """Bind CLI-owned side effects to the isolated resume workflow."""
 
-    A finalizer is a separate allocation from sentence splitting.  If that
-    allocation disappears after the split state reached ``FINALIZING``, the
-    ordinary allocation reattachment path has no ``job_id`` it can classify.
-    Re-open the recorded site, classify the finalizer, and retry only after a
-    terminal failure.  The split checkpoints are already complete and are
-    never recomputed.
-    """
-
-    durable = store.load()
-    site = durable.facts.get("site")
-    if not isinstance(site, str) or not site:
-        raise RuntimeError("split finalization recovery has no recorded site")
-    ssh, layout, oar, controller = _attach_to_site(
-        store,
-        config,
-        site,
-        poll_seconds=args.poll_seconds,
+    return _resume.ResumeServices(
+        data_root=DATA_ROOT,
+        state_store_type=StateStore,
+        config_type=OperatorConfig,
+        git_head=_git_head,
+        sync_sampling_target=_sync_sampling_target,
+        reattach_decision=_reattach_decision,
+        attach_to_site=_attach_to_site,
+        usage_policy_preflight=_usage_policy_preflight,
+        ensure_home_headroom=ensure_home_headroom,
+        stager_type=Stager,
+        stage_hf_token=_stage_hf_token,
+        recorded_split_resume_bundle=_recorded_split_resume_bundle,
+        current_label_plan=_current_label_plan,
+        ensure_llama_server=ensure_llama_server,
+        ensure_relay_at_destination=_ensure_relay_at_destination,
+        race_queued_start=_race_queued_start,
+        classify_or_continue=_classify_or_continue,
+        resume_command=_resume_command,
+        milestone=_milestone,
+        monitor_until_terminal=_monitor_until_terminal,
+        publish_split=publish_split,
+        mark_remote_status=mark_remote_status,
+        split_finalization=split_finalization,
+        assert_remote_exit_zero=assert_remote_exit_zero,
+        submission_headroom_bytes=_SUBMISSION_HEADROOM_BYTES,
     )
-    _usage_policy_preflight(ssh, site)
-    ensure_home_headroom(
-        ssh,
-        protected_root=layout.root,
-        minimum_headroom_bytes=_SUBMISSION_HEADROOM_BYTES,
-    )
-    stager = Stager(ssh)
-    stager.prepare(config, layout)
-    _stage_hf_token(stager, layout)
-
-    if durable.phase is RunPhase.FINALIZING:
-        final_job = durable.facts.get("finalization_job_id")
-        if type(final_job) is not int or final_job <= 0:
-            raise RuntimeError("split finalization has no recorded job")
-        status = oar.status(final_job)
-        if is_live_state(status.state):
-            _monitor_until_terminal(
-                controller,
-                final_job,
-                log_name="finalize.stdout.log",
-            )
-            status = oar.status(final_job)
-        if status.state not in {
-            JobState.TERMINATED,
-            JobState.ERROR,
-            JobState.MISSING,
-        }:
-            raise RuntimeError(
-                f"split finalization job {final_job} ended in {status.state.value}"
-            )
-        try:
-            assert_remote_exit_zero(ssh, layout, final_job, "finalize.exit_code")
-        except RuntimeError:
-            store.transition(
-                expected=RunPhase.FINALIZING,
-                target=RunPhase.CHECKPOINTED,
-                facts={
-                    "recovered_finalization_job_id": final_job,
-                    "finalization_recovery_reason": "terminal allocation failed",
-                },
-            )
-        else:
-            store.transition(
-                expected=RunPhase.FINALIZING,
-                target=RunPhase.VALIDATED,
-                facts={"split_output_job_id": final_job},
-            )
-            if config.stage is Stage.SPLIT:
-                output_dir = layout.logs / str(final_job) / "output"
-                hub_commit = publish_split(
-                    ssh,
-                    layout,
-                    output_dir,
-                    config.output_dataset_id,
-                )
-                store.transition(
-                    expected=RunPhase.VALIDATED,
-                    target=RunPhase.COMPLETE,
-                    facts={"published": True, "hub_commit": hub_commit},
-                )
-                mark_remote_status(ssh, layout, "complete")
-                return 0
-            store.transition(
-                expected=RunPhase.VALIDATED,
-                target=RunPhase.REMOTE_PREPARED,
-                facts={"active_stage": Stage.LABEL.value},
-            )
-            return _resume_run(run_id, args)
-
-    if store.load().phase is not RunPhase.CHECKPOINTED:
-        raise RuntimeError("split finalization recovery reached an invalid phase")
-    _milestone("Re-submitting failed split finalization from complete checkpoints")
-    split_finalization.finalize_split_checkpointed(
-        store=store,
-        config=config,
-        ssh=ssh,
-        layout=layout,
-        oar=oar,
-        poll_seconds=args.poll_seconds,
-    )
-    if config.stage is Stage.ALL:
-        return _resume_run(run_id, args)
-    return 0
 
 
 def _resume_run(run_id: str, args: SimpleNamespace) -> int:
-    """Resume or classify a historical run by its durable run ID.
+    """Resume a durable run through the isolated orchestration module."""
 
-    Loads the persisted ``state.json`` for ``run_id`` and reconstructs the
-    immutable operator configuration from ``run_identity``. Does not require
-    the current local Git HEAD to match the run's recorded source commit.
-    Never creates a new run ID. Never submits if the recorded job is live.
-    """
-
-    if not re.fullmatch(r"[0-9a-f]{20}", run_id):
-        raise RuntimeError("run ID must be twenty lowercase hexadecimal characters")
-    state_path = DATA_ROOT / "runs" / run_id / "state.json"
-    if not state_path.is_file():
-        raise RuntimeError(f"run state does not exist: {state_path}")
-    payload = json.loads(state_path.read_text(encoding="utf-8"))
-    persisted_identity = payload["run_identity"]
-    if not isinstance(persisted_identity, dict):
-        raise RuntimeError("persisted run identity is not an object")
-    persisted_facts = payload.get("facts", {})
-    if not isinstance(persisted_facts, dict):
-        raise RuntimeError("persisted run facts are not an object")
-    recorded_target = persisted_facts.get("sampling_target")
-    requested_target = getattr(args, "sampling_target", None)
-    if requested_target is not None:
-        persisted_identity = {
-            **persisted_identity,
-            "sampling_target": requested_target,
-        }
-    elif (
-        "sampling_version" in persisted_identity
-        and "sampling_target" not in persisted_identity
-        and isinstance(recorded_target, int)
-        and not isinstance(recorded_target, bool)
-        and recorded_target > 0
-    ):
-        persisted_identity = {
-            **persisted_identity,
-            "sampling_target": recorded_target,
-        }
-    config = OperatorConfig.from_persisted(persisted_identity)
-    if config.run_id != run_id:
-        raise RuntimeError(
-            "persisted run identity does not reproduce the requested run ID"
-        )
-    # Checkpoint identity remains pinned to the original data-producing
-    # source commit, while a resumed split/all run may execute a newer,
-    # behavior-preserving checkout.  This lets performance fixes reuse
-    # validated partial and remote checkpoints without changing the run ID.
-    if config.stage in {Stage.SPLIT, Stage.ALL}:
-        current_execution_commit = _git_head()
-        if current_execution_commit != config.source_commit:
-            config = replace(config, execution_commit=current_execution_commit)
-    store = StateStore(DATA_ROOT)
-    store.load_or_create(config.run_identity)
-    _sync_sampling_target(store, config)
     global _ACTIVE_RUN_ID
     _ACTIVE_RUN_ID = run_id
-    durable = store.load()
-    candidate = _reattach_decision(durable)
-    if durable.phase in {RunPhase.CHECKPOINTED, RunPhase.FINALIZING}:
-        return _resume_split_finalization(
-            run_id=run_id,
-            args=args,
-            store=store,
-            config=config,
-        )
-    if candidate is None and durable.phase is RunPhase.REMOTE_PREPARED:
-        site_value = durable.facts.get("site")
-        if not isinstance(site_value, str) or not site_value:
-            raise RuntimeError("prepared continuation has no recorded site")
-        _milestone(f"Resuming prepared continuation on site {site_value}")
-        ssh, layout, oar, controller = _attach_to_site(
-            store, config, site_value, poll_seconds=args.poll_seconds
-        )
-        _usage_policy_preflight(ssh, site_value)
-        ensure_home_headroom(
-            ssh,
-            protected_root=layout.root,
-            minimum_headroom_bytes=_SUBMISSION_HEADROOM_BYTES,
-        )
-        stager = Stager(ssh)
-        stager.prepare(config, layout)
-        _stage_hf_token(stager, layout)
-        active_stage = durable.facts.get("active_stage")
-        if active_stage == Stage.SPLIT.value:
-            job_id = controller.submit(
-                component=Stage.SPLIT,
-                split_resume_bundle=_recorded_split_resume_bundle(store),
-            )
-            print(f"Submitted split continuation job {job_id}", flush=True)
-            candidate = (site_value, job_id)
-        else:
-            current_label_plan = _current_label_plan(store, config, layout)
-            if config.prompt_version == V2_LOGIT_PROMPT_VERSION:
-                split_job_raw = durable.facts.get("split_output_job_id")
-                if type(split_job_raw) is not int:
-                    raise RuntimeError("V2 continuation has no split output")
-                split_output = (
-                    layout.logs / str(split_job_raw) / "output/sentences.parquet"
-                )
-                v2_input = stager.prepare_v2_input(config, layout, split_output)
-                assets = stager.prepare_label_assets(
-                    config, layout, download_input=False
-                )
-                assets = replace(assets, input_parquet=v2_input)
-            else:
-                assets = stager.prepare_label_assets(
-                    config,
-                    layout,
-                    download_input=config.stage is Stage.LABEL,
-                )
-                if config.stage is Stage.ALL:
-                    split_job_raw = durable.facts.get("split_output_job_id")
-                    if type(split_job_raw) is not int or split_job_raw <= 0:
-                        raise RuntimeError("stage-all continuation has no split output")
-                    input_parquet = (
-                        layout.logs / str(split_job_raw) / "output/sentences.parquet"
-                    )
-                    ssh.run(f"test -s {input_parquet}")
-                    assets = replace(assets, input_parquet=input_parquet)
-            if not assets.llama_server_ready:
-                ensure_llama_server(ssh, oar, store, layout, args.poll_seconds)
-            relay_root_value = durable.facts.get("resume_relay_root")
-            if isinstance(relay_root_value, str):
-                _ensure_relay_at_destination(
-                    store=store,
-                    config=config,
-                    site=site_value,
-                    layout=layout,
-                    relay_root=Path(relay_root_value),
-                )
-            job_id = controller.submit(
-                component=Stage.LABEL,
-                input_parquet=assets.input_parquet,
-                model_file=assets.model_file,
-                tokenizer_dir=assets.tokenizer_dir,
-                walltime_seconds=MICRO_LABEL_WALLTIME_SECONDS,
-                policy_type=policy_type_for(
-                    datetime.now(tz=GRID5000_TZ),
-                    walltime_seconds=MICRO_LABEL_WALLTIME_SECONDS,
-                ),
-                gpu_memory_mb=getattr(args, "gpu_memory_mb", 40_000),
-                label_plan=current_label_plan,
-            )
-            print(f"Submitted continuation job {job_id}", flush=True)
-            candidate = (site_value, job_id)
-    if candidate is None:
-        print(
-            f"[operator] run {run_id} has no recorded live allocation; nothing "
-            "to reattach",
-            flush=True,
-        )
-        return 0
-    site, job_id = candidate
-    site, job_id = _race_queued_start(
-        args,
-        store,
-        config,
-        site,
-        job_id,
-    )
-    _milestone(f"Resuming run {run_id} on site {site}, job {job_id}")
-    classification = _classify_or_continue(
-        args=args,
-        store=store,
-        config=config,
-        site=site,
-        job_id=job_id,
-        destination_site=site,
-    )
-    if classification is ExitClass.CONTINUE:
-        _milestone(
-            "Validated checkpoints preserved; submit the next allocation via "
-            f"{_resume_command(run_id)} or `run`."
-        )
-    return 0
+    return _resume.resume_run(run_id, args, _resume_services())
 
 
 def _reclaim_terminal_managed_storage(probes: list[SiteProbe]) -> None:
