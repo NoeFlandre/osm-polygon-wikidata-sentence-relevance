@@ -18,13 +18,14 @@ import typer
 from osm_polygon_sentence_relevance.labeling.v2_contracts import (
     V2_LOGIT_PROMPT_VERSION,
 )
-from osm_polygon_sentence_relevance.operator import preflight as _preflight
 from osm_polygon_sentence_relevance.operator import (
+    continuation,
     recorded_job,
     relay,
     split_finalization,
     split_relay,
 )
+from osm_polygon_sentence_relevance.operator import preflight as _preflight
 from osm_polygon_sentence_relevance.operator import resume as _resume
 from osm_polygon_sentence_relevance.operator.config import (
     DATA_ROOT,
@@ -729,389 +730,6 @@ def _apply_classification(
     raise RuntimeError(f"unhandled exit class: {classification}")
 
 
-def _classify_or_continue(
-    args: SimpleNamespace,
-    store: StateStore,
-    config: OperatorConfig,
-    site: str,
-    job_id: int,
-    *,
-    destination_site: str | None = None,
-) -> ExitClass:
-    """Reattach to the recorded site and classify the terminal allocation.
-
-    When the allocation is resumable, the orchestrator enters a continuation
-    loop:
-
-    1. retrieve and validate the checkpoint generation,
-    2. probe all compatible sites,
-    3. select the factual best site deterministically,
-    4. reuse the same site without relay when appropriate,
-    5. otherwise prepare exact historical source checkout/assets and stage
-       the validated relay to the destination site,
-    6. run usage-policy and quota preflights,
-    7. submit exactly one new short allocation,
-    8. atomically persist destination site/job ID before monitoring,
-    9. monitor it until terminal,
-    10. classify the new terminal state and repeat until complete.
-
-    No recursion. The allocation safety bound is enforced by the caller.
-    """
-
-    ssh, layout, oar, controller = _attach_to_site(
-        store, config, site, poll_seconds=args.poll_seconds
-    )
-    active = str(store.load().facts.get("active_stage", config.stage.value))
-    is_label = active == Stage.LABEL.value
-    current_label_plan = (
-        _current_label_plan(store, config, layout) if is_label else None
-    )
-    log_name = "labeling.stdout.log" if is_label else "build.stdout.log"
-
-    status = oar.status(job_id)
-    if is_live_state(status.state):
-        terminal = _monitor_until_terminal(controller, job_id, log_name=log_name)
-        status = oar.status(job_id)
-        if not _is_terminal_allocation(terminal):
-            raise RuntimeError(
-                f"recorded allocation {job_id} ended in {terminal.value}"
-            )
-    # MISSING jobs are first inspected; if no durable evidence exists at
-    # all we treat it as an OAR bookkeeping loss and refuse to resubmit.
-    if status.state is JobState.MISSING:
-        log_dir = layout.logs / str(job_id)
-        listing = ssh.run(
-            f"test -d {log_dir!s} && find {log_dir!s} -mindepth 1 -maxdepth 1"
-        )
-        has_any = bool(result_text(listing).strip())
-        if not has_any:
-            raise RuntimeError(
-                f"recorded allocation {job_id} is missing from OAR with no "
-                "durable evidence; refusing to resubmit"
-            )
-    # MISSING jobs with at least some durable evidence are classified from
-    # those artifacts alone (exit file, manifest, checkpoints, progress).
-
-    if active == Stage.SPLIT.value:
-        split_inspection = inspect_split_resume(
-            ssh=ssh,
-            repo_id=config.output_dataset_id,
-            input_repo_id=config.input_dataset_id,
-            input_revision=config.input_dataset_revision or "",
-            run_id=config.run_id,
-            source_commit=config.source_commit,
-            pipeline_version=config.pipeline_version,
-            model_name=config.split_model,
-            batch_size=config.requirements.batch_size,
-            staging_revision=f"checkpoints/{config.run_id}",
-            exit_file=str(layout.logs / str(job_id) / "build.exit_code"),
-            cache_dir=config.data_root
-            / "runs"
-            / config.run_id
-            / "split-checkpoint-cache",
-        )
-        classification = classify_split_terminal(
-            status,
-            split_inspection,
-            exit_code=split_inspection.exit_code,
-        )
-        inspection: recorded_job.ResumeInspection | None = None
-        failure_reason_token = (
-            split_failure_reason(
-                split_inspection,
-                exit_code=split_inspection.exit_code,
-            )
-            if classification is ExitClass.FAILED
-            else None
-        )
-    else:
-        label_work_root = (
-            current_label_plan.work_dir
-            if current_label_plan is not None
-            else layout.label_work
-        )
-        label_output_root = (
-            current_label_plan.output_dir
-            if current_label_plan is not None
-            else layout.label_output
-        )
-        expected_identity = (
-            current_label_plan.config.run_identity.checkpoint_dict()
-            if current_label_plan is not None
-            else config.run_identity.checkpoint_dict()
-        )
-        inspection = recorded_job.inspect_remote_resume(
-            ssh,
-            label_work_root=str(label_work_root),
-            label_output_root=str(label_output_root),
-            expected_identity=expected_identity,
-            exit_file=str(layout.logs / str(job_id) / "labeling.exit_code"),
-        )
-        classification = recorded_job.classify_terminal(status, inspection)
-        failure_reason_token = (
-            recorded_job.failure_reason(status, inspection)
-            if classification is ExitClass.FAILED
-            else None
-        )
-
-    relay_artifact_path: str | None = None
-    if (
-        classification is ExitClass.CONTINUE
-        and destination_site is not None
-        and destination_site != site
-    ):
-        relay_artifact_path = _relay_for_continuation(
-            store=store,
-            config=config,
-            source_site=site,
-            destination_site=destination_site,
-        )
-
-    _apply_classification(
-        store=store,
-        config=config,
-        ssh=ssh,
-        layout=layout,
-        job_id=job_id,
-        active_stage=active,
-        classification=classification,
-        resume_artifact_path=relay_artifact_path,
-        failure_reason_token=failure_reason_token,
-        label_plan=current_label_plan,
-    )
-
-    if classification is ExitClass.COMPLETE and not is_label:
-        split_finalization.finalize_split_checkpointed(
-            store=store,
-            config=config,
-            ssh=ssh,
-            layout=layout,
-            oar=oar,
-            poll_seconds=args.poll_seconds,
-        )
-        if config.stage is Stage.ALL:
-            # The split output is now durable and the state is reopened at
-            # REMOTE_PREPARED. Re-enter the persisted continuation path so
-            # label assets and the next bounded GPU allocation are staged
-            # without requiring a second local command.
-            _resume_run(config.run_id, args)
-            return (
-                ExitClass.COMPLETE
-                if store.load().phase is RunPhase.COMPLETE
-                else ExitClass.CONTINUE
-            )
-        return ExitClass.COMPLETE
-
-    if classification is not ExitClass.CONTINUE:
-        return classification
-
-    # Without an explicit ``destination_site`` the caller is asking only
-    # for the classification of the recorded allocation. The continuation
-    # loop (relay + new submission) is driven by the CLI driver, not by
-    # this helper, so a ``None`` destination exits here with the recorded
-    # job's classification.
-    if destination_site is None:
-        return classification
-
-    # Continuation loop: select a site, optionally relay, submit exactly
-    # one new short allocation, monitor it, and reclassify. The new
-    # job ID is persisted atomically before monitoring starts. The
-    # allocation safety bound is enforced by this loop's iteration cap.
-    target_site = destination_site
-    _milestone(f"Continuation selecting site: {target_site} (recorded site was {site})")
-    relay_root: Path | None = None
-    if target_site != site:
-        # Same-site reuse: do not relay; the source already has the
-        # validated checkpoints. Cross-site: relay once, then continue.
-        if relay_artifact_path is None:
-            relay_root = Path(
-                _relay_for_continuation(
-                    store=store,
-                    config=config,
-                    source_site=site,
-                    destination_site=target_site,
-                )
-            )
-        else:
-            relay_root = Path(relay_artifact_path)
-
-    _prepare_destination_for_resume(
-        store=store,
-        config=config,
-        site=target_site,
-        relay_root=relay_root,
-        poll_seconds=args.poll_seconds,
-    )
-
-    for _iteration in range(1, 101):
-        # Attach to the destination site and submit exactly one allocation.
-        ssh_d, layout_d, oar_d, controller_d = _attach_to_site(
-            store, config, target_site, poll_seconds=args.poll_seconds
-        )
-        # Refresh label assets so the new allocation sees the relay on disk.
-        if relay_root is not None:
-            _ensure_relay_at_destination(
-                store=store,
-                config=config,
-                site=target_site,
-                layout=layout_d,
-                relay_root=relay_root,
-            )
-        if is_label:
-            iteration_label_plan = _current_label_plan(store, config, layout_d)
-            new_job_id = controller_d.submit(
-                component=Stage.LABEL,
-                input_parquet=layout_d.root / "input/sentences.parquet",
-                model_file=layout_d.root / "model" / config.label_model_file,
-                tokenizer_dir=layout_d.root / "tokenizer",
-                walltime_seconds=MICRO_LABEL_WALLTIME_SECONDS,
-                policy_type=policy_type_for(
-                    datetime.now(tz=GRID5000_TZ),
-                    walltime_seconds=MICRO_LABEL_WALLTIME_SECONDS,
-                ),
-                gpu_memory_mb=getattr(args, "gpu_memory_mb", 40_000),
-                **(
-                    {"label_plan": iteration_label_plan}
-                    if iteration_label_plan is not None
-                    else {}
-                ),
-            )
-            continuation_log_name = "labeling.stdout.log"
-        else:
-            iteration_label_plan = None
-            new_job_id = controller_d.submit(
-                component=Stage.SPLIT,
-                split_resume_bundle=_recorded_split_resume_bundle(store),
-            )
-            continuation_log_name = "build.stdout.log"
-        if getattr(args, "optimize_continuations", False):
-            optimized_site, optimized_job_id = _race_queued_start(
-                args,
-                store,
-                config,
-                target_site,
-                new_job_id,
-            )
-        else:
-            optimized_site, optimized_job_id = target_site, new_job_id
-        if optimized_site != target_site:
-            mark_remote_status(ssh_d, layout_d, "failed")
-            target_site = optimized_site
-            ssh_d, layout_d, oar_d, controller_d = _attach_to_site(
-                store,
-                config,
-                target_site,
-                poll_seconds=args.poll_seconds,
-            )
-            _stage_hf_token(Stager(ssh_d), layout_d)
-        new_job_id = optimized_job_id
-        # Controller.submit atomically persists SUBMITTED and the job ID
-        # before returning. Do not duplicate that state transition here.
-        current = store.load()
-        if current.phase is not RunPhase.SUBMITTED:
-            raise RuntimeError("continuation submit was not durably recorded")
-        store.transition(
-            expected=RunPhase.SUBMITTED,
-            target=RunPhase.SUBMITTED,
-            facts={"site": target_site, "destination_site": target_site},
-        )
-        print(
-            f"Submitted continuation job {new_job_id} (allocation {_iteration})",
-            flush=True,
-        )
-        terminal = controller_d.monitor(new_job_id, log_name=continuation_log_name)
-        if not _is_terminal_allocation(terminal):
-            raise RuntimeError("continuation allocation failed")
-        if not is_label:
-            _clear_consumed_split_resume_bundle(store)
-        status_d = oar_d.status(new_job_id)
-        if is_label:
-            label_work_root_d = (
-                iteration_label_plan.work_dir
-                if iteration_label_plan is not None
-                else layout_d.label_work
-            )
-            label_output_root_d = (
-                iteration_label_plan.output_dir
-                if iteration_label_plan is not None
-                else layout_d.label_output
-            )
-            expected_identity_d = (
-                iteration_label_plan.config.run_identity.checkpoint_dict()
-                if iteration_label_plan is not None
-                else config.run_identity.checkpoint_dict()
-            )
-            inspection_d = recorded_job.inspect_remote_resume(
-                ssh_d,
-                label_work_root=str(label_work_root_d),
-                label_output_root=str(label_output_root_d),
-                expected_identity=expected_identity_d,
-                exit_file=str(layout_d.logs / str(new_job_id) / "labeling.exit_code"),
-            )
-            classification_d = recorded_job.classify_terminal(status_d, inspection_d)
-            failure_reason_token_d = (
-                recorded_job.failure_reason(status_d, inspection_d)
-                if classification_d is ExitClass.FAILED
-                else None
-            )
-        else:
-            split_inspection_d = inspect_split_resume(
-                ssh=ssh_d,
-                repo_id=config.output_dataset_id,
-                input_repo_id=config.input_dataset_id,
-                input_revision=config.input_dataset_revision or "",
-                run_id=config.run_id,
-                source_commit=config.source_commit,
-                pipeline_version=config.pipeline_version,
-                model_name=config.split_model,
-                batch_size=config.requirements.batch_size,
-                staging_revision=f"checkpoints/{config.run_id}",
-                exit_file=str(layout_d.logs / str(new_job_id) / "build.exit_code"),
-                cache_dir=config.data_root
-                / "runs"
-                / config.run_id
-                / "split-checkpoint-cache",
-            )
-            classification_d = classify_split_terminal(
-                status_d,
-                split_inspection_d,
-                exit_code=split_inspection_d.exit_code,
-            )
-            failure_reason_token_d = (
-                split_failure_reason(
-                    split_inspection_d,
-                    exit_code=split_inspection_d.exit_code,
-                )
-                if classification_d is ExitClass.FAILED
-                else None
-            )
-        _apply_classification(
-            store=store,
-            config=config,
-            ssh=ssh_d,
-            layout=layout_d,
-            job_id=new_job_id,
-            active_stage=active,
-            classification=classification_d,
-            failure_reason_token=failure_reason_token_d,
-            label_plan=iteration_label_plan,
-        )
-        if classification_d is ExitClass.COMPLETE:
-            return ExitClass.COMPLETE
-        if classification_d is ExitClass.CONTINUE:
-            # The state is REMOTE_PREPARED again; submit the next bounded
-            # allocation without requiring another local invocation.
-            relay_root = None
-            continue
-        # FAILED: stop.
-        raise RuntimeError(
-            f"continuation allocation {new_job_id} failed deterministically "
-            f"[reason={failure_reason_token_d or 'deterministic-failure'}]; "
-            "not resubmitting automatically"
-        )
-    raise RuntimeError("continuation exceeded allocation safety bound")
-
-
 def _relay_for_continuation(
     *,
     store: StateStore,
@@ -1177,6 +795,56 @@ def _relay_for_continuation(
         facts={"relay_destination_site": destination_site},
     )
     return str(inventory.root)
+
+
+def _continuation_services() -> continuation.ContinuationServices:
+    """Bind CLI-owned side effects to the continuation state machine."""
+
+    return continuation.ContinuationServices(
+        attach_to_site=_attach_to_site,
+        current_label_plan=_current_label_plan,
+        monitor_until_terminal=_monitor_until_terminal,
+        is_terminal_allocation=_is_terminal_allocation,
+        inspect_split_resume=inspect_split_resume,
+        classify_split_terminal=classify_split_terminal,
+        split_failure_reason=split_failure_reason,
+        recorded_job=recorded_job,
+        relay_for_continuation=_relay_for_continuation,
+        apply_classification=_apply_classification,
+        split_finalization=split_finalization,
+        resume_run=_resume_run,
+        race_queued_start=_race_queued_start,
+        milestone=_milestone,
+        prepare_destination_for_resume=_prepare_destination_for_resume,
+        ensure_relay_at_destination=_ensure_relay_at_destination,
+        recorded_split_resume_bundle=_recorded_split_resume_bundle,
+        clear_consumed_split_resume_bundle=_clear_consumed_split_resume_bundle,
+        stage_hf_token=_stage_hf_token,
+        stager_type=Stager,
+        mark_remote_status=mark_remote_status,
+    )
+
+
+def _classify_or_continue(
+    args: SimpleNamespace,
+    store: StateStore,
+    config: OperatorConfig,
+    site: str,
+    job_id: int,
+    *,
+    destination_site: str | None = None,
+) -> ExitClass:
+    """Delegate allocation recovery to the isolated continuation module."""
+
+    return continuation.classify_or_continue(
+        args,
+        store,
+        config,
+        site,
+        job_id,
+        destination_site=destination_site,
+        services=_continuation_services(),
+    )
 
 
 def _optimize_queued_start(
