@@ -21,6 +21,7 @@ from osm_polygon_sentence_relevance.operator.oar import (
 DEFAULT_LABEL_WALLTIME_SECONDS = 3_300
 MICRO_LABEL_WALLTIME_SECONDS = 1_200
 DEFAULT_SPLIT_WALLTIME_SECONDS = 1_800
+DEFAULT_FINALIZATION_WALLTIME_SECONDS = 3_600
 _LABEL_GRACE_SECONDS = 300
 _LABEL_SCHEDULER_MARGIN_SECONDS = 300
 
@@ -156,7 +157,7 @@ def split_finalization_submission(
         expected_shard,
         str(sampling_target or 0),
         config.requirements.sampling_seed,
-        "02:00:00",
+        format_walltime(DEFAULT_FINALIZATION_WALLTIME_SECONDS),
         "cpu",
         str(layout.finalization_state),
     )
@@ -301,6 +302,7 @@ __all__ = [
     "RemoteLayout",
     "DEFAULT_LABEL_WALLTIME_SECONDS",
     "DEFAULT_SPLIT_WALLTIME_SECONDS",
+    "DEFAULT_FINALIZATION_WALLTIME_SECONDS",
     "MICRO_LABEL_WALLTIME_SECONDS",
     "label_submission",
     "llama_build_submission",

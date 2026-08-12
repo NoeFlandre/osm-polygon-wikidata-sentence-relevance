@@ -630,7 +630,7 @@ def test_workflow_layout_and_finalization_commands() -> None:
     assert layout.finalization_state == PurePosixPath("/r/finalization-state")
     final = split_finalization_submission(_config(stage="split"), layout)
     assert "submit_streaming_finalization.sh" in final.command[0]
-    assert final.command[-3:] == ("02:00:00", "cpu", "/r/finalization-state")
+    assert final.command[-3:] == ("01:00:00", "cpu", "/r/finalization-state")
     build = llama_build_submission(layout)
     assert build.command[0].endswith("_submit_gpu_job.sh")
     assert build.command[1:4] == ("40000", "01:00:00", "night")
@@ -662,7 +662,7 @@ def test_worldwide_finalization_receives_sampling_contract() -> None:
         "all",
         "200000",
         "worldwide-seed",
-        "02:00:00",
+        "01:00:00",
         "cpu",
         "/r/finalization-state",
     )
