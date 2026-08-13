@@ -95,6 +95,17 @@ health() {
     done
     return 1
 }
+RUN_ROOT="$(cd "${REPO_ROOT}/.." && pwd -P)"; readonly RUN_ROOT
+LLAMA_SERVER_DIR="${RUN_ROOT}/llama-server-bin"; readonly LLAMA_SERVER_DIR
+[ ! -L "${LLAMA_SERVER_DIR}" ] || {
+    echo "run_worldwide_labeling: llama-server directory must not be a symlink" >&2
+    exit 2
+}
+[ -x "${LLAMA_SERVER_DIR}/llama-server" ] || {
+    echo "run_worldwide_labeling: staged llama-server is unavailable" >&2
+    exit 1
+}
+export PATH="${LLAMA_SERVER_DIR}:${PATH}"
 command -v llama-server >/dev/null || { echo "run_worldwide_labeling: llama-server is unavailable" >&2; exit 1; }
 LLAMA_TOTAL_CONTEXT=$((LLAMA_PARALLEL * LLAMA_PER_SLOT_CONTEXT)); readonly LLAMA_TOTAL_CONTEXT
 llama-server --model "${MODEL_FILE}" --alias "ggml-org/Qwen3.6-27B-GGUF" \

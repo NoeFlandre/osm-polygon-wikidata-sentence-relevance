@@ -47,6 +47,14 @@ def test_payload_revalidates_immutable_identity_and_pinned_model() -> None:
     assert "Qwen3.6-27B-Q4_K_M.gguf" in payload
 
 
+def test_payload_discovers_the_staged_llama_server_on_compute_nodes() -> None:
+    payload = _text("run_worldwide_labeling.sh")
+
+    assert 'LLAMA_SERVER_DIR="${RUN_ROOT}/llama-server-bin"' in payload
+    assert '[ -x "${LLAMA_SERVER_DIR}/llama-server" ]' in payload
+    assert 'export PATH="${LLAMA_SERVER_DIR}:${PATH}"' in payload
+
+
 def test_wrapper_keeps_lane_aware_front_contract_and_resumable_lock() -> None:
     wrapper = _text("run_worldwide_labeling_job.sh")
     assert "exactly twenty-two arguments are required" in wrapper
