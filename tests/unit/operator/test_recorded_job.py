@@ -25,6 +25,11 @@ from osm_polygon_sentence_relevance.labeling.contracts import (
     LabelValue,
     RunIdentity,
 )
+from osm_polygon_sentence_relevance.labeling.v2_checkpoint import V2CheckpointStore
+from osm_polygon_sentence_relevance.labeling.v2_contracts import (
+    V2_LOGIT_PROMPT_VERSION,
+    V2LogitRecord,
+)
 from osm_polygon_sentence_relevance.operator import recorded_job
 from osm_polygon_sentence_relevance.operator.oar import ExitClass, JobState, JobStatus
 from osm_polygon_sentence_relevance.operator.ssh import LogChunk
@@ -174,6 +179,71 @@ def _build_fixture(
             if path.suffix in {".json", ".txt"}:
                 files[rel] = path.read_text()
     return files
+
+
+def test_v2_progress_without_identity_uses_checkpoint_identity(
+    tmp_path: Path,
+) -> None:
+    """V2 progress omits mutable identity; checkpoint metadata remains authoritative."""
+
+    input_path = tmp_path / "input.parquet"
+    input_path.write_bytes(b"v2-input")
+    identity = RunIdentity(
+        input_sha256="a" * 64,
+        input_dataset_revision="b" * 40,
+        model_repo_id="ggml-org/Qwen3.6-27B-GGUF",
+        model_revision="c" * 40,
+        model_file="Qwen3.6-27B-Q4_K_M.gguf",
+        model_file_sha256="d" * 64,
+        prompt_version=V2_LOGIT_PROMPT_VERSION,
+        source_commit="e" * 40,
+        engine="llama.cpp",
+        engine_version="1",
+        batch_size=128,
+        row_limit=128,
+        llama_parallel=8,
+        llama_per_slot_context=8192,
+        llama_total_context=65536,
+        request_concurrency=8,
+        sampling_target=200_000,
+        sampling_seed="sentence-relevance-v2",
+        h3_resolution=3,
+        sampling_version="v2-area-h3-logit",
+        release_lane="v2-worldwide",
+    )
+    store = V2CheckpointStore(tmp_path, identity)
+    store.write_batch(0, [V2LogitRecord("s0", "yes", -0.1, -1.1)])
+    # V2's runner intentionally stores mutable counters only here; the batch
+    # sidecar carries the immutable checkpoint identity.
+    (tmp_path / "progress.json").write_text(
+        json.dumps(
+            {
+                "completed": 1,
+                "total": 1,
+                "remaining": 0,
+                "elapsed_seconds": 1.0,
+            }
+        )
+    )
+    ssh = _FakeSsh(
+        fixture_root=tmp_path,
+        read_files={_exit_file(""): "0"},
+        manifests={f"{_LABEL_OUTPUT}/manifest.json": True},
+    )
+
+    expected = identity.checkpoint_dict()
+    inspection = recorded_job.inspect_remote_resume(
+        ssh,
+        label_work_root=_LABEL_WORK,
+        label_output_root=_LABEL_OUTPUT,
+        expected_identity=expected,
+        exit_file=_exit_file(""),
+    )
+
+    assert inspection.identity_matches is True
+    assert recorded_job.classify_terminal(
+        JobStatus(2971727, JobState.TERMINATED), inspection
+    ) is ExitClass.COMPLETE
 
 
 def _exit_file(content: str) -> str:
