@@ -1,0 +1,20 @@
+cff-version: 1.2.0
+message: "If you use this project or its released datasets, please cite this work."
+type: software
+title: "OSM Polygon - Wikidata Sentence Relevance"
+abstract: "A deterministic pipeline and labeled dataset linking OSM polygons to sentences from Wikipedia and Wikivoyage."
+authors:
+  - family-names: Flandre
+    given-names: "Noé"
+repository-code: "https://github.com/NoeFlandre/osm-polygon-wikidata-sentence-relevance"
+url: "https://huggingface.co/datasets/NoeFlandre/osm-polygon-wikidata-sentence-relevance"
+version: "1.0.0"
+date-released: 2026-08-03
+license: MIT
+keywords:
+  - OpenStreetMap
+  - Wikidata
+  - Wikipedia
+  - Wikivoyage
+  - sentence classification
+  - geospatial dataset

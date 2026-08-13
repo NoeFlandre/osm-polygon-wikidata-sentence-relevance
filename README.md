@@ -321,3 +321,21 @@ side-effect-free when the dependency is not installed.
 - [Security](SECURITY.md)
 - [Changelog](CHANGELOG.md)
 - [License (MIT)](LICENSE)
+
+## Citation
+
+If you use this project or its released datasets, please cite the V1.0.0
+release. The package itself remains at version 0.1.0; V1.0.0 identifies the
+first public Afghanistan dataset release.
+
+```bibtex
+@software{flandre2026osm,
+  author = {Flandre, Noé},
+  title = {OSM Polygon - Wikidata Sentence Relevance},
+  year = {2026},
+  version = {1.0.0},
+  url = {https://github.com/NoeFlandre/osm-polygon-wikidata-sentence-relevance}
+}
+```
+
+For machine-readable metadata, see [`citation.cff`](citation.cff).
