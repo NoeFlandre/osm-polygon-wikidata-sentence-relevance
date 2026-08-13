@@ -67,4 +67,34 @@ def select_canary_rows(table: pa.Table, row_limit: int) -> pa.Table:
     return table.take(pa.array(sorted(chosen), type=pa.int64()))
 
 
-__all__ = ["select_canary_rows"]
+def select_v2_canary_rows(table: pa.Table, row_limit: int) -> pa.Table:
+    """Select a deterministic bounded subset from the worldwide V2 input.
+
+    V2 inputs are global and intentionally do not carry the legacy
+    Afghanistan-only ``region`` contract.  The probe still needs a stable,
+    input-order-preserving subset, so sentence IDs provide the immutable
+    tie-breaker without changing the production sample.
+    """
+
+    if row_limit == 0 and not isinstance(row_limit, bool):
+        return table
+    if (
+        isinstance(row_limit, bool)
+        or not isinstance(row_limit, int)
+        or row_limit < 1
+        or row_limit >= table.num_rows
+    ):
+        raise ValueError("row limit must be zero or smaller than the input row count")
+    if "sentence_id" not in table.column_names:
+        raise ValueError("canary input is missing required columns: ['sentence_id']")
+
+    ranked = sorted(
+        range(table.num_rows),
+        key=lambda index: hashlib.sha256(
+            str(table["sentence_id"][index].as_py()).encode()
+        ).hexdigest(),
+    )
+    return table.take(pa.array(sorted(ranked[:row_limit]), type=pa.int64()))
+
+
+__all__ = ["select_canary_rows", "select_v2_canary_rows"]

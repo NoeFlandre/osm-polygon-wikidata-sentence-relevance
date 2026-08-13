@@ -3,7 +3,10 @@ from __future__ import annotations
 import pyarrow as pa
 import pytest
 
-from osm_polygon_sentence_relevance.labeling.canary import select_canary_rows
+from osm_polygon_sentence_relevance.labeling.canary import (
+    select_canary_rows,
+    select_v2_canary_rows,
+)
 
 
 def _table() -> pa.Table:
@@ -75,3 +78,22 @@ def test_canary_rejects_non_afghanistan_rows() -> None:
 
     with pytest.raises(ValueError, match="only Afghanistan"):
         select_canary_rows(table, 2)
+
+
+def test_v2_canary_accepts_worldwide_rows_and_is_deterministic() -> None:
+    table = (
+        _table()
+        .set_column(
+            0,
+            "sentence_id",
+            pa.array([f"world-{index}" for index in range(8)]),
+        )
+        .drop(["region"])
+    )
+
+    first = select_v2_canary_rows(table, 3)
+    second = select_v2_canary_rows(table, 3)
+
+    assert first.equals(second)
+    assert first.num_rows == 3
+    assert set(first.column_names) == set(table.column_names)

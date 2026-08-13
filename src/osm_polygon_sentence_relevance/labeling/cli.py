@@ -13,7 +13,7 @@ from typing import Any, cast
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from .canary import select_canary_rows
+from .canary import select_canary_rows, select_v2_canary_rows
 from .checkpoint import CheckpointStore
 from .checkpoint_mirror import CheckpointMirror, CheckpointStoreLike
 from .contracts import RunIdentity
@@ -436,7 +436,11 @@ def _probe(args: argparse.Namespace, engine: LabelEngine | V2LogitEngine) -> int
     selected = (
         table
         if args.sample_size == table.num_rows
-        else select_canary_rows(table, args.sample_size)
+        else (
+            select_v2_canary_rows(table, args.sample_size)
+            if v2
+            else select_canary_rows(table, args.sample_size)
+        )
     )
     if v2:
         from .v2_prompt import V2PromptInput, build_v2_messages
