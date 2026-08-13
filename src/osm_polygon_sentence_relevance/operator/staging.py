@@ -165,13 +165,17 @@ printf 'PYTHON_CACHES_CLEAN\\n'
         model_file = model_dir / config.label_model_file
         input_download = (
             """
-input_source = hf_hub_download(
-    repo_id=dataset, repo_type="dataset", revision=input_revision,
-    filename="sentences.parquet",
-)
-target = pathlib.Path(input_target)
-if not target.exists():
-    shutil.copyfile(input_source, target)
+input_target_path = pathlib.Path(input_target)
+if not (
+    input_target_path.is_file()
+    and input_target_path.stat().st_size > 0
+):
+    input_source = hf_hub_download(
+        repo_id=dataset, repo_type="dataset", revision=input_revision,
+        filename="sentences.parquet",
+    )
+    if not input_target_path.exists():
+        shutil.copyfile(input_source, input_target_path)
 """
             if download_input
             else "pathlib.Path(input_target).touch(exist_ok=True)\n"

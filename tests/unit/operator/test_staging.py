@@ -268,6 +268,20 @@ def test_prepare_label_assets_can_reuse_split_output_without_download() -> None:
     assert "touch(exist_ok=True)" in ssh.commands[0]
 
 
+def test_prepare_label_assets_reuses_existing_input_before_hub_download() -> None:
+    ssh = RecordingSsh(["LABEL_ASSETS_OK llama_ready=false\n"])
+    layout = RemoteLayout(PurePosixPath("/home/user/operator/run"))
+
+    Stager(ssh).prepare_label_assets(_config(), layout)  # type: ignore[arg-type]
+
+    command = ssh.commands[0]
+    assert "input_target_path.is_file()" in command
+    assert "input_target_path.stat().st_size > 0" in command
+    assert command.index("input_target_path.is_file()") < command.index(
+        "hf_hub_download("
+    )
+
+
 def test_prepare_label_assets_requires_revision_and_marker() -> None:
     layout = RemoteLayout(PurePosixPath("/home/user/operator/run"))
     config = _config()
