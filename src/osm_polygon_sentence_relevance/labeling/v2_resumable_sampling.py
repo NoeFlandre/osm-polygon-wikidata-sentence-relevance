@@ -9,6 +9,7 @@ an interrupted OAR job can continue without reprocessing completed shards.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sqlite3
@@ -39,6 +40,8 @@ from .v2_sampling import (
 _SCHEMA_VERSION = 1
 _STATE_FILENAME = "state.json"
 _DATABASE_FILENAME = "sampling.sqlite3"
+_MATERIALIZED_DIRNAME = "materialized"
+_MATERIALIZED_CACHE_VERSION = 1
 _PLANNING_COLUMNS: tuple[str, ...] = (
     "sentence_id",
     "polygon_id",
@@ -580,6 +583,7 @@ def _materialize_heaps(
     *,
     batch_size: int,
     materialize_shard: Callable[[FinalizedShard], AbstractContextManager[Path]] | None,
+    materialized_cache_dir: Path | None = None,
 ) -> tuple[dict[str, list[tuple[int, int, int, dict[str, Any]]]], pa.Schema]:
     by_shard: dict[str, list[_CandidateLocator]] = defaultdict(list)
     for item in planner.iter_candidate_locators():
@@ -591,6 +595,19 @@ def _materialize_heaps(
     }
     schema: pa.Schema | None = None
     for shard in shards:
+        shard_locators = by_shard.get(shard.shard_key, [])
+        if materialized_cache_dir is not None and shard_locators:
+            cached = _load_materialized_rows(
+                materialized_cache_dir,
+                shard,
+                shard_locators,
+                schema,
+            )
+            if cached is not None:
+                if schema is None:
+                    schema = cached.schema
+                _append_materialized_rows(heaps, shard_locators, cached)
+                continue
         source = (
             materialize_shard(shard)
             if materialize_shard is not None
@@ -607,9 +624,9 @@ def _materialize_heaps(
             elif current_schema != schema:
                 raise ValueError("V2 source shard schemas do not match")
             parquet = pq.ParquetFile(path)
-            shard_locators = by_shard.get(shard.shard_key, [])
             locator_index = 0
             row_offset = 0
+            selected_tables: list[pa.Table] = []
             for row_group_index in range(parquet.num_row_groups):
                 row_group_rows = parquet.metadata.row_group(row_group_index).num_rows
                 row_group_end = row_offset + row_group_rows
@@ -625,10 +642,12 @@ def _materialize_heaps(
                     selected.append(item)
                     locator_index += 1
                 if selected:
-                    rows = parquet.read_row_group(row_group_index).to_pylist()
-                    for item in selected:
-                        row = rows[item.row_index - row_offset]
-                        heaps[item.stratum].append((*item.heap_value[:3], row))
+                    row_group = parquet.read_row_group(row_group_index)
+                    selected_offsets = pa.array(
+                        [item.row_index - row_offset for item in selected],
+                        type=pa.int64(),
+                    )
+                    selected_tables.append(row_group.take(selected_offsets))
                 row_offset = row_group_end
             if row_offset != planner.progress()[shard.shard_key][0]:
                 raise ValueError("V2 source changed between sampling passes")
@@ -636,6 +655,16 @@ def _materialize_heaps(
                 raise ValueError(
                     "V2 sampling candidates no longer exist in their source"
                 )
+            if selected_tables:
+                selected_table = pa.concat_tables(selected_tables)
+                if materialized_cache_dir is not None:
+                    _write_materialized_rows(
+                        materialized_cache_dir,
+                        shard,
+                        shard_locators,
+                        selected_table,
+                    )
+                _append_materialized_rows(heaps, shard_locators, selected_table)
     if schema is None:
         raise ResumableSamplingError("V2 sampling has no source schema")
     return heaps, schema
@@ -670,6 +699,97 @@ def _load_state(path: Path) -> dict[str, Any] | None:
     ):
         raise ResumableSamplingError("sampling state schema is unsupported")
     return payload
+
+
+def _materialized_cache_paths(cache_dir: Path, shard_key: str) -> tuple[Path, Path]:
+    digest = hashlib.sha256(shard_key.encode("utf-8")).hexdigest()
+    return cache_dir / f"{digest}.parquet", cache_dir / f"{digest}.json"
+
+
+def _schema_fingerprint(schema: pa.Schema) -> str:
+    return hashlib.sha256(schema.serialize().to_pybytes()).hexdigest()
+
+
+def _locator_fingerprint(locators: Sequence[_CandidateLocator]) -> str:
+    digest = hashlib.sha256()
+    for item in locators:
+        digest.update(
+            f"{item.stratum}\0{item.polygon_order}\0{item.rank_hex}\0"
+            f"{item.global_index}\0{item.shard_key}\0{item.row_index}\n".encode()
+        )
+    return digest.hexdigest()
+
+
+def _load_materialized_rows(
+    cache_dir: Path,
+    shard: FinalizedShard,
+    locators: Sequence[_CandidateLocator],
+    expected_schema: pa.Schema | None,
+) -> pa.Table | None:
+    table_path, metadata_path = _materialized_cache_paths(cache_dir, shard.shard_key)
+    if not table_path.is_file() or not metadata_path.is_file():
+        return None
+    try:
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if (
+        not isinstance(metadata, dict)
+        or metadata.get("cache_version") != _MATERIALIZED_CACHE_VERSION
+        or metadata.get("shard_key") != shard.shard_key
+        or metadata.get("identity") != shard.identity
+        or metadata.get("row_count") != len(locators)
+        or metadata.get("locator_sha256") != _locator_fingerprint(locators)
+    ):
+        return None
+    try:
+        table = pq.read_table(table_path)
+    except (OSError, pa.ArrowException):
+        return None
+    if table.num_rows != len(locators):
+        return None
+    if metadata.get("schema_sha256") != _schema_fingerprint(table.schema):
+        return None
+    if expected_schema is not None and not table.schema.equals(expected_schema):
+        raise ValueError("V2 source shard schemas do not match")
+    return table
+
+
+def _write_materialized_rows(
+    cache_dir: Path,
+    shard: FinalizedShard,
+    locators: Sequence[_CandidateLocator],
+    table: pa.Table,
+) -> None:
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    os.chmod(cache_dir, 0o700)
+    table_path, metadata_path = _materialized_cache_paths(cache_dir, shard.shard_key)
+    temporary = table_path.with_name(f".{table_path.name}.tmp-{os.getpid()}")
+    pq.write_table(table, temporary, compression="zstd")
+    os.chmod(temporary, 0o600)
+    with temporary.open("rb") as stream:
+        os.fsync(stream.fileno())
+    os.replace(temporary, table_path)
+    _atomic_json(
+        metadata_path,
+        {
+            "cache_version": _MATERIALIZED_CACHE_VERSION,
+            "shard_key": shard.shard_key,
+            "identity": shard.identity,
+            "row_count": len(locators),
+            "locator_sha256": _locator_fingerprint(locators),
+            "schema_sha256": _schema_fingerprint(table.schema),
+        },
+    )
+
+
+def _append_materialized_rows(
+    heaps: dict[str, list[tuple[int, int, int, dict[str, Any]]]],
+    locators: Sequence[_CandidateLocator],
+    table: pa.Table,
+) -> None:
+    for item, row in zip(locators, table.to_pylist(), strict=True):
+        heaps[item.stratum].append((*item.heap_value[:3], row))
 
 
 def select_v2_shards_resumable(
@@ -811,12 +931,27 @@ def select_v2_shards_resumable(
                 ),
             )
 
+        # Retention can leave superseded candidates in the ledger. Compact
+        # before materialization so the durable row cache represents exactly
+        # the final deterministic sample and can be reused after a restart.
+        planner.compact_candidates(heaps)
+        _atomic_json(
+            state_path,
+            _state_payload(
+                seed=seed, target=target, phase="materializing", shards=ordered
+            ),
+        )
         heaps_with_rows, output_schema = _materialize_heaps(
             planner,
             ordered,
             plan,
             batch_size=batch_size,
             materialize_shard=materialize_shard,
+            materialized_cache_dir=state_root / _MATERIALIZED_DIRNAME,
+        )
+        _atomic_json(
+            state_path,
+            _state_payload(seed=seed, target=target, phase="writing", shards=ordered),
         )
         result = _write_selected(
             output,

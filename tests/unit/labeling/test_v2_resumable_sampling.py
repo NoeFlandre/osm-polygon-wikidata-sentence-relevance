@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
+from contextlib import AbstractContextManager
 from pathlib import Path
 
 import pyarrow as pa
@@ -175,6 +177,71 @@ def test_materialize_heaps_reads_only_row_groups_with_candidates(
         planner.close()
 
 
+def test_materialize_heaps_converts_only_selected_rows_to_python(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    shards, _ = _shards(tmp_path)
+    planner = _PersistentPlanner(tmp_path / "sampling.sqlite3")
+    try:
+        offset = 0
+        for shard in shards:
+            planner.begin()
+            row_count = pq.ParquetFile(shard.path).metadata.num_rows
+            for batch in pq.ParquetFile(shard.path).iter_batches(batch_size=64):
+                planner.observe(batch)
+            planner.finish_planning_shard(shard, row_count, offset)
+            offset += row_count
+        plan = _build_plan(planner, target=1, seed="seed")
+        stratum = next(iter(plan.quotas))
+        planner.connection.execute(
+            "INSERT INTO candidates VALUES (?, ?, ?, ?, ?, ?)",
+            (stratum, 0, "0" * 64, 0, shards[0].shard_key, 0),
+        )
+        planner.connection.commit()
+
+        real_parquet_file = v2_resumable_sampling.pq.ParquetFile
+        selected_indices: list[list[int]] = []
+
+        class TrackingTable:
+            def __init__(self, inner: pa.Table) -> None:
+                self._inner = inner
+
+            def take(self, indices: pa.Array) -> pa.Table:
+                selected_indices.append([int(value) for value in indices.to_pylist()])
+                return self._inner.take(indices)
+
+            def to_pylist(self) -> list[dict[str, object]]:
+                raise AssertionError(
+                    "the full row group must not be converted to Python rows"
+                )
+
+        class TrackingParquetFile:
+            def __init__(self, path: Path) -> None:
+                self._inner = real_parquet_file(path)
+
+            def read_row_group(self, index: int) -> TrackingTable:
+                return TrackingTable(self._inner.read_row_group(index))
+
+            def __getattr__(self, name: str) -> object:
+                return getattr(self._inner, name)
+
+        monkeypatch.setattr(
+            v2_resumable_sampling.pq, "ParquetFile", TrackingParquetFile
+        )
+        heaps, _ = v2_resumable_sampling._materialize_heaps(
+            planner,
+            shards,
+            plan,
+            batch_size=4,
+            materialize_shard=None,
+        )
+
+        assert selected_indices == [[0]]
+        assert len(heaps[stratum]) == 1
+    finally:
+        planner.close()
+
+
 def test_heaps_from_database_compacts_stale_candidates_to_plan_quotas(
     tmp_path: Path,
 ) -> None:
@@ -271,7 +338,7 @@ def test_resumable_sampling_rejects_shard_identity_change(tmp_path: Path) -> Non
 def test_resumable_sampling_keeps_completed_scans_after_output_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    shards, _ = _shards(tmp_path)
+    shards, source = _shards(tmp_path)
     state_dir = tmp_path / "state"
     original = v2_resumable_sampling._write_selected
     monkeypatch.setattr(
@@ -291,9 +358,27 @@ def test_resumable_sampling_keeps_completed_scans_after_output_failure(
     calls: list[str] = []
     real_retain = v2_resumable_sampling._retain_shard
 
-    def counted_retain(*args: object, **kwargs: object) -> None:
-        calls.append(str(args[1].shard_key))
-        real_retain(*args, **kwargs)
+    def counted_retain(
+        planner: v2_resumable_sampling._PersistentPlanner,
+        shard: FinalizedShard,
+        plan: v2_resumable_sampling.SamplingPlan,
+        heaps: dict[str, list[tuple[int, int, int, str, int]]],
+        *,
+        seed: str,
+        batch_size: int,
+        materialize_shard: Callable[[FinalizedShard], AbstractContextManager[Path]]
+        | None,
+    ) -> None:
+        calls.append(shard.shard_key)
+        real_retain(
+            planner,
+            shard,
+            plan,
+            heaps,
+            seed=seed,
+            batch_size=batch_size,
+            materialize_shard=materialize_shard,
+        )
 
     monkeypatch.setattr(v2_resumable_sampling, "_write_selected", original)
     monkeypatch.setattr(v2_resumable_sampling, "_retain_shard", counted_retain)
@@ -305,7 +390,56 @@ def test_resumable_sampling_keeps_completed_scans_after_output_failure(
         state_dir=state_dir,
     )
     assert result.exists()
+    assert pq.read_table(result).equals(select_v2_rows(source, target=11, seed="seed"))
     assert calls == []
+
+
+def test_resumable_sampling_reuses_materialized_rows_after_output_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    shards, source = _shards(tmp_path)
+    state_dir = tmp_path / "state"
+    original = v2_resumable_sampling._write_selected
+    monkeypatch.setattr(
+        v2_resumable_sampling,
+        "_write_selected",
+        lambda *args, **kwargs: (_ for _ in ()).throw(OSError("stop after rows")),
+    )
+    with pytest.raises(OSError, match="stop after rows"):
+        select_v2_shards_resumable(
+            shards,
+            tmp_path / "failed.parquet",
+            target=11,
+            seed="seed",
+            state_dir=state_dir,
+        )
+
+    cache = state_dir / "materialized"
+    assert list(cache.glob("*.parquet"))
+
+    monkeypatch.setattr(v2_resumable_sampling, "_write_selected", original)
+    real_parquet_file = v2_resumable_sampling.pq.ParquetFile
+
+    class NoRowGroupReads:
+        def __init__(self, path: Path) -> None:
+            self._inner = real_parquet_file(path)
+
+        def read_row_group(self, index: int) -> pa.Table:
+            raise AssertionError("source row groups must be reused from the cache")
+
+        def __getattr__(self, name: str) -> object:
+            return getattr(self._inner, name)
+
+    monkeypatch.setattr(v2_resumable_sampling.pq, "ParquetFile", NoRowGroupReads)
+    result = select_v2_shards_resumable(
+        shards,
+        tmp_path / "recovered.parquet",
+        target=11,
+        seed="seed",
+        state_dir=state_dir,
+    )
+    assert result.exists()
+    assert pq.read_table(result).equals(select_v2_rows(source, target=11, seed="seed"))
 
 
 @pytest.mark.parametrize(
