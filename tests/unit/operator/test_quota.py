@@ -12,7 +12,9 @@ from osm_polygon_sentence_relevance.operator.quota import (
 
 
 def test_home_quota_command_has_a_bounded_remote_timeout() -> None:
-    assert "quota_output=$(timeout 15s quota 2>&1)" in _HOME_QUOTA_COMMAND
+    assert "quota_output=$(timeout -k 1s 5s quota 2>&1)" in _HOME_QUOTA_COMMAND
+    assert 'timeout -k 1s 10s du -sk -- "$HOME"' in _HOME_QUOTA_COMMAND
+    assert "25000000 100000000" in _HOME_QUOTA_COMMAND
     assert 'if [ "$quota_rc" -gt 1 ]; then exit "$quota_rc"; fi;' in (
         _HOME_QUOTA_COMMAND
     )

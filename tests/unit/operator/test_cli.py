@@ -484,7 +484,7 @@ class _FakeSsh:
 
     def run(self, command: str) -> SimpleNamespace:
         self.commands.append(command)
-        if "quota_output=$(timeout 15s quota" in command:
+        if "quota_output=$(timeout -k 1s 5s quota" in command:
             return SimpleNamespace(stdout=" 1000 25000000 100000000\n")
         if 'printf "%s\\n" "$HOME"' in command:
             return SimpleNamespace(stdout="/home/user\n")

@@ -11,10 +11,20 @@ if TYPE_CHECKING:
 
 #: Read-only home-quota acquisition. The nested timeout keeps a broken or
 #: unavailable quota service from blocking a resume controller indefinitely.
-#: ``set +e`` keeps rc=1 (over quota) from aborting the command; rc>1 still
-#: surfaces as a transport failure.
+#: Grid'5000 documents a 25 GiB soft and 100 GiB hard default home quota. When
+#: the NFS quota RPC times out, a bounded ``du`` measurement is converted to a
+#: conservative quota row using those documented defaults. A failed ``du``
+#: still fails closed, so the fallback can never turn an unknown storage state
+#: into permission to submit work.
 _HOME_QUOTA_COMMAND: Final[str] = (
-    "set +e; quota_output=$(timeout 15s quota 2>&1); quota_rc=$?; set -e; "
+    "set +e; quota_output=$(timeout -k 1s 5s quota 2>&1); quota_rc=$?; set -e; "
+    'if [ "$quota_rc" -eq 124 ]; then '
+    'set +e; du_output=$(timeout -k 1s 10s du -sk -- "$HOME" 2>/dev/null); '
+    'du_rc=$?; set -e; if [ "$du_rc" -ne 0 ]; then exit 124; fi; '
+    "set -- $du_output; used_kib=${1:-}; "
+    "case \"$used_kib\" in (''|*[!0-9]*) exit 124;; esac; "
+    'if [ "$du_rc" -ne 0 ]; then exit 124; fi; '
+    'quota_output=" $used_kib 25000000 100000000"; quota_rc=0; fi; '
     'if [ "$quota_rc" -gt 1 ]; then exit "$quota_rc"; fi; '
     "printf '%s\\n' \"$quota_output\""
 )
