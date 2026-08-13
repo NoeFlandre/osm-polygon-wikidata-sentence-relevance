@@ -73,7 +73,10 @@ if ! [[ "${RUN_ID}" =~ ^[0-9a-f]{20}$ ]]; then
     echo "run_worldwide_labeling: work directory must be nested under a 20-hex run directory" >&2
     exit 2
 fi
-CHECKPOINT_NAMESPACE="checkpoints/${RUN_ID}/${LABEL_LANE}"; readonly CHECKPOINT_NAMESPACE
+# The checkpoint mirror has one immutable branch per operator run.  Smoke and
+# production remain isolated by their local work/output roots and Trackio run
+# names; adding the lane here would violate the mirror's branch contract.
+CHECKPOINT_NAMESPACE="checkpoints/${RUN_ID}"; readonly CHECKPOINT_NAMESPACE
 LABEL_CLI="${REPO_ROOT}/.venv/bin/osm-polygon-label-sentences"; readonly LABEL_CLI
 [ -x "${LABEL_CLI}" ] || { echo "run_worldwide_labeling: labeling CLI is missing" >&2; exit 2; }
 MODEL_SHA256="$(sha256sum "${MODEL_FILE}" | awk '{print $1}')"; readonly MODEL_SHA256

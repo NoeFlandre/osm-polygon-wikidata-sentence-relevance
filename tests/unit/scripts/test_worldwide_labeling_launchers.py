@@ -156,13 +156,17 @@ def test_submitter_rejects_mutable_revision_before_scheduler_call(
     assert not calls.exists()
 
 
-def test_payload_isolates_lane_checkpoint_and_tracking_namespaces() -> None:
+def test_payload_uses_run_checkpoint_namespace_and_lane_tracking() -> None:
     payload = _text("run_worldwide_labeling.sh")
 
     assert "exactly nineteen arguments are required" in payload
     assert 'case "${LABEL_LANE}" in' in payload
     assert "smoke)" in payload
     assert "production)" in payload
-    assert 'CHECKPOINT_NAMESPACE="checkpoints/${RUN_ID}/${LABEL_LANE}"' in payload
+    # The mirror validator accepts one run branch only.  Smoke/production
+    # isolation is provided by their separate local work roots and Trackio
+    # run names, not by inventing an invalid nested Hub branch.
+    assert 'CHECKPOINT_NAMESPACE="checkpoints/${RUN_ID}"' in payload
+    assert 'CHECKPOINT_NAMESPACE="checkpoints/${RUN_ID}/${LABEL_LANE}"' not in payload
     assert '--trackio-run-name "run-${RUN_ID}-${LABEL_LANE}"' in payload
     assert 'if [ "${LABEL_LANE}" = "production" ]; then' in payload
