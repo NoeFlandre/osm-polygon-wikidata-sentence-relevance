@@ -45,7 +45,26 @@ prepare_compute_environment() {
     local scratch_base="$2"
     local job_log_dir="$3"
     local label="${4:-compute}"
+    local profile="${5:-full}"
     local uv_bin="${UV_BIN:-}"
+    local extras required_imports
+
+    case "${profile}" in
+        full)
+            extras="--extra hub --extra segmentation --extra operator"
+            required_imports='import h3, huggingface_hub, pyarrow, torch, typer, wtpsplit'
+            ;;
+        worldwide-label)
+            # V2 labels already-segmented input and never constructs SaT. Avoid
+            # reinstalling the multi-gigabyte PyTorch/wtpsplit stack here.
+            extras="--extra hub --extra operator"
+            required_imports='import h3, huggingface_hub, pyarrow, typer'
+            ;;
+        *)
+            echo "${label}: unknown compute environment profile" >&2
+            return 2
+            ;;
+    esac
 
     # Expose whether validation reused the existing environment so callers can
     # budget the remaining allocation time without guessing from log output.
@@ -75,14 +94,13 @@ prepare_compute_environment() {
     : >"${job_log_dir}/environment.stdout.log"
     : >"${job_log_dir}/environment.stderr.log"
     if [ -d "${repo_root}/.venv" ]; then
-        if "${uv_bin}" sync --locked --no-dev \
-            --extra hub --extra segmentation --extra operator \
+        if "${uv_bin}" sync --locked --no-dev ${extras} \
             --project "${repo_root}" \
             >>"${job_log_dir}/environment.stdout.log" \
             2>>"${job_log_dir}/environment.stderr.log" && \
             [ -x "${repo_root}/.venv/bin/python" ] && \
             "${repo_root}/.venv/bin/python" -c \
-                'import h3, huggingface_hub, pyarrow, torch, typer, wtpsplit' \
+                "${required_imports}" \
                 >>"${job_log_dir}/environment.stdout.log" \
                 2>>"${job_log_dir}/environment.stderr.log"; then
             printf 'COMPUTE_ENVIRONMENT_REUSED\n' \
@@ -95,8 +113,7 @@ prepare_compute_environment() {
     fi
 
     rm -rf -- "${repo_root}/.venv"
-    if ! "${uv_bin}" sync --locked --no-dev \
-        --extra hub --extra segmentation --extra operator \
+    if ! "${uv_bin}" sync --locked --no-dev ${extras} \
         --project "${repo_root}" \
         >>"${job_log_dir}/environment.stdout.log" \
         2>>"${job_log_dir}/environment.stderr.log"; then
@@ -105,7 +122,7 @@ prepare_compute_environment() {
     fi
     if [ ! -x "${repo_root}/.venv/bin/python" ] || \
         ! "${repo_root}/.venv/bin/python" -c \
-            'import h3, huggingface_hub, pyarrow, torch, typer, wtpsplit' \
+            "${required_imports}" \
             >>"${job_log_dir}/environment.stdout.log" \
             2>>"${job_log_dir}/environment.stderr.log"; then
         echo "${label}: compute-node environment validation failed" >&2

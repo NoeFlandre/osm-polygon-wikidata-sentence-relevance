@@ -46,7 +46,7 @@ case "${SCRATCH_BASE}" in
 esac
 mkdir -p -m 0700 -- "${SCRATCH_BASE}"
 prepare_compute_environment "${REPO_ROOT}" "${SCRATCH_BASE}" "${JOB_LOG_DIR}" \
-    "run_worldwide_labeling_job"
+    "run_worldwide_labeling_job" "worldwide-label"
 PYTHON="${REPO_ROOT}/.venv/bin/python"
 set +e
 . "$(dirname "${BASH_SOURCE[0]}")/_deadline_helper.sh"

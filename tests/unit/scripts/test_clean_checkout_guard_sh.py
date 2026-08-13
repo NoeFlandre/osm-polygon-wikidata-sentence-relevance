@@ -34,7 +34,7 @@ def _run_guard(
 
 
 def _run_environment_preparation(
-    repo: Path, fake_uv: Path, tmp_path: Path
+    repo: Path, fake_uv: Path, tmp_path: Path, profile: str = "full"
 ) -> subprocess.CompletedProcess[str]:
     scratch = tmp_path / "scratch"
     logs = tmp_path / "logs"
@@ -43,7 +43,7 @@ def _run_environment_preparation(
     script = (
         f". '{GUARD}'\n"
         f"UV_BIN='{fake_uv}' prepare_compute_environment "
-        f"'{repo}' '{scratch}' '{logs}' test\n"
+        f"'{repo}' '{scratch}' '{logs}' test '{profile}'\n"
         f'echo "reused=${{COMPUTE_ENVIRONMENT_REUSED:-unset}}"\n'
         f'echo "exit=$?"\n'
     )
@@ -126,6 +126,14 @@ def test_guard_exports_compute_environment_bootstrap_contract() -> None:
     assert "command -v uv || true" in text
     assert 'UV_CACHE_DIR="${scratch_base}/uv-cache"' in text
     assert '"${uv_bin}" sync --locked --no-dev' in text
+
+
+def test_worldwide_profile_uses_label_runtime_without_segmentation_stack() -> None:
+    text = GUARD.read_text(encoding="utf-8")
+    assert 'worldwide-label)' in text
+    assert '--extra hub --extra operator' in text
+    assert "import h3, huggingface_hub, pyarrow, typer" in text
+    assert "import h3, huggingface_hub, pyarrow, torch, typer, wtpsplit" in text
 
 
 def test_compute_environment_reuses_a_valid_existing_venv(tmp_path: Path) -> None:
