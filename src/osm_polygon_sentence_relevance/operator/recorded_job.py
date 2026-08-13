@@ -148,6 +148,14 @@ def _identity_matches_overlap(
     for field_name in _OVERLAPPING_IDENTITY_FIELDS:
         observed_value = observed.get(field_name)
         expected_value = expected.get(field_name)
+        # The operator calls this setting ``sampling_h3_resolution`` while
+        # the labeling checkpoint contract stores the shorter ``h3_resolution``
+        # key.  Treat those names as the same immutable dimension.
+        if field_name == "sampling_h3_resolution":
+            if observed_value is None:
+                observed_value = observed.get("h3_resolution")
+            if expected_value is None:
+                expected_value = expected.get("h3_resolution")
         if observed_value != expected_value:
             return False
     return True
