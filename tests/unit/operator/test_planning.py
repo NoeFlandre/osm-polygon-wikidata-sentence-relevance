@@ -668,7 +668,7 @@ def test_worldwide_finalization_receives_sampling_contract() -> None:
     )
 
 
-def test_finalization_uses_advanced_execution_checkout() -> None:
+def test_finalization_preserves_checkpoint_source_identity() -> None:
     config = OperatorConfig.build(
         scope="all",
         region=None,
@@ -683,7 +683,7 @@ def test_finalization_uses_advanced_execution_checkout() -> None:
         config, RemoteLayout(PurePosixPath("/r"))
     ).command
 
-    assert command[6] == "c" * 40
+    assert command[6] == "a" * 40
     assert command[7] == "b" * 40
 
 
