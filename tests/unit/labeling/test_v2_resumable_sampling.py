@@ -175,6 +175,48 @@ def test_materialize_heaps_reads_only_row_groups_with_candidates(
         planner.close()
 
 
+def test_heaps_from_database_compacts_stale_candidates_to_plan_quotas(
+    tmp_path: Path,
+) -> None:
+    shards, _ = _shards(tmp_path)
+    planner = _PersistentPlanner(tmp_path / "sampling.sqlite3")
+    try:
+        offset = 0
+        for shard in shards:
+            planner.begin()
+            row_count = pq.ParquetFile(shard.path).metadata.num_rows
+            for batch in pq.ParquetFile(shard.path).iter_batches(batch_size=64):
+                planner.observe(batch)
+            planner.finish_planning_shard(shard, row_count, offset)
+            offset += row_count
+
+        plan = _build_plan(planner, target=1, seed="seed")
+        stratum = next(iter(plan.quotas))
+        for global_index in range(3):
+            planner.connection.execute(
+                "INSERT INTO candidates VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    stratum,
+                    0,
+                    f"{global_index:064x}",
+                    global_index,
+                    shards[0].shard_key,
+                    global_index,
+                ),
+            )
+        planner.connection.commit()
+
+        heaps = _heaps_from_database(planner, plan)
+
+        assert len(heaps[stratum]) == plan.quotas[stratum] == 1
+        assert heaps[stratum][0][:3] == (0, 0, 0)
+        assert planner.connection.execute(
+            "SELECT count(*) FROM candidates"
+        ).fetchone() == (1,)
+    finally:
+        planner.close()
+
+
 def test_resumable_sampling_reuses_plan_when_target_expands(tmp_path: Path) -> None:
     shards, source = _shards(tmp_path)
     state_dir = tmp_path / "state"

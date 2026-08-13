@@ -48,6 +48,7 @@ _RESUMABLE_PHASES: Final[frozenset[str]] = frozenset(
         "verifying",
     }
 )
+_PERMANENT_PREFLIGHT_ERROR: Final[str] = "current source checkout must be clean"
 
 RunProcess = Callable[..., subprocess.CompletedProcess[str]]
 PopenFactory = Callable[..., object]
@@ -244,6 +245,15 @@ def _stage(arguments: Sequence[str]) -> str | None:
     return None
 
 
+def _log_contains_since(path: Path, offset: int, needle: str) -> bool:
+    try:
+        with path.open("rb") as stream:
+            stream.seek(offset)
+            return needle in stream.read().decode("utf-8", errors="replace")
+    except (OSError, ValueError):
+        return False
+
+
 def supervise(
     arguments: Sequence[str],
     *,
@@ -266,6 +276,7 @@ def supervise(
     current_run_id = run_id
     stop_after_split = _stage(current) == "split"
     for attempt in count(1):
+        log_offset = log_path.stat().st_size if log_path.exists() else 0
         with log_path.open("a", encoding="utf-8") as log_handle:
             print(
                 f"[supervisor] allocation attempt {attempt}",
@@ -279,6 +290,8 @@ def supervise(
                 check=False,
                 text=True,
             )
+        if _log_contains_since(log_path, log_offset, _PERMANENT_PREFLIGHT_ERROR):
+            return result.returncode if result.returncode else 1
         current_run_id = current_run_id or _find_run_id(log_path)
         phase = _read_phase(data_root, current_run_id)
         if phase == "complete" or (stop_after_split and phase == "checkpointed"):

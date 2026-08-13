@@ -13,7 +13,7 @@ import json
 import os
 import sqlite3
 from collections import Counter, defaultdict
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
@@ -345,14 +345,47 @@ class _PersistentPlanner:
         self.connection.execute("UPDATE shard_progress SET retained=0, retain_offset=0")
         self.connection.commit()
 
-    def load_candidate_locators(self) -> list[_CandidateLocator]:
-        return [
-            _CandidateLocator(stratum, order, rank, index, shard, row)
-            for stratum, order, rank, index, shard, row in self.connection.execute(
-                "SELECT stratum, polygon_order, rank_hex, global_index, shard_key, row_index "
-                "FROM candidates"
-            )
+    def iter_candidate_locators(self) -> Iterator[_CandidateLocator]:
+        for stratum, order, rank, index, shard, row in self.connection.execute(
+            "SELECT stratum, polygon_order, rank_hex, global_index, shard_key, row_index "
+            "FROM candidates"
+        ):
+            yield _CandidateLocator(stratum, order, rank, index, shard, row)
+
+    def compact_candidates(
+        self,
+        heaps: Mapping[str, Sequence[tuple[int, int, int, str, int]]],
+    ) -> None:
+        """Persist only the quota-best candidates recovered from the ledger."""
+
+        keep = [
+            (stratum, -candidate[2])
+            for stratum, heap in heaps.items()
+            for candidate in heap
         ]
+        self.connection.execute("BEGIN IMMEDIATE")
+        try:
+            self.connection.execute(
+                "CREATE TEMP TABLE candidate_keep ("
+                "stratum TEXT NOT NULL, global_index INTEGER NOT NULL, "
+                "PRIMARY KEY (stratum, global_index)"
+                ") WITHOUT ROWID"
+            )
+            self.connection.executemany(
+                "INSERT INTO candidate_keep VALUES (?, ?)", keep
+            )
+            self.connection.execute(
+                "DELETE FROM candidates WHERE NOT EXISTS ("
+                "SELECT 1 FROM candidate_keep "
+                "WHERE candidate_keep.stratum = candidates.stratum "
+                "AND candidate_keep.global_index = candidates.global_index"
+                ")"
+            )
+            self.connection.execute("DROP TABLE candidate_keep")
+            self.connection.commit()
+        except BaseException:
+            self.connection.rollback()
+            raise
 
     def close(self) -> None:
         self.connection.close()
@@ -383,10 +416,19 @@ def _heaps_from_database(
     heaps: dict[str, list[tuple[int, int, int, str, int]]] = {
         stratum: [] for stratum in plan.quotas
     }
-    for item in planner.load_candidate_locators():
-        heaps.setdefault(item.stratum, []).append(item.heap_value)
+    for item in planner.iter_candidate_locators():
+        quota = plan.quotas.get(item.stratum)
+        if quota is None:
+            continue
+        candidate = item.heap_value
+        heap = heaps[item.stratum]
+        if len(heap) < quota:
+            heapq.heappush(heap, candidate)
+        elif candidate[:3] > heap[0][:3]:
+            heapq.heapreplace(heap, candidate)
     for heap in heaps.values():
         heapq.heapify(heap)
+    planner.compact_candidates(heaps)
     return heaps
 
 
@@ -539,9 +581,8 @@ def _materialize_heaps(
     batch_size: int,
     materialize_shard: Callable[[FinalizedShard], AbstractContextManager[Path]] | None,
 ) -> tuple[dict[str, list[tuple[int, int, int, dict[str, Any]]]], pa.Schema]:
-    locators = planner.load_candidate_locators()
     by_shard: dict[str, list[_CandidateLocator]] = defaultdict(list)
-    for item in locators:
+    for item in planner.iter_candidate_locators():
         by_shard[item.shard_key].append(item)
     for shard_locators in by_shard.values():
         shard_locators.sort(key=lambda item: item.row_index)

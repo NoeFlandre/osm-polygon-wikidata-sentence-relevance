@@ -342,6 +342,41 @@ def test_supervise_does_not_retry_failed_or_unknown_state(tmp_path: Path) -> Non
     assert attempts == 1
 
 
+def test_supervise_stops_on_deterministic_dirty_checkout_failure(
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / "runs" / ("a" * 20) / "state.json"
+    state_path.parent.mkdir(parents=True)
+    attempts = 0
+
+    def run_process(
+        command: tuple[str, ...], **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        nonlocal attempts
+        attempts += 1
+        state_path.write_text(
+            json.dumps({"phase": "remote_prepared"}), encoding="utf-8"
+        )
+        print(
+            "Error: current source checkout must be clean",
+            file=kwargs["stdout"],
+        )
+        return subprocess.CompletedProcess(command, 1)
+
+    assert (
+        supervise(
+            ("resume", "a" * 20),
+            data_root=tmp_path,
+            log_path=tmp_path / "supervisor.log",
+            run_id="a" * 20,
+            run_process=run_process,
+            sleep=lambda _: pytest.fail("deterministic preflight failure must stop"),
+        )
+        == 1
+    )
+    assert attempts == 1
+
+
 def test_supervise_rejects_invalid_limits(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="max_attempts"):
         supervise(
