@@ -282,6 +282,9 @@ mkdir -p -m 0700 {_q(layout.input_dir)} {_q(layout.hf_home)}
   --revision {_q(config.input_dataset_revision)} \\
   --cache-dir {_q(layout.hf_home)}
 test -f {_q(output)}
+cache={_q(layout.hf_home)}
+[ -d "$cache" ] && [ ! -L "$cache" ] || exit 70
+find -P "$cache" -mindepth 1 -maxdepth 1 -exec rm -rf -- {{}} +
 printf 'V2_INPUT_OK\\n'
 """.strip()
         result = self._ssh.run(script)
