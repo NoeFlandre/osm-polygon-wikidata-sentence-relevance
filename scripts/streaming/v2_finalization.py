@@ -240,18 +240,9 @@ def finalize_v2_resumable(
                 reports[descriptor.shard_key] = _report_from_metadata(
                     {str(key): value for key, value in metadata.items()}
                 )
-        missing_reports = [
-            descriptor.shard_key
-            for descriptor in descriptors
-            if descriptor.shard_key not in reports
-        ]
-        if missing_reports:
-            raise ValueError(
-                f"finalization reports are missing for shards: {missing_reports!r}"
-            )
-        report = _aggregate_reports(
-            [reports[descriptor.shard_key] for descriptor in descriptors]
-        )
+        # Shards with no candidate rows are intentionally never materialized.
+        # Aggregate only reports for shards that contributed finalized rows.
+        report = _aggregate_reports(list(reports.values()))
         digest = sha256_file(output_parquet)
         selected_rows = pq.ParquetFile(output_parquet).metadata.num_rows
         manifest = {

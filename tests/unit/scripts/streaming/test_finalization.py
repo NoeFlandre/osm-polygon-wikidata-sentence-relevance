@@ -456,6 +456,7 @@ def test_v2_finalization_rebuilds_reports_after_sampling_restart(
 
     monkeypatch.setenv("OAR_JOB_ID", "123")
     handle = _handle(tmp_path, "a-latest")
+    empty_handle = _handle(tmp_path, "b-latest")
     report = {
         "input_sentence_occurrence_count": 3,
         "output_sentence_count": 2,
@@ -468,9 +469,11 @@ def test_v2_finalization_rebuilds_reports_after_sampling_restart(
             pass
 
         def inspect(self, shard_key: str, *, materialize: bool) -> object:
-            assert shard_key == "a-latest"
             assert materialize is False
-            return mock.Mock(metadata={"finalization_report": report})
+            if shard_key == "a-latest":
+                return mock.Mock(metadata={"finalization_report": report})
+            assert shard_key == "b-latest"
+            return None
 
     monkeypatch.setattr(
         "scripts.streaming.v2_finalization.FinalizedArtifactOffloader",
@@ -488,7 +491,7 @@ def test_v2_finalization_rebuilds_reports_after_sampling_restart(
 
     output = finalize_v2_resumable(
         hub_api=mock.Mock(),
-        ordered_handles=[handle],
+        ordered_handles=[handle, empty_handle],
         repo_id="owner/output",
         upstream_repo_id="owner/input",
         run_id="run-1",
