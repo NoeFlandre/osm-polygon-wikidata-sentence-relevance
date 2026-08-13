@@ -56,7 +56,9 @@ hub = [
     # matplotlib's deterministic-seed backbone; pillow handles the
     # PNG verification path in tests.
     "matplotlib>=3.8",
-    "numpy>=1.26",
+    # NumPy 2.3+ wheels require x86-v2 instructions that are not available
+    # on every Grid'5000 frontend used for preparation and validation.
+    "numpy>=1.26,<2.3",
     "pillow>=10.0",
 ]
 tracking = [

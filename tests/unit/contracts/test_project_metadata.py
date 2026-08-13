@@ -118,3 +118,10 @@ class TestCoreAndHubStayLightweight:
         assert not any(d.startswith("wtpsplit") for d in hub), (
             f"'hub' extra must not directly declare wtpsplit; found: {hub}"
         )
+
+    def test_hub_numpy_supports_grid5000_cpu_baseline(self):
+        hub = self._extra("hub")
+        assert "numpy>=1.26,<2.3" in hub, (
+            "'hub' extra must cap NumPy below 2.3 because newer wheels require "
+            "x86-v2 instructions unavailable on some Grid'5000 frontends"
+        )
