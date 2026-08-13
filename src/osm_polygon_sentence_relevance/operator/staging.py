@@ -206,7 +206,8 @@ test "$(sha256sum {_q(model_file)} | awk '{{print $1}}')" = \
   {_q(config.label_model_file_sha256)}
 test -f {_q(tokenizer_dir / "tokenizer.json")}
 test -f {_q(tokenizer_dir / "tokenizer_config.json")}
-if test -x {_q(layout.root / "llama-server-bin/llama-server")}; then
+if test -x {_q(layout.root / "llama-server-bin/llama-server")} && \
+   test -f {_q(layout.root / "llama-server-bin/libllama-server-impl.so")}; then
   llama_ready=true
 else
   llama_ready=false

@@ -286,7 +286,9 @@ def llama_build_submission(layout: RemoteLayout) -> SubmissionRequest:
         "-DLLAMA_CURL=OFF -DCMAKE_BUILD_TYPE=Release; "
         f"cmake --build {source}/build --target llama-server -j 12; "
         f"mkdir -p -m 0700 {target}; "
-        f"install -m 0700 {source}/build/bin/llama-server {target}/llama-server"
+        f"install -m 0700 {source}/build/bin/llama-server {target}/llama-server; "
+        f"find {source}/build/bin -maxdepth 1 -type f -name 'lib*.so*' "
+        f"-exec install -m 0700 {{}} {target}/ \\;"
     )
     return SubmissionRequest(
         (

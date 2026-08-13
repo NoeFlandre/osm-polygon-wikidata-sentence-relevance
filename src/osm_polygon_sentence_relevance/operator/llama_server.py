@@ -23,7 +23,9 @@ def llama_server_ready(ssh: SshClient, layout: RemoteLayout) -> bool:
         result_text(
             ssh.run(
                 "if test -x "
-                f"{layout.root!s}/llama-server-bin/llama-server; "
+                f"{layout.root!s}/llama-server-bin/llama-server "
+                "&& test -f "
+                f"{layout.root!s}/llama-server-bin/libllama-server-impl.so; "
                 "then printf yes; else printf no; fi"
             )
         )

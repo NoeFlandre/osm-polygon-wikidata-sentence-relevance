@@ -90,6 +90,13 @@ def test_llama_server_ready_requires_exact_yes_match(
     assert llama_server.llama_server_ready(ssh, layout) is expected  # type: ignore[arg-type]
 
 
+def test_llama_server_ready_requires_the_server_shared_library() -> None:
+    ssh = _FakeSsh(output="yes")
+    layout = RemoteLayout(PurePosixPath("/r"))
+    llama_server.llama_server_ready(ssh, layout)  # type: ignore[arg-type]
+    assert "libllama-server-impl.so" in ssh.commands[-1]
+
+
 def test_llama_server_ready_with_text_attribute() -> None:
     class ResultWithText:
         text = "yes"
