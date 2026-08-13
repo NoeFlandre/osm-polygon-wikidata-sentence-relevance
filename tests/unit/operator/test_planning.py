@@ -639,7 +639,7 @@ def test_workflow_layout_and_finalization_commands() -> None:
     assert "fetch --no-tags origin 555881e;" not in build.command[-1]
     assert 'job_log=/r/logs/"${OAR_JOB_ID:?}"' in build.command[-1]
     assert '"$job_log/build.stdout.log"' in build.command[-1]
-    assert "-name 'lib*.so*'" in build.command[-1]
+    assert "cp -a" in build.command[-1]
 
 
 def test_worldwide_finalization_receives_sampling_contract() -> None:

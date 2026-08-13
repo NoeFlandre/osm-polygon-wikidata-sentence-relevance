@@ -287,8 +287,11 @@ def llama_build_submission(layout: RemoteLayout) -> SubmissionRequest:
         f"cmake --build {source}/build --target llama-server -j 12; "
         f"mkdir -p -m 0700 {target}; "
         f"install -m 0700 {source}/build/bin/llama-server {target}/llama-server; "
-        f"find {source}/build/bin -maxdepth 1 -type f -name 'lib*.so*' "
-        f"-exec install -m 0700 {{}} {target}/ \\;"
+        # Preserve the SONAME symlinks (for example libllama-common.so.0)
+        # alongside their versioned targets.  ``install``/``find -type f``
+        # dereferences or skips those links, leaving the dynamic loader unable
+        # to start the staged server.
+        f"cp -a {source}/build/bin/lib*.so* {target}/"
     )
     return SubmissionRequest(
         (
