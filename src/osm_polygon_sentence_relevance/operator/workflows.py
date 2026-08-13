@@ -22,6 +22,7 @@ DEFAULT_LABEL_WALLTIME_SECONDS = 3_300
 MICRO_LABEL_WALLTIME_SECONDS = 1_200
 DEFAULT_SPLIT_WALLTIME_SECONDS = 1_800
 DEFAULT_FINALIZATION_WALLTIME_SECONDS = 3_600
+LLAMA_BUILD_WALLTIME_SECONDS = 1_800
 _LABEL_GRACE_SECONDS = 300
 _LABEL_SCHEDULER_MARGIN_SECONDS = 300
 
@@ -291,7 +292,7 @@ def llama_build_submission(layout: RemoteLayout) -> SubmissionRequest:
         (
             str(submit_helper),
             "40000",
-            "01:00:00",
+            format_walltime(LLAMA_BUILD_WALLTIME_SECONDS),
             "night",
             payload,
         )
@@ -303,6 +304,7 @@ __all__ = [
     "DEFAULT_LABEL_WALLTIME_SECONDS",
     "DEFAULT_SPLIT_WALLTIME_SECONDS",
     "DEFAULT_FINALIZATION_WALLTIME_SECONDS",
+    "LLAMA_BUILD_WALLTIME_SECONDS",
     "MICRO_LABEL_WALLTIME_SECONDS",
     "label_submission",
     "llama_build_submission",
