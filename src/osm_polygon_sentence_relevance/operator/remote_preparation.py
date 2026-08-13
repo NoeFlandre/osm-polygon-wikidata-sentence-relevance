@@ -63,10 +63,18 @@ def prepare_destination(
     home = services.remote_home(ssh)
     layout = RemoteLayout(home / "osm-polygon-operator" / config.run_id)
     services.usage_policy_preflight(ssh, site)
+    staged_label_assets = (
+        current.facts.get("label_assets_ready") is True
+        or type(current.facts.get("llama_build_job_id")) is int
+    )
     services.ensure_home_headroom(
         ssh,
         protected_root=layout.root,
-        minimum_headroom_bytes=services.label_staging_headroom_bytes,
+        minimum_headroom_bytes=(
+            services.submission_headroom_bytes
+            if staged_label_assets
+            else services.label_staging_headroom_bytes
+        ),
     )
 
     # Refresh the managed checkout even for same-site continuation. A resumed
@@ -76,6 +84,12 @@ def prepare_destination(
     services.stage_hf_token(stager, layout)
     if relay_root is not None and is_label:
         assets = stager.prepare_label_assets(config, layout, download_input=True)
+        current = store.load()
+        store.transition(
+            expected=current.phase,
+            target=current.phase,
+            facts={"label_assets_ready": True},
+        )
         if not assets.llama_server_ready:
 
             def submission_preflight() -> None:

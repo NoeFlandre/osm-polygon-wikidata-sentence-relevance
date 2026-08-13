@@ -70,6 +70,49 @@ def test_prepare_destination_same_site_refreshes_and_preserves_phase() -> None:
     assert transitions == []
 
 
+def test_prepare_destination_reuses_submission_headroom_after_asset_staging() -> None:
+    config = _config()
+    state = SimpleNamespace(
+        phase=RunPhase.REMOTE_PREPARED,
+        facts={"active_stage": "label", "llama_build_job_id": 42},
+    )
+    headroom: list[int] = []
+
+    class Stager:
+        def __init__(self, _ssh: object) -> None:
+            pass
+
+        def prepare(self, _config: object, _layout: object) -> None:
+            pass
+
+    services = remote_preparation.RemotePreparationServices(
+        ssh_factory=lambda **_kwargs: object(),
+        remote_home=lambda _ssh: PurePosixPath("/home/u"),
+        usage_policy_preflight=lambda *_args: None,
+        ensure_home_headroom=lambda *_args, **kwargs: headroom.append(
+            kwargs["minimum_headroom_bytes"]
+        ),
+        stager_type=Stager,
+        stage_hf_token=lambda *_args: None,
+        oar_type=object,
+        ensure_llama_server=lambda *_args: 0,
+        label_staging_headroom_bytes=100,
+        submission_headroom_bytes=200,
+    )
+    store = SimpleNamespace(load=lambda: state, transition=lambda **_kwargs: None)
+
+    remote_preparation.prepare_destination(
+        store=store,  # type: ignore[arg-type]
+        config=config,
+        site="grenoble",
+        relay_root=None,
+        poll_seconds=0,
+        services=services,
+    )
+
+    assert headroom == [200]
+
+
 def test_cli_adapter_delegates_to_remote_preparation(monkeypatch) -> None:
     sentinel_services = object()
     captured: dict[str, object] = {}

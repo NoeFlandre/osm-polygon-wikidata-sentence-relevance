@@ -260,10 +260,18 @@ def resume_run(run_id: str, args: SimpleNamespace, services: ResumeServices) -> 
             store, config, site_value, poll_seconds=args.poll_seconds
         )
         services.usage_policy_preflight(ssh, site_value)
+        staged_label_assets = (
+            durable.facts.get("label_assets_ready") is True
+            or type(durable.facts.get("llama_build_job_id")) is int
+        )
         services.ensure_home_headroom(
             ssh,
             protected_root=layout.root,
-            minimum_headroom_bytes=LABEL_STAGING_HEADROOM_BYTES,
+            minimum_headroom_bytes=(
+                services.submission_headroom_bytes
+                if staged_label_assets
+                else LABEL_STAGING_HEADROOM_BYTES
+            ),
         )
         stager = services.stager_type(ssh)
         stager.prepare(config, layout)
@@ -305,6 +313,12 @@ def resume_run(run_id: str, args: SimpleNamespace, services: ResumeServices) -> 
                     )
                     ssh.run(f"test -s {input_parquet}")
                     assets = replace(assets, input_parquet=input_parquet)
+            current = store.load()
+            store.transition(
+                expected=current.phase,
+                target=current.phase,
+                facts={"label_assets_ready": True},
+            )
             if not assets.llama_server_ready:
                 services.ensure_llama_server(ssh, oar, store, layout, args.poll_seconds)
             relay_root_value = durable.facts.get("resume_relay_root")

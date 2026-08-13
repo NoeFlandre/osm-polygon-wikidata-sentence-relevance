@@ -288,12 +288,17 @@ def test_resume_prepared_continuation_validates_assets_and_submits(
     config, store = _store_at(
         tmp_path,
         RunPhase.REMOTE_PREPARED,
-        facts={"site": "grenoble", "resume_relay_root": str(tmp_path / "relay")},
+        facts={
+            "site": "grenoble",
+            "resume_relay_root": str(tmp_path / "relay"),
+            "llama_build_job_id": 42,
+        },
     )
     relay_root = tmp_path / "relay"
     relay_root.mkdir()
     monkeypatch.setattr(cli, "DATA_ROOT", tmp_path)
     calls: list[str] = []
+    quota_headroom: list[int] = []
 
     class FakeStager:
         def prepare(self, _config: Any, _layout: Any) -> Any:
@@ -337,7 +342,12 @@ def test_resume_prepared_continuation_validates_assets_and_submits(
         cli, "_usage_policy_preflight", lambda *_a: calls.append("policy")
     )
     monkeypatch.setattr(
-        cli, "ensure_home_headroom", lambda *_a, **_kw: calls.append("quota")
+        cli,
+        "ensure_home_headroom",
+        lambda *_a, **kwargs: (
+            calls.append("quota"),
+            quota_headroom.append(kwargs["minimum_headroom_bytes"]),
+        ),
     )
     monkeypatch.setattr(cli, "Stager", lambda _ssh: FakeStager())
     monkeypatch.setattr(
@@ -359,6 +369,7 @@ def test_resume_prepared_continuation_validates_assets_and_submits(
     args = _resume_args(config.run_id)
     assert cli._resume_run(config.run_id, args) == 0
     assert calls == ["policy", "quota", "checkout", "assets", "relay", "submit"]
+    assert quota_headroom == [cli._SUBMISSION_HEADROOM_BYTES]
     assert seen == [456]
 
 
