@@ -668,6 +668,25 @@ def test_worldwide_finalization_receives_sampling_contract() -> None:
     )
 
 
+def test_finalization_uses_advanced_execution_checkout() -> None:
+    config = OperatorConfig.build(
+        scope="all",
+        region=None,
+        stage="all",
+        source_commit="a" * 40,
+        input_revision="b" * 40,
+        sampling_target=200_000,
+    )
+    object.__setattr__(config, "execution_commit", "c" * 40)
+
+    command = split_finalization_submission(
+        config, RemoteLayout(PurePosixPath("/r"))
+    ).command
+
+    assert command[6] == "c" * 40
+    assert command[7] == "b" * 40
+
+
 def test_workflows_require_immutable_revision() -> None:
     config = _config(stage="split")
     object.__setattr__(config, "input_dataset_revision", None)
