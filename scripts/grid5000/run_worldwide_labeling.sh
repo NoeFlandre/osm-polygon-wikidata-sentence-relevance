@@ -106,6 +106,7 @@ LLAMA_SERVER_DIR="${RUN_ROOT}/llama-server-bin"; readonly LLAMA_SERVER_DIR
     exit 1
 }
 export PATH="${LLAMA_SERVER_DIR}:${PATH}"
+export LD_LIBRARY_PATH="${LLAMA_SERVER_DIR}:${LD_LIBRARY_PATH:-}"
 command -v llama-server >/dev/null || { echo "run_worldwide_labeling: llama-server is unavailable" >&2; exit 1; }
 LLAMA_TOTAL_CONTEXT=$((LLAMA_PARALLEL * LLAMA_PER_SLOT_CONTEXT)); readonly LLAMA_TOTAL_CONTEXT
 llama-server --model "${MODEL_FILE}" --alias "ggml-org/Qwen3.6-27B-GGUF" \

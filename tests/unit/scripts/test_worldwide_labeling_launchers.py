@@ -53,6 +53,7 @@ def test_payload_discovers_the_staged_llama_server_on_compute_nodes() -> None:
     assert 'LLAMA_SERVER_DIR="${RUN_ROOT}/llama-server-bin"' in payload
     assert '[ -x "${LLAMA_SERVER_DIR}/llama-server" ]' in payload
     assert 'export PATH="${LLAMA_SERVER_DIR}:${PATH}"' in payload
+    assert 'export LD_LIBRARY_PATH="${LLAMA_SERVER_DIR}:${LD_LIBRARY_PATH:-}"' in payload
 
 
 def test_wrapper_keeps_lane_aware_front_contract_and_resumable_lock() -> None:
