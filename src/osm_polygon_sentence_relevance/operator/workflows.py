@@ -150,7 +150,7 @@ def split_finalization_submission(
         str(layout.logs),
         config.output_dataset_id,
         config.input_dataset_id,
-        config.source_commit,
+        config.execution_commit or config.source_commit,
         revision,
         config.run_id,
         f"checkpoints/{config.run_id}",
