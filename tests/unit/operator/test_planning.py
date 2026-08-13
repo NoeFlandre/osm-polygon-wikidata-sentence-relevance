@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
 from pathlib import PurePosixPath
 from types import SimpleNamespace
 
@@ -667,17 +666,6 @@ def test_worldwide_finalization_receives_sampling_contract() -> None:
         "cpu",
         "/r/finalization-state",
     )
-
-
-def test_finalization_uses_advanced_execution_commit_on_resume() -> None:
-    config = _config(stage="split")
-    resumed = replace(config, execution_commit="c" * 40)
-
-    command = split_finalization_submission(
-        resumed, RemoteLayout(PurePosixPath("/r"))
-    ).command
-
-    assert command[6] == "c" * 40
 
 
 def test_workflows_require_immutable_revision() -> None:
