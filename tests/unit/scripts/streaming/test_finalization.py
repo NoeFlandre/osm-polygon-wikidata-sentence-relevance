@@ -449,6 +449,67 @@ def test_v2_finalization_reuses_durable_finalized_artifact(
     ]
 
 
+def test_v2_finalization_rebuilds_reports_after_sampling_restart(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A resumed sampler must aggregate reports without a live callback."""
+
+    monkeypatch.setenv("OAR_JOB_ID", "123")
+    handle = _handle(tmp_path, "a-latest")
+    report = {
+        "input_sentence_occurrence_count": 3,
+        "output_sentence_count": 2,
+        "duplicate_occurrence_count_removed": 1,
+        "cross_source_duplicate_group_count": 0,
+    }
+
+    class _DurableOffloader:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        def inspect(self, shard_key: str, *, materialize: bool) -> object:
+            assert shard_key == "a-latest"
+            assert materialize is False
+            return mock.Mock(metadata={"finalization_report": report})
+
+    monkeypatch.setattr(
+        "scripts.streaming.v2_finalization.FinalizedArtifactOffloader",
+        _DurableOffloader,
+    )
+
+    def resumed_selection(_shards: object, output_path: Path, **_: object) -> Path:
+        pq.write_table(pa.table({"sentence_id": ["s1"]}), output_path)
+        return output_path
+
+    monkeypatch.setattr(
+        "scripts.streaming.v2_finalization.select_v2_shards_resumable",
+        resumed_selection,
+    )
+
+    output = finalize_v2_resumable(
+        hub_api=mock.Mock(),
+        ordered_handles=[handle],
+        repo_id="owner/output",
+        upstream_repo_id="owner/input",
+        run_id="run-1",
+        staging_revision="checkpoints/run-1",
+        source_commit=SOURCE_COMMIT,
+        input_dataset_revision=REVISION,
+        pipeline_version="0.1.0",
+        model_name="sat-3l-sm",
+        batch_size=128,
+        local_cache_dir=tmp_path / "cache",
+        scratch_dir=tmp_path / "scratch",
+        persistent_dir=tmp_path / "persistent",
+        output_dir=tmp_path / "output",
+        sampling_target=1,
+        sampling_seed="worldwide-v2",
+    )
+
+    manifest = json.loads((output / "manifest.json").read_text())
+    assert manifest["sampling"]["source_finalized_rows"] == 2
+
+
 def test_v2_finalization_rejects_unmaterialized_durable_handle(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

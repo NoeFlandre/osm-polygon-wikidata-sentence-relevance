@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import shutil
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -231,7 +231,27 @@ def finalize_v2_resumable(
             state_dir=persistent / "sampling",
             materialize_shard=materialize,
         )
-        report = _aggregate_reports([reports[shard.shard_key] for shard in descriptors])
+        for descriptor in descriptors:
+            if descriptor.shard_key in reports:
+                continue
+            existing = offloader.inspect(descriptor.shard_key, materialize=False)
+            metadata: Mapping[str, Any] | None = getattr(existing, "metadata", None)
+            if metadata is not None:
+                reports[descriptor.shard_key] = _report_from_metadata(
+                    {str(key): value for key, value in metadata.items()}
+                )
+        missing_reports = [
+            descriptor.shard_key
+            for descriptor in descriptors
+            if descriptor.shard_key not in reports
+        ]
+        if missing_reports:
+            raise ValueError(
+                f"finalization reports are missing for shards: {missing_reports!r}"
+            )
+        report = _aggregate_reports(
+            [reports[descriptor.shard_key] for descriptor in descriptors]
+        )
         digest = sha256_file(output_parquet)
         selected_rows = pq.ParquetFile(output_parquet).metadata.num_rows
         manifest = {
