@@ -12,6 +12,7 @@ import pytest
 import osm_polygon_sentence_relevance.labeling.v2_input as v2_input
 from osm_polygon_sentence_relevance.labeling.v2_input import (
     _write_table_atomically,
+    download_and_enrich_v2_input,
     download_v2_polygon_metadata,
     enrich_v2_input,
     enrich_v2_table,
@@ -247,6 +248,45 @@ def test_downloaded_metadata_uses_sorted_regions_and_pinned_revision(
     ]
     assert all(call[:3] == ("owner/input", "dataset", "a" * 40) for call in calls)
     assert hashlib.sha256(output.read_bytes()).hexdigest()
+
+
+def test_downloaded_metadata_adds_latest_suffix_to_raw_region_keys(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source_path = tmp_path / "source.parquet"
+    pq.write_table(
+        pa.table(
+            {
+                "sentence_id": ["s1"],
+                "polygon_id": ["p1"],
+                "region": ["afghanistan"],
+                "sentence_text_raw": ["A"],
+            }
+        ),
+        source_path,
+    )
+    metadata = _metadata(
+        tmp_path / "afghanistan.parquet",
+        [{"polygon_id": "p1", "area_km2": 0.5, "area_bucket": "small"}],
+    )
+    calls: list[str] = []
+
+    def fake_download(
+        *, repo_id: str, repo_type: str, revision: str, filename: str, cache_dir: Path
+    ) -> str:
+        calls.append(filename)
+        return str(metadata)
+
+    monkeypatch.setattr(v2_input, "hf_hub_download", fake_download)
+    download_and_enrich_v2_input(
+        source_path,
+        tmp_path / "output.parquet",
+        dataset_id="owner/input",
+        revision="a" * 40,
+        cache_dir=tmp_path / "cache",
+    )
+
+    assert calls == ["polygons/afghanistan-latest.parquet"]
 
 
 def test_download_one_shard_metadata_uses_pinned_upstream_file(

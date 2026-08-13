@@ -26,6 +26,12 @@ _SOURCE_REQUIRED = frozenset({"sentence_id", "polygon_id", "region"})
 _METADATA_REQUIRED = frozenset({"polygon_id", "area_km2", "area_bucket"})
 
 
+def _polygon_shard_key(region: str) -> str:
+    """Map a source region key to the upstream ``-latest`` shard key."""
+
+    return region if region.endswith("-latest") else f"{region}-latest"
+
+
 def hf_hub_download(**kwargs: Any) -> str:
     """Lazy wrapper kept injectable for deterministic tests and dry runs."""
 
@@ -138,7 +144,9 @@ def _download_polygon_metadata(
 ) -> dict[str, pa.Table]:
     """Download one pinned polygon file per source region in sorted order."""
 
-    regions = sorted({str(value) for value in source["region"].to_pylist()})
+    regions = sorted(
+        {_polygon_shard_key(str(value)) for value in source["region"].to_pylist()}
+    )
     return {
         region: download_v2_polygon_metadata(
             dataset_id=dataset_id,
