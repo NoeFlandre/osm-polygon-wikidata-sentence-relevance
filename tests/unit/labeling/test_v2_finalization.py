@@ -19,9 +19,10 @@ from osm_polygon_sentence_relevance.labeling.v2_finalization import (
     finalize_v2_dataset,
     validate_v2_publication,
 )
+from osm_polygon_sentence_relevance.labeling.v2_sampling import select_v2_rows
 
 
-def _identity(input_sha256: str) -> RunIdentity:
+def _identity(input_sha256: str, *, row_limit: int = 0) -> RunIdentity:
     return RunIdentity(
         input_sha256=input_sha256,
         input_dataset_revision="b" * 40,
@@ -34,6 +35,7 @@ def _identity(input_sha256: str) -> RunIdentity:
         engine="llama.cpp",
         engine_version="1",
         batch_size=2,
+        row_limit=row_limit,
         sampling_target=2,
         sampling_seed="seed",
         h3_resolution=3,
@@ -166,6 +168,48 @@ def test_v2_finalization_writes_only_binary_score_release(tmp_path: Path) -> Non
     manifest = json.loads((output / "manifest.json").read_text())
     assert manifest["statistics"]["place_counts"] == {"no": 1, "yes": 1}
     validate_v2_publication(output)
+
+
+def test_v2_finalization_uses_smoke_row_limit_before_sampling_target(
+    tmp_path: Path,
+) -> None:
+    input_path = tmp_path / "input.parquet"
+    rows = [
+        {
+            "sentence_id": f"s{index}",
+            "sentence_text_raw": f"Sentence {index}.",
+            "previous_sentence": None,
+            "next_sentence": None,
+            "page_title": "Valley",
+            "section_path": ["Geography"],
+            "polygon_id": f"p{index}",
+            "osm_primary_tag": "natural=valley",
+            "language": "en",
+            "lat": 45.0 + index,
+            "lon": 2.0,
+            "area_km2": 20.0,
+            "area_bucket": "large",
+        }
+        for index in range(2)
+    ]
+    pq.write_table(pa.Table.from_pylist(rows), input_path)
+    identity = _identity(
+        hashlib.sha256(input_path.read_bytes()).hexdigest(), row_limit=1
+    )
+    store = V2CheckpointStore(tmp_path / "work", identity)
+    selected_id = select_v2_rows(
+        pq.read_table(input_path), target=1, seed="seed"
+    )["sentence_id"][0].as_py()
+    store.write_batch(0, [V2LogitRecord(selected_id, "yes", -0.1, -1.1)])
+
+    result = finalize_v2_dataset(
+        input_path=input_path,
+        store=store,
+        output_dir=tmp_path / "output",
+        dataset_repo_id="owner/dataset",
+    )
+
+    assert result.row_count == 1
 
 
 def test_v2_finalization_replaces_existing_output_atomically(tmp_path: Path) -> None:

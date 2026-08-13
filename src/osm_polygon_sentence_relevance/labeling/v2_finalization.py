@@ -188,9 +188,18 @@ def finalize_v2_dataset(
     if _sha256(input_path) != store.identity.input_sha256:
         raise ValueError("V2 input SHA-256 does not match run identity")
     source = pq.read_table(input_path)
+    # A smoke lane deliberately labels ``row_limit`` rows while retaining the
+    # full production sampling target in the shared run identity.  Finalize
+    # the lane's actual prefix first; production has row_limit=0 and therefore
+    # keeps the full target unchanged.
+    target = int(
+        store.identity.row_limit
+        or store.identity.sampling_target
+        or source.num_rows
+    )
     selected = select_v2_rows(
         source,
-        target=int(store.identity.sampling_target or source.num_rows),
+        target=target,
         seed=str(store.identity.sampling_seed or "v2"),
     )
     records = store.load_all()
