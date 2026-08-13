@@ -269,6 +269,10 @@ printf 'LABEL_ASSETS_OK llama_ready=%s\\n' "$llama_ready"
         script = f"""
 set -euo pipefail
 umask 077
+if test -s {_q(output)} && test ! -L {_q(output)}; then
+  printf 'V2_INPUT_OK reused=true\\n'
+  exit 0
+fi
 python={_q(layout.repo / ".venv/bin/python")}
 token_file={_q(layout.hf_token)}
 [ -f "$token_file" ] && [ ! -L "$token_file" ] && [ "$(stat -c %a -- "$token_file")" = 600 ]

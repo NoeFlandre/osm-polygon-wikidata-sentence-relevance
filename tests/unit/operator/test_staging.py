@@ -277,6 +277,7 @@ def test_prepare_v2_input_enriches_split_output_from_pinned_polygon_files() -> N
     assert "--revision" in command
     assert "--cache-dir" in command
     assert "cache=/home/user/operator/run/hf_home" in command
+    assert "if test -s /home/user/operator/run/input/v2-sentences.parquet" in command
     assert "rm -rf -- {}" in command
     assert "V2_INPUT_OK" in command
 
