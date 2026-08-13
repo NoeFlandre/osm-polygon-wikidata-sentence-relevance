@@ -10,7 +10,11 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
-from osm_polygon_sentence_relevance.operator.config import OperatorConfig, Stage
+from osm_polygon_sentence_relevance.operator.config import (
+    V2_LOGIT_PROMPT_VERSION,
+    OperatorConfig,
+    Stage,
+)
 from osm_polygon_sentence_relevance.operator.relay_transport import RemoteTransfer
 from osm_polygon_sentence_relevance.operator.ssh import SshClient
 from osm_polygon_sentence_relevance.operator.workflows import RemoteLayout
@@ -48,7 +52,10 @@ class Stager:
         """Create/reuse a locked checkout without executing model inference."""
 
         extras = "--extra hub"
-        if config.stage in {Stage.SPLIT, Stage.ALL}:
+        if config.stage in {Stage.SPLIT, Stage.ALL} and not (
+            config.prompt_version == V2_LOGIT_PROMPT_VERSION
+            and config.stage is Stage.ALL
+        ):
             extras += " --extra segmentation"
         if config.stage in {Stage.LABEL, Stage.ALL}:
             # Label selection uses H3 and the operator's runtime support.

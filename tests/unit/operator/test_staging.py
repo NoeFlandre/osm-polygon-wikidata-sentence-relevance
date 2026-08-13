@@ -8,7 +8,10 @@ from types import SimpleNamespace
 import pytest
 
 from osm_polygon_sentence_relevance.operator import staging
-from osm_polygon_sentence_relevance.operator.config import OperatorConfig
+from osm_polygon_sentence_relevance.operator.config import (
+    V2_LOGIT_PROMPT_VERSION,
+    OperatorConfig,
+)
 from osm_polygon_sentence_relevance.operator.staging import Stager
 from osm_polygon_sentence_relevance.operator.workflows import RemoteLayout
 
@@ -208,6 +211,22 @@ def test_prepare_includes_segmentation_dependencies_only_when_needed() -> None:
     assert (
         '"$UV_BIN" sync --locked --no-dev --extra hub --extra segmentation' in command
     )
+
+
+def test_prepare_v2_all_skips_segmentation_dependencies() -> None:
+    config = OperatorConfig.build(
+        scope="all",
+        region=None,
+        stage="all",
+        source_commit="a" * 40,
+        input_revision="b" * 40,
+        prompt_version=V2_LOGIT_PROMPT_VERSION,
+    )
+    ssh = RecordingSsh(["STAGING_OK reused=false\n"])
+    Stager(ssh).prepare(config, RemoteLayout(PurePosixPath("/run")))  # type: ignore[arg-type]
+    command = ssh.commands[0]
+    assert '"$UV_BIN" sync --locked --no-dev --extra hub --extra operator' in command
+    assert "--extra segmentation" not in command
 
 
 def test_prepare_reports_reuse_and_rejects_missing_marker() -> None:
