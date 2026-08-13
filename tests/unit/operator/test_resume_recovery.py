@@ -162,7 +162,10 @@ def test_resume_failed_finalization_requeues_from_complete_split_checkpoints(
         def prepare(self, _config: object, _layout: object) -> object:
             return SimpleNamespace(reused=True)
 
-    layout = SimpleNamespace(root=Path("/home/u/osm-polygon-operator/run"))
+    layout = SimpleNamespace(
+        root=Path("/home/u/osm-polygon-operator/run"),
+        logs=Path("/home/u/osm-polygon-operator/run/logs"),
+    )
     monkeypatch.setattr(
         cli,
         "_attach_to_site",
@@ -203,6 +206,80 @@ def test_resume_failed_finalization_requeues_from_complete_split_checkpoints(
     assert cli._resume_run(config.run_id, _resume_args(config.run_id)) == 0
     assert finalized == [1]
     assert store.load().phase is RunPhase.COMPLETE
+
+
+def test_resume_live_finalization_reattaches_before_preflight(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Reattaching to an existing finalizer must not wait on submission checks."""
+
+    config, store = _store_at(
+        tmp_path,
+        RunPhase.RUNNING,
+        facts={"site": "grenoble", "active_stage": "split", "job_id": 2999521},
+        stage="split",
+    )
+    store.transition(
+        expected=RunPhase.RUNNING,
+        target=RunPhase.CHECKPOINTED,
+        facts={"split_job_id": 2999521},
+    )
+    store.transition(
+        expected=RunPhase.CHECKPOINTED,
+        target=RunPhase.FINALIZING,
+        facts={"finalization_job_id": 2999522},
+    )
+    monkeypatch.setattr(cli, "DATA_ROOT", tmp_path)
+    monkeypatch.setattr(cli, "_git_head", lambda: config.source_commit)
+    events: list[str] = []
+    monkeypatch.setattr(
+        cli,
+        "_usage_policy_preflight",
+        lambda *_args: events.append("policy"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "ensure_home_headroom",
+        lambda *_args, **_kwargs: events.append("quota"),
+    )
+    monkeypatch.setattr(cli, "_stage_hf_token", lambda *_args: events.append("token"))
+
+    class FakeSsh:
+        pass
+
+    class FakeOar:
+        def __init__(self) -> None:
+            self.states = iter((JobState.RUNNING, JobState.TERMINATED))
+
+        def status(self, job_id: int) -> JobStatus:
+            assert job_id == 2999522
+            events.append("status")
+            return JobStatus(job_id, next(self.states), exit_code=0)
+
+    layout = SimpleNamespace(
+        root=Path("/home/u/osm-polygon-operator/run"),
+        logs=Path("/home/u/osm-polygon-operator/run/logs"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_attach_to_site",
+        lambda *_args, **_kwargs: (FakeSsh(), layout, FakeOar(), object()),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_monitor_until_terminal",
+        lambda *_args, **_kwargs: events.append("monitor") or JobState.TERMINATED,
+    )
+    monkeypatch.setattr(
+        cli, "assert_remote_exit_zero", lambda *_args: events.append("assert")
+    )
+    monkeypatch.setattr(cli, "publish_split", lambda *_args: "c" * 40)
+    monkeypatch.setattr(cli, "mark_remote_status", lambda *_args: events.append("mark"))
+
+    assert cli._resume_run(config.run_id, _resume_args(config.run_id)) == 0
+    assert events[:3] == ["status", "monitor", "status"]
+    assert "policy" not in events
+    assert "quota" not in events
 
 
 def test_resume_prepared_continuation_validates_assets_and_submits(

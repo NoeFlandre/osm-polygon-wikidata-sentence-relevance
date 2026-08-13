@@ -95,15 +95,6 @@ def resume_split_finalization(
         site,
         poll_seconds=args.poll_seconds,
     )
-    services.usage_policy_preflight(ssh, site)
-    services.ensure_home_headroom(
-        ssh,
-        protected_root=layout.root,
-        minimum_headroom_bytes=services.submission_headroom_bytes,
-    )
-    stager = services.stager_type(ssh)
-    stager.prepare(config, layout)
-    services.stage_hf_token(stager, layout)
 
     if durable.phase is RunPhase.FINALIZING:
         final_job = durable.facts.get("finalization_job_id")
@@ -171,6 +162,19 @@ def resume_split_finalization(
 
     if store.load().phase is not RunPhase.CHECKPOINTED:
         raise RuntimeError("split finalization recovery reached an invalid phase")
+    # A new finalization submission is the first point at which policy,
+    # quota, checkout, and token staging are required.  Keeping these checks
+    # out of the reattach path means a live finalizer is never blocked by a
+    # slow quota service or an unrelated preflight failure.
+    services.usage_policy_preflight(ssh, site)
+    services.ensure_home_headroom(
+        ssh,
+        protected_root=layout.root,
+        minimum_headroom_bytes=services.submission_headroom_bytes,
+    )
+    stager = services.stager_type(ssh)
+    stager.prepare(config, layout)
+    services.stage_hf_token(stager, layout)
     services.milestone(
         "Re-submitting failed split finalization from complete checkpoints"
     )

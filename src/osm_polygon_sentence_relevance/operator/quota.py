@@ -9,10 +9,12 @@ from typing import TYPE_CHECKING, Final
 if TYPE_CHECKING:
     from osm_polygon_sentence_relevance.operator.ssh import SshClient
 
-#: Read-only home-quota acquisition. ``set +e`` keeps rc=1 (over quota) from
-#: aborting the command; rc>1 still surfaces as a transport failure.
+#: Read-only home-quota acquisition. The nested timeout keeps a broken or
+#: unavailable quota service from blocking a resume controller indefinitely.
+#: ``set +e`` keeps rc=1 (over quota) from aborting the command; rc>1 still
+#: surfaces as a transport failure.
 _HOME_QUOTA_COMMAND: Final[str] = (
-    "set +e; quota_output=$(quota 2>&1); quota_rc=$?; set -e; "
+    "set +e; quota_output=$(timeout 15s quota 2>&1); quota_rc=$?; set -e; "
     'if [ "$quota_rc" -gt 1 ]; then exit "$quota_rc"; fi; '
     "printf '%s\\n' \"$quota_output\""
 )

@@ -5,9 +5,17 @@ from __future__ import annotations
 import pytest
 
 from osm_polygon_sentence_relevance.operator.quota import (
+    _HOME_QUOTA_COMMAND,
     QuotaError,
     parse_quota_output,
 )
+
+
+def test_home_quota_command_has_a_bounded_remote_timeout() -> None:
+    assert "quota_output=$(timeout 15s quota 2>&1)" in _HOME_QUOTA_COMMAND
+    assert 'if [ "$quota_rc" -gt 1 ]; then exit "$quota_rc"; fi;' in (
+        _HOME_QUOTA_COMMAND
+    )
 
 
 def test_parse_quota_output_uses_soft_limit_headroom() -> None:

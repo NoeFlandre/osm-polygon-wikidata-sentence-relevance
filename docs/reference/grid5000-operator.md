@@ -32,7 +32,9 @@ and installed before one new bounded allocation is submitted. Sentence
 splitting relays only its verified completed-shard ledger and, when present,
 the single active partial shard; immutable input Parquet files are downloaded
 again on the destination site. Labeling continues to relay its validated batch
-checkpoint pairs.
+checkpoint pairs. A live finalization job is reattached and monitored before
+any new-submission policy, quota, checkout, or token preflight is attempted;
+those checks run only when a replacement allocation is actually needed.
 
 `cleanup` previews pipeline-owned completed or failed remote runs unless
 `--execute` is supplied. Ctrl-C during `run` or `resume` stops local monitoring
