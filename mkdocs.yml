@@ -62,7 +62,7 @@ nav:
           - Worldwide binary place relevance: architecture/decisions/0003-v2-binary-place-description.md
   - Reference:
       - CLI reference: reference/cli.md
-      - Afghanistan labeling: reference/labeling.md
+      - Labeling and V2: reference/labeling.md
       - API: reference/api.md
       - Data contract: reference/data-contract.md
       - Grid'5000 operator: reference/grid5000-operator.md

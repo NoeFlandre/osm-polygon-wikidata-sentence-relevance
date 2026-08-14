@@ -94,10 +94,19 @@ For a successful run, `output-dir/` contains:
 No token flags exist. The CLI never accepts, prints, or persists a
 Hugging Face token.
 
-## Scope note
+## Pipeline boundaries
 
-Classification, labelling, concurrency, resumable, and incremental builds
-are not implemented.
+This command builds and exports the sentence table. It does not run the
+separate LLM labeling stage; use the
+[labeling CLI](../reference/labeling.md) for V1 or V2 labels, finalization,
+publication, and Trackio reporting. The Grid'5000 operator provides the
+credential-free remote GPU workflow for that stage.
+
+Sentence builds support restartable shard checkpoints through `--work-dir`.
+The current boundaries are deliberate: repository creation, parallel shard
+processing, and multi-GPU inference are not implemented. See the
+[architecture overview](../architecture/overview.md) for the ownership and
+invariants behind these boundaries.
 
 ## Programmatic publishing
 

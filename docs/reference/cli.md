@@ -9,8 +9,8 @@ osm-polygon-sentence-relevance
 The separate public Mac-side Grid'5000 operator is documented in the
 [Grid'5000 operator reference](grid5000-operator.md).
 
-The separate Afghanistan labeling CLI, including finalization, publication,
-and Trackio export, is documented in the
+The separate labeling CLI (V1 Afghanistan and V2 worldwide), including
+finalization, publication, and Trackio export, is documented in the
 [labeling CLI reference](labeling.md).
 
 ## Usage

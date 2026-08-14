@@ -1,10 +1,15 @@
 # OSM Polygon Sentence Relevance — Documentation
 
 This project builds a deterministic, sentence-level relevance dataset from
-OSM polygons joined to Wikipedia and Wikivoyage sections. Its first public
-dataset release is `v1.0.0`, an Afghanistan-only artifact; broader regional
-processing is planned for later releases. The Python package remains version
-`0.1.0`.
+OSM polygons joined to Wikipedia and Wikivoyage sections. The public release
+history has two deliberately separate lanes:
+
+- **V1 Afghanistan** is the published `v1.0.0` reference artifact.
+- **V2 worldwide** is the reproducible H3-stratified labeling workflow. Its
+  output is namespaced below `v2-worldwide/` when a complete run is
+  finalized and published.
+
+The Python package remains version `0.1.0` (alpha).
 
 The rendered documentation is published at
 <https://noeflandre.github.io/osm-polygon-wikidata-sentence-relevance/>.
@@ -28,6 +33,8 @@ The rendered documentation is published at
   [streaming operations](architecture/packages/streaming-operations.md)
 - **I want the public API reference** → [API](reference/api.md)
 - **I want the CLI reference** → [CLI](reference/cli.md)
+- **I want to run or resume labeling** →
+  [Labeling and V2 reference](reference/labeling.md)
 - **I want the data contract (schemas, IDs, normalization)** →
   [Data contract](reference/data-contract.md)
 - **I want the why behind the package layout** →

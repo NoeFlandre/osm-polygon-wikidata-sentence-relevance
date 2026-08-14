@@ -83,13 +83,24 @@ Install the optional dependency:
 uv sync --locked --extra tracking
 ```
 
-Then log exactly one static final run from a validated publication:
+Then log exactly one static final run from a validated publication. Choose the
+project and output directory that match the release lane:
 
 ```bash
 osm-polygon-label-sentences track \
   --output-dir /path/to/label-publication \
   --project afghanistan-labeling \
   --run-name final-afghanistan
+```
+
+For the worldwide V2 lane, use the same command with the V2 publication
+directory and project name:
+
+```bash
+osm-polygon-label-sentences track \
+  --output-dir /path/to/v2-worldwide \
+  --project worldwide-stratified-labeling \
+  --run-name final-worldwide
 ```
 
 The default Space follows the release lane in the manifest: V1 uses the public
@@ -99,20 +110,17 @@ while V2 uses the separate
 Use `--space-id OWNER/SPACE` to override it, or call the Python API with
 `space_id=None` for local-only storage. The command validates the manifest
 analytics against a fresh computation from `sentences.parquet` before
-initializing Trackio. It records one `step=0` containing:
+initializing Trackio. It records one immutable `step=0` with lane-specific
+metrics:
 
-For V2, that static run contains the one-label KPI cards, area-bucket table,
-binary label distribution, and H3 coverage image. It does not emit the V1
-joint-label, polygon-coverage, or reason-code metrics.
-
-- KPI cards for total labeled sentences, unique polygons, unique languages,
-  and strong-positive yield.
-- An immutable joint-label table plus heatmap.
-- The polygon coverage funnel table and plot.
-- Normalized land-use and polygon reason-code tables and plot.
-- A selector-based HTML table for language, source, and `osm_primary_tag`.
-  Groups below 100 sentences are omitted; each shown group has both-yes rate,
-uncertain rate, and sample size.
+- **V1 Afghanistan:** KPI cards for total labeled sentences, unique polygons,
+  unique languages, and strong-positive yield; a joint-label table and
+  heatmap; a polygon-coverage funnel; normalized reason-code tables and
+  plots; and a selector-based slice table for language, source, and
+  `osm_primary_tag`. Groups below 100 sentences are omitted.
+- **V2 worldwide:** one-label KPI cards, the area-bucket table, binary label
+  distribution, and the deterministic H3 sentence-distribution image. V2
+  does not emit V1 joint-label, polygon-coverage, or reason-code metrics.
 
 The [Afghanistan dataset presentation](https://noeflandre.github.io/osm-polygon-wikidata-sentence-relevance/presentations/afghanistan-dataset-overview/index.html)
 provides a visual overview of the published table and labeling method.

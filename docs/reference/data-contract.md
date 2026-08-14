@@ -181,11 +181,15 @@ Owner discipline:
 
 ## Out-of-scope behaviors (current)
 
-The following are **not** part of the data contract today:
+The following are **not** part of this sentence-table data contract today:
 
-- Hugging Face dataset repository creation (the CLI and programmatic publisher publish only to an existing repository).
-- Sentence classification or labeling.
-- Concurrency, resumability, or incremental builds.
+- Hugging Face dataset repository creation (the CLI and programmatic publisher
+  publish only to an existing repository).
+- LLM label fields. V1 and V2 labeling use separate, versioned contracts;
+  see the [labeling reference](labeling.md).
+- Parallel shard processing and multi-GPU inference. Restartable shard
+  checkpoints are supported by the `--work-dir` build workflow, but they do
+  not change the exported sentence schema.
 
 Programmatic publishing of a validated local export to an existing
 Hugging Face dataset repository is implemented in
