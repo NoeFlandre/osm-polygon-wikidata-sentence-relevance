@@ -112,8 +112,17 @@ export PATH="${LLAMA_SERVER_DIR}:${PATH}"
 export LD_LIBRARY_PATH="${LLAMA_SERVER_DIR}:${LD_LIBRARY_PATH:-}"
 command -v llama-server >/dev/null || { echo "run_worldwide_labeling: llama-server is unavailable" >&2; exit 1; }
 LLAMA_TOTAL_CONTEXT=$((LLAMA_PARALLEL * LLAMA_PER_SLOT_CONTEXT)); readonly LLAMA_TOTAL_CONTEXT
+# The persisted label identity describes the logical request contract.  Keep
+# it unchanged while giving llama.cpp enough per-slot admission capacity for
+# unusually long, otherwise-valid prompts observed in the worldwide input.
+SERVER_PER_SLOT_CONTEXT="${LLAMA_PER_SLOT_CONTEXT}"
+if [ "${SERVER_PER_SLOT_CONTEXT}" -lt 12288 ]; then
+    SERVER_PER_SLOT_CONTEXT=12288
+fi
+readonly SERVER_PER_SLOT_CONTEXT
+SERVER_TOTAL_CONTEXT=$((LLAMA_PARALLEL * SERVER_PER_SLOT_CONTEXT)); readonly SERVER_TOTAL_CONTEXT
 llama-server --model "${MODEL_FILE}" --alias "ggml-org/Qwen3.6-27B-GGUF" \
-    --host 127.0.0.1 --port "${PORT}" --ctx-size "${LLAMA_TOTAL_CONTEXT}" \
+    --host 127.0.0.1 --port "${PORT}" --ctx-size "${SERVER_TOTAL_CONTEXT}" \
     --parallel "${LLAMA_PARALLEL}" --n-gpu-layers 999 \
     >"${WORK_DIR}.llama.stdout.log" 2>"${WORK_DIR}.llama.stderr.log" &
 SERVER_PID=$!

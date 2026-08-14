@@ -56,6 +56,20 @@ def test_payload_discovers_the_staged_llama_server_on_compute_nodes() -> None:
     assert 'export LD_LIBRARY_PATH="${LLAMA_SERVER_DIR}:${LD_LIBRARY_PATH:-}"' in payload
 
 
+def test_payload_gives_server_slots_headroom_without_changing_label_identity() -> None:
+    """Long prompts must fit the server while checkpoints keep their identity."""
+
+    payload = _text("run_worldwide_labeling.sh")
+
+    assert 'SERVER_PER_SLOT_CONTEXT="${LLAMA_PER_SLOT_CONTEXT}"' in payload
+    assert 'SERVER_PER_SLOT_CONTEXT=12288' in payload
+    assert 'SERVER_TOTAL_CONTEXT=$((LLAMA_PARALLEL * SERVER_PER_SLOT_CONTEXT))' in payload
+    assert '--ctx-size "${SERVER_TOTAL_CONTEXT}"' in payload
+    # The logical runtime passed to probe/label/finalize remains the persisted
+    # identity; only the llama.cpp server gets extra admission capacity.
+    assert '--llama-per-slot-context "${LLAMA_PER_SLOT_CONTEXT}"' in payload
+
+
 def test_wrapper_keeps_lane_aware_front_contract_and_resumable_lock() -> None:
     wrapper = _text("run_worldwide_labeling_job.sh")
     assert "exactly twenty-two arguments are required" in wrapper
