@@ -137,7 +137,7 @@ from osm_polygon_sentence_relevance.operator.supervisor import (
     start_detached_supervisor,
 )
 from osm_polygon_sentence_relevance.operator.workflows import (
-    MICRO_LABEL_WALLTIME_SECONDS,
+    PREFERRED_LABEL_WALLTIME_SECONDS,
     RemoteLayout,
     label_submission,
     split_submission,
@@ -1339,10 +1339,10 @@ def _run(args: SimpleNamespace) -> int:
                     input_parquet=assets.input_parquet,
                     model_file=assets.model_file,
                     tokenizer_dir=assets.tokenizer_dir,
-                    walltime_seconds=MICRO_LABEL_WALLTIME_SECONDS,
+                    walltime_seconds=PREFERRED_LABEL_WALLTIME_SECONDS,
                     policy_type=policy_type_for(
                         datetime.now(tz=GRID5000_TZ),
-                        walltime_seconds=MICRO_LABEL_WALLTIME_SECONDS,
+                        walltime_seconds=PREFERRED_LABEL_WALLTIME_SECONDS,
                     ),
                     gpu_memory_mb=getattr(args, "gpu_memory_mb", 40_000),
                     label_plan=label_plan,

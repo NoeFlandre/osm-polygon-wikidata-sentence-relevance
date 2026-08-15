@@ -35,6 +35,9 @@ from osm_polygon_sentence_relevance.operator.token_budget import (
     plan_runtime,
 )
 from osm_polygon_sentence_relevance.operator.workflows import (
+    DEFAULT_LABEL_WALLTIME_SECONDS,
+    FALLBACK_LABEL_WALLTIME_SECONDS,
+    PREFERRED_LABEL_WALLTIME_SECONDS,
     RemoteLayout,
     label_submission,
     llama_build_submission,
@@ -281,6 +284,12 @@ def test_label_serializes_context_and_concurrency() -> None:
         "3",
         "a" * 40,
     )
+
+
+def test_label_walltime_policy_prefers_long_allocation_with_short_fallback() -> None:
+    assert PREFERRED_LABEL_WALLTIME_SECONDS == DEFAULT_LABEL_WALLTIME_SECONDS
+    assert FALLBACK_LABEL_WALLTIME_SECONDS == 1_200
+    assert PREFERRED_LABEL_WALLTIME_SECONDS > FALLBACK_LABEL_WALLTIME_SECONDS
 
 
 def test_label_micro_allocation_uses_existing_helper_and_wrapper_contract() -> None:

@@ -20,6 +20,11 @@ from osm_polygon_sentence_relevance.operator.oar import (
 
 DEFAULT_LABEL_WALLTIME_SECONDS = 3_300
 MICRO_LABEL_WALLTIME_SECONDS = 1_200
+# Normal label allocations should request the longest safe scheduler window.
+# The queue optimizer may replace a distant preferred allocation with its
+# shorter immediate trial, so keep both values explicit at the policy boundary.
+PREFERRED_LABEL_WALLTIME_SECONDS = DEFAULT_LABEL_WALLTIME_SECONDS
+FALLBACK_LABEL_WALLTIME_SECONDS = MICRO_LABEL_WALLTIME_SECONDS
 DEFAULT_SPLIT_WALLTIME_SECONDS = 1_800
 DEFAULT_FINALIZATION_WALLTIME_SECONDS = 3_600
 LLAMA_BUILD_WALLTIME_SECONDS = 1_800
@@ -307,6 +312,8 @@ def llama_build_submission(layout: RemoteLayout) -> SubmissionRequest:
 __all__ = [
     "RemoteLayout",
     "DEFAULT_LABEL_WALLTIME_SECONDS",
+    "PREFERRED_LABEL_WALLTIME_SECONDS",
+    "FALLBACK_LABEL_WALLTIME_SECONDS",
     "DEFAULT_SPLIT_WALLTIME_SECONDS",
     "DEFAULT_FINALIZATION_WALLTIME_SECONDS",
     "LLAMA_BUILD_WALLTIME_SECONDS",

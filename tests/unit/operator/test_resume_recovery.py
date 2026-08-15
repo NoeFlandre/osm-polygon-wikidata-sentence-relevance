@@ -14,6 +14,9 @@ from osm_polygon_sentence_relevance.operator.config import OperatorConfig
 from osm_polygon_sentence_relevance.operator.oar import ExitClass, JobState, JobStatus
 from osm_polygon_sentence_relevance.operator.staging import LabelAssets
 from osm_polygon_sentence_relevance.operator.state import RunPhase, StateStore
+from osm_polygon_sentence_relevance.operator.workflows import (
+    PREFERRED_LABEL_WALLTIME_SECONDS,
+)
 
 
 def _resume_args(run_id: str) -> SimpleNamespace:
@@ -538,6 +541,7 @@ def test_resume_prepared_v2_production_submits_full_lane_without_resplitting(
     assert cli._resume_run(config.run_id, _resume_args(config.run_id)) == 0
 
     assert len(submitted) == 1
+    assert submitted[0]["walltime_seconds"] == PREFERRED_LABEL_WALLTIME_SECONDS
     plan = submitted[0]["label_plan"]
     assert plan.lane.value == "production"  # type: ignore[union-attr]
     assert plan.config.requirements.row_limit == 0  # type: ignore[union-attr]

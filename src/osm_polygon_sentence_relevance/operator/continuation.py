@@ -26,7 +26,7 @@ from osm_polygon_sentence_relevance.operator.recorded_job import ResumeInspectio
 from osm_polygon_sentence_relevance.operator.result_text import result_text
 from osm_polygon_sentence_relevance.operator.state import RunPhase, StateStore
 from osm_polygon_sentence_relevance.operator.workflows import (
-    MICRO_LABEL_WALLTIME_SECONDS,
+    PREFERRED_LABEL_WALLTIME_SECONDS,
     RemoteLayout,
 )
 
@@ -298,10 +298,10 @@ def classify_or_continue(
                 input_parquet=layout_d.root / "input/sentences.parquet",
                 model_file=layout_d.root / "model" / config.label_model_file,
                 tokenizer_dir=layout_d.root / "tokenizer",
-                walltime_seconds=MICRO_LABEL_WALLTIME_SECONDS,
+                walltime_seconds=PREFERRED_LABEL_WALLTIME_SECONDS,
                 policy_type=policy_type_for(
                     datetime.now(tz=GRID5000_TZ),
-                    walltime_seconds=MICRO_LABEL_WALLTIME_SECONDS,
+                    walltime_seconds=PREFERRED_LABEL_WALLTIME_SECONDS,
                 ),
                 gpu_memory_mb=getattr(args, "gpu_memory_mb", 40_000),
                 **(
