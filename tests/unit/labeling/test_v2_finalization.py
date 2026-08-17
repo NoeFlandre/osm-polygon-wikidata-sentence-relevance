@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from pathlib import Path
 
 import pyarrow as pa
@@ -170,6 +171,56 @@ def test_v2_finalization_writes_only_binary_score_release(tmp_path: Path) -> Non
     validate_v2_publication(output)
 
 
+def test_v2_validation_accepts_float_round_trip_difference(tmp_path: Path) -> None:
+    """Parquet float serialization may change a derived score by one ULP."""
+
+    _input_path, output, _store = _make_release(tmp_path)
+    table = pq.read_table(output / "sentences.parquet")
+    original_size = (output / "sentences.parquet").stat().st_size
+    original_manifest = json.loads((output / "manifest.json").read_text())
+    original_digest = original_manifest["parquet_sha256"]
+    probabilities = table["two_class_probability"].to_pylist()
+    probabilities[0] = math.nextafter(probabilities[0], math.inf)
+    table = table.set_column(
+        table.schema.get_field_index("two_class_probability"),
+        pa.field("two_class_probability", pa.float64(), nullable=False),
+        pa.array(probabilities),
+    )
+    pq.write_table(table, output / "sentences.parquet", compression="zstd")
+    updated_size = (output / "sentences.parquet").stat().st_size
+    digest = hashlib.sha256((output / "sentences.parquet").read_bytes()).hexdigest()
+    readme = (output / "README.md").read_text()
+    (output / "README.md").write_text(
+        readme.replace(
+            f"num_bytes: {original_size}", f"num_bytes: {updated_size}"
+        ).replace(f"`{original_digest}`", f"`{digest}`")
+    )
+    manifest_path = output / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["parquet_sha256"] = digest
+    manifest["artifact_sha256"]["sentences.parquet"] = digest
+    manifest_path.write_text(json.dumps(manifest))
+
+    validate_v2_publication(output)
+
+
+def test_v2_card_is_public_facing_and_navigable(tmp_path: Path) -> None:
+    """The generated V2 card exposes provenance, citation, and dashboards."""
+
+    _input_path, output, _store = _make_release(tmp_path)
+    card = (output / "README.md").read_text()
+    for token in (
+        "github.com/NoeFlandre/osm-polygon-wikidata-sentence-relevance/blob/main/README.md",
+        "worldwide-stratified-labeling-trackio",
+        "citation.cff",
+        "model-generated",
+        "decoded token itself is",
+        "missing_coordinate_count",
+        "@dataset",
+    ):
+        assert token in card
+
+
 def test_v2_finalization_uses_smoke_row_limit_before_sampling_target(
     tmp_path: Path,
 ) -> None:
@@ -197,9 +248,9 @@ def test_v2_finalization_uses_smoke_row_limit_before_sampling_target(
         hashlib.sha256(input_path.read_bytes()).hexdigest(), row_limit=1
     )
     store = V2CheckpointStore(tmp_path / "work", identity)
-    selected_id = select_v2_rows(
-        pq.read_table(input_path), target=1, seed="seed"
-    )["sentence_id"][0].as_py()
+    selected_id = select_v2_rows(pq.read_table(input_path), target=1, seed="seed")[
+        "sentence_id"
+    ][0].as_py()
     store.write_batch(0, [V2LogitRecord(selected_id, "yes", -0.1, -1.1)])
 
     result = finalize_v2_dataset(
