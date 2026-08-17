@@ -1,9 +1,8 @@
 """Release lanes for the public sentence-relevance dataset.
 
-Both releases live on the Hugging Face ``main`` revision.  The original
-Afghanistan release keeps its historical root paths; the worldwide stratified
-release is stored below ``v2-worldwide/``.  Checkpoint files use a private,
-run-scoped prefix on the same revision and are never mixed with release files.
+Both releases live on the Hugging Face ``main`` revision, each below its own
+explicit folder. Checkpoint files use a private, run-scoped prefix on the same
+revision and are never mixed with release files.
 """
 
 from __future__ import annotations
@@ -23,6 +22,7 @@ class ReleaseLane(StrEnum):
 OUTPUT_DATASET_ID = "NoeFlandre/osm-polygon-wikidata-sentence-relevance"
 V1_TRACKIO_SPACE_ID = "NoeFlandre/afghanistan-labeling-trackio"
 V2_TRACKIO_SPACE_ID = "NoeFlandre/worldwide-stratified-labeling-trackio"
+V1_REMOTE_PREFIX = "v1-afghanistan"
 V2_REMOTE_PREFIX = "v2-worldwide"
 CHECKPOINT_REMOTE_PREFIX = ".pipeline/checkpoints"
 _RUN_ID = re.compile(r"[0-9a-f]{20}")
@@ -45,7 +45,7 @@ def release_lane(identity: Mapping[str, object]) -> ReleaseLane:
 def release_prefix(lane: ReleaseLane) -> str:
     """Return the remote directory prefix for one release lane."""
 
-    return V2_REMOTE_PREFIX if lane is ReleaseLane.V2_WORLDWIDE else ""
+    return V2_REMOTE_PREFIX if lane is ReleaseLane.V2_WORLDWIDE else V1_REMOTE_PREFIX
 
 
 def remote_release_path(lane: ReleaseLane, relative_path: str) -> str:
@@ -82,6 +82,7 @@ __all__ = [
     "OUTPUT_DATASET_ID",
     "ReleaseLane",
     "V1_TRACKIO_SPACE_ID",
+    "V1_REMOTE_PREFIX",
     "V2_REMOTE_PREFIX",
     "V2_TRACKIO_SPACE_ID",
     "checkpoint_prefix",

@@ -24,8 +24,9 @@ Parquet and metadata files to `.pipeline/checkpoints/<run-id>/` on the dataset's
 `main` tree. This is not a public Git branch. The labeling loop never waits for Hub
 network I/O. Failed uploads remain in `${work_dir}/.checkpoint-mirror/pending/`
 and are retried when the same run resumes; a bounded final drain is attempted
-when an allocation exits. The final V1 root or V2 `v2-worldwide/` publication is a
-separate validated operation and is never performed by the mirror.
+when an allocation exits. The final V1 `v1-afghanistan/` or V2
+`v2-worldwide/` publication is a separate validated operation and is never
+performed by the mirror.
 
 `finalize` refuses partial labels and creates the labeled Parquet, manifest,
 and concise data-derived README. The historical V1 lane adds its two-label
@@ -69,7 +70,7 @@ smaller target once the run has been initialized. V2 targets are positive
 integers. The V1 Afghanistan release and its
 published Hub artifacts remain separate from this V2 sampling contract. V2
 publication is mapped below `v2-worldwide/` on the same Hugging Face `main`
-revision; the publisher refuses to replace the V1 root files.
+revision; the publisher refuses to replace the `v1-afghanistan/` files.
 
 When a larger V2 target is finalized locally, only a previously validated V2
 output with the same immutable identity may be replaced. V1 outputs, mismatched

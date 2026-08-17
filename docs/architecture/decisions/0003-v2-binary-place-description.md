@@ -40,7 +40,8 @@ The operator preserves the V1 autonomous lifecycle: policy-aware site choice,
 short allocations, durable per-batch checkpoints, asynchronous checkpoint
 mirrors, automatic continuation, safe retry and site relocation, timing and
 throughput reporting, and final publication only after validation. V2 output is
-published below its existing namespace and never replaces V1 root artifacts.
+published below its existing namespace and never replaces `v1-afghanistan/`
+artifacts.
 
 ## Evaluation
 

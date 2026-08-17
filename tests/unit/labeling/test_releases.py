@@ -13,9 +13,11 @@ from osm_polygon_sentence_relevance.labeling.releases import (
 )
 
 
-def test_legacy_identity_is_v1_and_stays_at_historical_root() -> None:
+def test_legacy_identity_is_v1_and_uses_explicit_release_folder() -> None:
     assert release_lane({}) is ReleaseLane.V1_AFGHANISTAN
-    assert remote_release_path(ReleaseLane.V1_AFGHANISTAN, "README.md") == "README.md"
+    assert remote_release_path(ReleaseLane.V1_AFGHANISTAN, "README.md") == (
+        "v1-afghanistan/README.md"
+    )
     assert trackio_space_id(ReleaseLane.V1_AFGHANISTAN) == V1_TRACKIO_SPACE_ID
 
 

@@ -5,15 +5,12 @@ The publisher must:
 1. validate the local labeled release first;
 2. inspect the target repository's current tree;
 3. construct one Hub commit that:
-   - adds/replaces:
-     sentences.parquet, manifest.json, README.md,
-     assets/label_distribution.png, assets/positive_languages.png,
-     assets/joint_label_heatmap.png, assets/polygon_coverage_funnel.png,
-     assets/reason_code_distribution.png
+   - adds/replaces the same files below ``v1-afghanistan/``;
+   - preserves the root release-index README;
    - deletes only explicitly allowlisted obsolete paths
      (assets/geographic_coverage.png, assets/language_distribution.png)
    - preserves .gitattributes
-4. refuse publication if unexpected remote content exists;
+4. refuse publication if unexpected remote content or unmigrated V1 root data exists;
 5. after the commit, snapshot_download the immutable commit tree and
    verify exactly .gitattributes plus the labeled-release files;
 6. independently validate every artifact (row count, every SHA);
@@ -71,8 +68,10 @@ def _fake_op_factory() -> Callable[..., Any]:
     return factory
 
 
-def _fake_readback_downloader(source_publication: Path) -> Callable[[str, str], Path]:
-    """Return a snapshot_download that copies the local publication to a temp dir."""
+def _fake_readback_downloader(
+    source_publication: Path, *, remote_prefix: str = "v1-afghanistan"
+) -> Callable[[str, str], Path]:
+    """Copy one local release into its expected remote folder for readback."""
 
     def downloader(repo_id: str, revision: str) -> Path:
         safe_id = repo_id.replace("/", "_")
@@ -81,8 +80,9 @@ def _fake_readback_downloader(source_publication: Path) -> Callable[[str, str], 
         for src in source_publication.rglob("*"):
             if src.is_file():
                 rel = src.relative_to(source_publication)
-                (target / rel).parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(src, target / rel)
+                destination = target / remote_prefix / rel
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src, destination)
         return target
 
     return downloader
@@ -247,14 +247,14 @@ def test_clean_replacement_atomically_replaces(tmp_path: Path) -> None:
     # Exactly five add operations plus any required deletes.
     operations = kwargs["operations"]
     expected_paths = {
-        "sentences.parquet",
-        "manifest.json",
-        "README.md",
-        "assets/label_distribution.png",
-        "assets/positive_languages.png",
-        "assets/joint_label_heatmap.png",
-        "assets/polygon_coverage_funnel.png",
-        "assets/reason_code_distribution.png",
+        "v1-afghanistan/sentences.parquet",
+        "v1-afghanistan/manifest.json",
+        "v1-afghanistan/README.md",
+        "v1-afghanistan/assets/label_distribution.png",
+        "v1-afghanistan/assets/positive_languages.png",
+        "v1-afghanistan/assets/joint_label_heatmap.png",
+        "v1-afghanistan/assets/polygon_coverage_funnel.png",
+        "v1-afghanistan/assets/reason_code_distribution.png",
     }
     add_paths = {op["path_in_repo"] for op in operations if op["op"] == "add"}
     delete_paths = {op["path_in_repo"] for op in operations if op["op"] == "delete"}
@@ -342,6 +342,24 @@ def test_unexpected_remote_file_is_rejected(tmp_path: Path) -> None:
             target_revision="main",
         )
     # The publisher must NOT have created a commit.
+    assert hub.create_commit_calls == []
+
+
+def test_unmigrated_v1_root_files_are_rejected(tmp_path: Path) -> None:
+    output = _build_publication(tmp_path)
+    hub = _RecordingHub(
+        files=[".gitattributes", "README.md", "sentences.parquet", "manifest.json"],
+        downloads_dir=tmp_path / "downloads",
+    )
+    with pytest.raises(LabelPublicationError, match="migrate"):
+        publish_labeled_dataset(
+            output,
+            "owner/dataset",
+            hub_api=hub,
+            operation_factory=_fake_op_factory(),
+            readback_downloader=_fake_readback_downloader(output),
+            target_revision="main",
+        )
     assert hub.create_commit_calls == []
 
 
@@ -477,8 +495,9 @@ def test_readback_hash_mismatch_is_rejected(tmp_path: Path) -> None:
             for src in output.rglob("*"):
                 if src.is_file():
                     rel = src.relative_to(output)
-                    (target / rel).parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copy2(src, target / rel)
+                    destination = target / "v1-afghanistan" / rel
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(src, destination)
             state[key] = target
         return state[key]
 
@@ -492,7 +511,7 @@ def test_readback_hash_mismatch_is_rejected(tmp_path: Path) -> None:
     )
     # Tamper with the readback parquet bytes; the second call must fail.
     readback = state["owner/dataset_" + "f" * 40]
-    parquet = readback / "sentences.parquet"
+    parquet = readback / "v1-afghanistan" / "sentences.parquet"
     parquet.write_bytes(parquet.read_bytes() + b"tamper")
     with pytest.raises(LabelPublicationError, match="readback"):
         publish_labeled_dataset(
@@ -537,7 +556,9 @@ def test_v2_publication_is_isolated_from_v1_main(tmp_path: Path) -> None:
         "owner/dataset",
         hub_api=hub,
         operation_factory=_fake_op_factory(),
-        readback_downloader=_fake_readback_downloader(output),
+        readback_downloader=_fake_readback_downloader(
+            output, remote_prefix="v2-worldwide"
+        ),
     )
 
     assert hub.create_commit_calls[0]["revision"] == "main"
@@ -595,8 +616,9 @@ def test_gitattributes_is_preserved(tmp_path: Path) -> None:
         for src in output.rglob("*"):
             if src.is_file():
                 rel = src.relative_to(output)
-                (target / rel).parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(src, target / rel)
+                destination = target / "v1-afghanistan" / rel
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src, destination)
         # And write ``.gitattributes`` because the remote still has it.
         (target / ".gitattributes").write_text("* filter=lfs\n")
         hub.snapshot_download_calls.append({"repo_id": repo_id, "revision": revision})

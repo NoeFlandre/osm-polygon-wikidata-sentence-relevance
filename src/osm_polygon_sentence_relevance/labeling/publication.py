@@ -1,9 +1,10 @@
 """Atomic Hugging Face publication for complete labeled datasets.
 
-Both releases are committed to the dataset's single ``main`` revision. V1
-keeps its historical root paths; V2 is mapped below ``v2-worldwide/``. This
-prevents a worldwide continuation from replacing the Afghanistan files while
-avoiding a second public release branch.
+Both releases are committed to the dataset's single ``main`` revision below
+explicit lane folders. The root README is a short index; release cards and
+artifacts live under ``v1-afghanistan/`` and ``v2-worldwide/``. This prevents
+a worldwide continuation from replacing Afghanistan files while avoiding a
+second public release branch.
 """
 
 from __future__ import annotations
@@ -18,9 +19,9 @@ from typing import Any
 
 from .finalization import validate_labeled_publication
 from .releases import (
-    V2_REMOTE_PREFIX,
     ReleaseLane,
     release_lane,
+    release_prefix,
     remote_release_path,
 )
 from .v2_contracts import V2_LOGIT_PROMPT_VERSION
@@ -50,9 +51,15 @@ _BASE_RELEASE_FILES: tuple[str, ...] = (
     "assets/polygon_coverage_funnel.png",
     "assets/reason_code_distribution.png",
 )
+_V1_RELEASE_FILES: tuple[str, ...] = tuple(
+    remote_release_path(ReleaseLane.V1_AFGHANISTAN, path)
+    for path in _BASE_RELEASE_FILES
+)
 _V2_RELEASE_FILES: tuple[str, ...] = tuple(
     remote_release_path(ReleaseLane.V2_WORLDWIDE, path) for path in V2_PUBLICATION_FILES
 )
+_ROOT_INDEX_FILES: frozenset[str] = frozenset({"README.md"})
+_LEGACY_V1_ROOT_FILES: frozenset[str] = frozenset(_BASE_RELEASE_FILES)
 # ``.gitattributes`` must always be preserved verbatim; it is never
 # part of the add/replace/delete set so it survives across releases.
 _GITATTRIBUTES_NAME = ".gitattributes"
@@ -110,10 +117,14 @@ def _classify_remote_path(path: str) -> str:
 
     if path == _GITATTRIBUTES_NAME:
         return "gitattributes"
-    if path in _BASE_RELEASE_FILES or path in _V2_RELEASE_FILES:
+    if path in _ROOT_INDEX_FILES:
+        return "index"
+    if path in _V1_RELEASE_FILES or path in _V2_RELEASE_FILES:
         return "preserve"
     if path.startswith(".pipeline/checkpoints/"):
         return "preserve"
+    if path in _LEGACY_V1_ROOT_FILES:
+        return "legacy-v1"
     if path in _OBSOLETE_DELETE_ALLOWLIST:
         return "obsolete"
     return "unexpected"
@@ -181,9 +192,7 @@ def _default_readback_downloader(
 def _release_snapshot(root: Path, lane: ReleaseLane) -> Path:
     """Materialize one release from a same-main Hub snapshot for validation."""
 
-    if (root / "manifest.json").is_file():
-        return root
-    source = root / V2_REMOTE_PREFIX if lane is ReleaseLane.V2_WORLDWIDE else root
+    source = root / release_prefix(lane)
     if not (source / "manifest.json").is_file():
         raise LabelPublicationError("Hub readback is missing the selected release")
     target = Path(tempfile.mkdtemp(prefix="label-readback-"))
@@ -238,9 +247,9 @@ def publish_labeled_dataset(
         patterns = (
             list(_V2_RELEASE_FILES)
             if lane is ReleaseLane.V2_WORLDWIDE
-            else list(_BASE_RELEASE_FILES)
+            else list(_V1_RELEASE_FILES)
         )
-        patterns.append(_GITATTRIBUTES_NAME)
+        patterns.extend(["README.md", _GITATTRIBUTES_NAME])
 
         def readback_downloader(repo: str, revision: str) -> Path:
             return _default_readback_downloader(repo, revision, allow_patterns=patterns)
@@ -251,6 +260,15 @@ def publish_labeled_dataset(
             return _default_list_remote_files(api, dataset, target_revision)
 
     remote_files = list_remote_files(hub_api, dataset_id)
+    legacy_v1 = sorted(
+        path for path in remote_files if _classify_remote_path(path) == "legacy-v1"
+    )
+    if legacy_v1:
+        raise LabelPublicationError(
+            "remote tree still contains legacy V1 root files; migrate them to "
+            f"{release_prefix(ReleaseLane.V1_AFGHANISTAN)}/ first: "
+            + ", ".join(legacy_v1)
+        )
     unexpected = sorted(
         path for path in remote_files if _classify_remote_path(path) == "unexpected"
     )

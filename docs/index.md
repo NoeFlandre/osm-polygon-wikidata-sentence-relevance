@@ -4,7 +4,8 @@ This project builds a deterministic, sentence-level relevance dataset from
 OSM polygons joined to Wikipedia and Wikivoyage sections. The public release
 history has two deliberately separate lanes:
 
-- **V1 Afghanistan** is the published `v1.0.0` reference artifact.
+- **V1 Afghanistan** is the published `v1.0.0` reference artifact under
+  `v1-afghanistan/`.
 - **V2 worldwide** is the reproducible H3-stratified labeling workflow. Its
   output is namespaced below `v2-worldwide/` when a complete run is
   finalized and published.
@@ -15,6 +16,9 @@ The rendered documentation is published at
 <https://noeflandre.github.io/osm-polygon-wikidata-sentence-relevance/>.
 
 ## Audience entry points
+
+- **I want the published V1 artifact** → [V1 Afghanistan release](releases/v1-afghanistan.md)
+- **I want the published V2 artifact** → [V2 worldwide release](releases/v2-worldwide.md)
 
 - **I want to run it once** → [Getting started](guides/getting-started.md)
 - **I am developing or contributing** →

@@ -268,9 +268,7 @@ def _manifest(
         "dataset_repo_id": dataset_repo_id,
         "publication_revision": publication_revision,
         "release_lane": release_lane(identity).value,
-        "release_prefix": ""
-        if release_lane(identity) is ReleaseLane.V1_AFGHANISTAN
-        else "v2-worldwide",
+        "release_prefix": release_prefix(release_lane(identity)),
         "parquet_sha256": parquet_sha256,
         "artifact_sha256": artifact_sha256,
         "statistics": statistics,
@@ -309,10 +307,8 @@ def _render_card(
     publication_revision = publication_revision or _publication_revision(identity)
     lane = release_lane(identity)
     is_v1_afghanistan = lane is ReleaseLane.V1_AFGHANISTAN
-    remote_prefix = "" if is_v1_afghanistan else "v2-worldwide"
-    remote_data_path = (
-        "sentences.parquet" if is_v1_afghanistan else "v2-worldwide/sentences.parquet"
-    )
+    remote_prefix = release_prefix(lane)
+    remote_data_path = f"{remote_prefix}/sentences.parquet"
     if identity.get("row_limit", 0):
         scope = (
             f"This is a representative **{row_count:,}-row canary** selected "
@@ -328,9 +324,7 @@ def _render_card(
     else:
         scope = f"This release labels the complete {scope_label} input."
     asset_base = f"https://huggingface.co/datasets/{dataset_repo_id}/resolve/main/"
-    if remote_prefix:
-        asset_base += f"{remote_prefix}/"
-    asset_base += "assets"
+    asset_base += f"{remote_prefix}/assets"
     pretty_name = f"{scope_label} polygon sentence relevance labels"
     hero = (
         f"![{scope_label} sentence relevance dataset overview]({_HERO_IMAGE_URL})\n\n"
@@ -340,9 +334,9 @@ def _render_card(
     release_trackio_url = trackio_space_url(lane)
     release_links = (
         "## Release lane\n\n"
-        "This is the preserved V1 Afghanistan release. The worldwide stratified\n"
-        "release is published separately under `v2-worldwide/` on the same HF\n"
-        "`main` revision.\n\n"
+        "This is the V1 Afghanistan release, published under\n"
+        "`v1-afghanistan/`. The worldwide stratified release is published\n"
+        "separately under `v2-worldwide/` on the same HF `main` revision.\n\n"
         "## Trackio\n\n"
         "The metrics and plots for this release are logged in the\n"
         f"[public Trackio dashboard]({release_trackio_url}).\n\n"
@@ -400,7 +394,7 @@ language:
 - multilingual
 pretty_name: {pretty_name}
 configs:
-- config_name: default
+- config_name: v1-afghanistan
   data_files:
   - split: train
     path: {remote_data_path}

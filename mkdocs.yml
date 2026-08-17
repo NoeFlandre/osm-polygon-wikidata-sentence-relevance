@@ -47,6 +47,9 @@ nav:
       - Reproducibility: guides/reproducibility.md
       - Development: guides/development.md
       - Grid'5000 production: guides/grid5000.md
+  - Releases:
+      - V1 Afghanistan: releases/v1-afghanistan.md
+      - V2 worldwide: releases/v2-worldwide.md
   - Architecture:
       - Overview: architecture/overview.md
       - Application: architecture/packages/application.md

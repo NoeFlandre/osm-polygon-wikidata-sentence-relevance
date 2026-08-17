@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 import sys
 import types
 from dataclasses import replace
@@ -65,6 +66,14 @@ def _input(path: Path) -> None:
         ),
         path,
     )
+
+
+def _v1_remote_snapshot(tmp_path: Path, output: Path) -> Path:
+    """Materialize a finalized V1 output below its public remote prefix."""
+
+    snapshot = tmp_path / "remote-snapshot"
+    shutil.copytree(output, snapshot / "v1-afghanistan")
+    return snapshot
 
 
 def _store(
@@ -134,6 +143,8 @@ def test_finalization_generates_factual_card_manifest_and_plots(tmp_path: Path) 
     table = pq.read_table(output / "sentences.parquet")
     assert table["landuse_relevance"].to_pylist() == ["yes", "no", "yes"]
     manifest = json.loads((output / "manifest.json").read_text())
+    assert manifest["release_lane"] == "v1-afghanistan"
+    assert manifest["release_prefix"] == "v1-afghanistan"
     assert manifest["statistics"]["landuse_relevance"] == {"no": 1, "yes": 2}
     assert manifest["statistics"]["polygon_relevance"] == {
         "uncertain": 1,
@@ -178,6 +189,7 @@ def test_finalization_generates_factual_card_manifest_and_plots(tmp_path: Path) 
     assert "![Label distributions]" not in card
     assert "## Language coverage" in card
     assert "![Positive-label languages]" in card
+    assert "resolve/main/v1-afghanistan/assets/positive_languages.png" in card
     assert "## Repair" not in card
     assert "## Runtime" not in card
     assert "Initial inference:" not in card
@@ -547,7 +559,8 @@ def test_publication_is_one_commit_and_includes_all_artifacts(tmp_path: Path) ->
         hub_api=Api(),
         operation_factory=lambda **kwargs: kwargs,
         readback_downloader=lambda dataset_id, revision: (
-            readbacks.append((dataset_id, revision)) or output
+            readbacks.append((dataset_id, revision))
+            or _v1_remote_snapshot(tmp_path, output)
         ),
     )
     assert result.commit_id == "f" * 40
@@ -555,14 +568,14 @@ def test_publication_is_one_commit_and_includes_all_artifacts(tmp_path: Path) ->
     assert readbacks == [("owner/dataset", "f" * 40)]
     paths = {op["path_in_repo"] for op in calls[0]["operations"]}  # type: ignore[index]
     assert paths == {
-        "sentences.parquet",
-        "manifest.json",
-        "README.md",
-        "assets/label_distribution.png",
-        "assets/positive_languages.png",
-        "assets/joint_label_heatmap.png",
-        "assets/polygon_coverage_funnel.png",
-        "assets/reason_code_distribution.png",
+        "v1-afghanistan/sentences.parquet",
+        "v1-afghanistan/manifest.json",
+        "v1-afghanistan/README.md",
+        "v1-afghanistan/assets/label_distribution.png",
+        "v1-afghanistan/assets/positive_languages.png",
+        "v1-afghanistan/assets/joint_label_heatmap.png",
+        "v1-afghanistan/assets/polygon_coverage_funnel.png",
+        "v1-afghanistan/assets/reason_code_distribution.png",
     }
 
 
@@ -619,7 +632,7 @@ def test_publication_default_hub_integration_verifies_exact_commit(
 
     def snapshot_download(**kwargs: object) -> str:
         downloads.append(kwargs)
-        return str(output)
+        return str(_v1_remote_snapshot(tmp_path, output))
 
     fake_hub = types.ModuleType("huggingface_hub")
     fake_hub.HfApi = Api  # type: ignore[attr-defined]
@@ -637,14 +650,15 @@ def test_publication_default_hub_integration_verifies_exact_commit(
             "repo_type": "dataset",
             "revision": "f" * 40,
             "allow_patterns": [
-                "sentences.parquet",
-                "manifest.json",
+                "v1-afghanistan/sentences.parquet",
+                "v1-afghanistan/manifest.json",
+                "v1-afghanistan/README.md",
+                "v1-afghanistan/assets/label_distribution.png",
+                "v1-afghanistan/assets/positive_languages.png",
+                "v1-afghanistan/assets/joint_label_heatmap.png",
+                "v1-afghanistan/assets/polygon_coverage_funnel.png",
+                "v1-afghanistan/assets/reason_code_distribution.png",
                 "README.md",
-                "assets/label_distribution.png",
-                "assets/positive_languages.png",
-                "assets/joint_label_heatmap.png",
-                "assets/polygon_coverage_funnel.png",
-                "assets/reason_code_distribution.png",
                 ".gitattributes",
             ],
         }

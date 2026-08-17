@@ -123,7 +123,7 @@ pretty_name: Worldwide place-description sentence labels (V2)
 size_categories:
   - 100K<n<1M
 dataset_info:
-  config_name: default
+  config_name: v2-worldwide
   features:
     sentence_id: string
     place_relevance: string
@@ -142,8 +142,8 @@ dataset_info:
 This is the **V2 worldwide** release of the
 [OSM Polygon - Wikidata Sentence Relevance project]({GITHUB_README_URL}).
 It contains **{total:,} deterministic, model-generated labels** for sentences
-describing OSM-linked places. The preserved Afghanistan V1 release remains at
-the dataset root; V2 is isolated below `v2-worldwide/`.
+describing OSM-linked places. The preserved Afghanistan V1 release is under
+`v1-afghanistan/`; V2 is isolated below `v2-worldwide/`.
 
 > **Important:** these are model annotations, not ground truth. Validate them
 > before using them as training or evaluation labels.
@@ -155,7 +155,7 @@ the dataset root; V2 is isolated below `v2-worldwide/`.
 | `v2-worldwide/sentences.parquet` | Final {total:,}-row V2 table |
 | `v2-worldwide/manifest.json` | Run identity, hashes, and derived statistics |
 | `v2-worldwide/assets/` | Label and H3 coverage plots |
-| `README.md`, `sentences.parquet`, `assets/` | Preserved Afghanistan V1 release |
+| `v1-afghanistan/` | Preserved Afghanistan V1 release |
 | `.pipeline/checkpoints/<run-id>/` | Resumable batch provenance; not a second release split |
 
 The [GitHub README]({GITHUB_README_URL})
