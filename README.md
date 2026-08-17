@@ -19,6 +19,8 @@ Parquet releases with manifests and provenance.
 | **V1 Afghanistan** | 54,462 labeled sentences, 161 polygons, 115 languages | [HF folder](https://huggingface.co/datasets/NoeFlandre/osm-polygon-wikidata-sentence-relevance/tree/main/v1-afghanistan) · [Trackio](https://huggingface.co/spaces/NoeFlandre/afghanistan-labeling-trackio) | [V1 guide](docs/releases/v1-afghanistan.md) · [HF card](https://huggingface.co/datasets/NoeFlandre/osm-polygon-wikidata-sentence-relevance/tree/main/v1-afghanistan/README.md) |
 | **V2 worldwide** | 200,000 H3-stratified binary place-description labels | [HF folder](https://huggingface.co/datasets/NoeFlandre/osm-polygon-wikidata-sentence-relevance/tree/main/v2-worldwide) · [Trackio](https://huggingface.co/spaces/NoeFlandre/worldwide-stratified-labeling-trackio) | [V2 guide](docs/releases/v2-worldwide.md) · [HF card](https://huggingface.co/datasets/NoeFlandre/osm-polygon-wikidata-sentence-relevance/tree/main/v2-worldwide/README.md) |
 
+Current release: [v2.0.0 — Worldwide dataset release](https://github.com/NoeFlandre/osm-polygon-wikidata-sentence-relevance/releases/tag/v2.0.0).
+
 The complete output dataset is
 [NoeFlandre/osm-polygon-wikidata-sentence-relevance](https://huggingface.co/datasets/NoeFlandre/osm-polygon-wikidata-sentence-relevance).
 It is derived from the immutable upstream input dataset
