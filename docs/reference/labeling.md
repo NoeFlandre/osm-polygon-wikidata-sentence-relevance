@@ -59,7 +59,10 @@ stored score evidence is the first-token log-probability returned for
 JSON explanations, reason codes, evidence excerpts, or `uncertain` labels in
 V2. Rows with missing latitude or longitude are discarded before the candidate
 pool is stratified. Missing language and tag values remain row metadata rather
-than creating additional strata.
+than creating additional strata. The published V2 table also carries the
+upstream GeoJSON `geometry` column, keyed by `polygon_id`; adding that column
+is a separate projection over the pinned polygon shards and does not rerun
+sampling or inference.
 
 Increase `--sampling-target` on `run` or `resume RUN_ID` to extend the same sample. With the same immutable
 input, seed, and H3 resolution, the smaller selection is always contained in

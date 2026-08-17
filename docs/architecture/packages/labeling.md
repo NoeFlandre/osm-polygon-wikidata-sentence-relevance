@@ -26,7 +26,9 @@ making the runner depend on network availability.
 `v2_input.py` is the V2-only input boundary. It reads the completed V1-schema
 split output, fetches the pinned upstream polygon metadata one region at a time,
 canonicalizes area buckets, and atomically writes the separate V2 sampling
-input. V1 output files are never rewritten.
+input. `v2_geometry.py` separately projects only the pinned upstream
+`polygon_id`/`geometry` columns onto an already finalized V2 table; it never
+resamples or reruns inference. V1 output files are never rewritten.
 
 `v2_resumable_sampling.py` keeps the expensive V2 planning and candidate scans
 in a persistent SQLite ledger. Finalized shards are verified and staged one at

@@ -13,6 +13,7 @@ label/H3 plots.
 | Unique polygons | 10,268 |
 | Languages | 317 |
 | Missing-coordinate rows | 0 |
+| Geometry | GeoJSON `geometry` column for every selected polygon |
 
 Rows are selected with seed `sentence-relevance-v2` from H3 resolution-3
 cells. Language and OSM primary tag remain metadata; they are not sampling
@@ -35,6 +36,11 @@ decision uses the first-token log-probability margin (`yes_logprob -
 no_logprob`), not the decoded token. The Parquet stores both log-probabilities,
 the margin, and the relative two-class sigmoid score. The exact prompt and
 immutable model identity are preserved in the [V2 HF card](https://huggingface.co/datasets/NoeFlandre/osm-polygon-wikidata-sentence-relevance/tree/main/v2-worldwide/README.md).
+
+The `geometry` column is projected from the pinned upstream
+`polygons/{region}-latest.parquet` shards. It is GeoJSON text keyed by
+`polygon_id`; adding it does not rerun sampling or inference and does not
+change any existing sentence, label, or score column.
 
 ## Reproduction and metrics
 

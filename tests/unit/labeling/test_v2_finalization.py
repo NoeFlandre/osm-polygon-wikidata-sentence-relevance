@@ -60,6 +60,7 @@ def _make_release(tmp_path: Path) -> tuple[Path, Path, V2CheckpointStore]:
             "language": "en",
             "lat": 45.0,
             "lon": 2.0,
+            "geometry": '{"type":"Polygon","coordinates":[]}',
             "area_km2": 20.0,
             "area_bucket": "large",
         },
@@ -75,6 +76,7 @@ def _make_release(tmp_path: Path) -> tuple[Path, Path, V2CheckpointStore]:
             "language": "fr",
             "lat": 45.0,
             "lon": 2.0,
+            "geometry": '{"type":"Polygon","coordinates":[]}',
             "area_km2": 20.0,
             "area_bucket": "large",
         },
@@ -114,6 +116,7 @@ def test_v2_finalization_writes_only_binary_score_release(tmp_path: Path) -> Non
             "language": "en",
             "lat": 45.0,
             "lon": 2.0,
+            "geometry": '{"type":"Polygon","coordinates":[]}',
             "area_km2": 20.0,
             "area_bucket": "large",
         },
@@ -129,6 +132,7 @@ def test_v2_finalization_writes_only_binary_score_release(tmp_path: Path) -> Non
             "language": "fr",
             "lat": 45.0,
             "lon": 2.0,
+            "geometry": '{"type":"Polygon","coordinates":[]}',
             "area_km2": 20.0,
             "area_bucket": "large",
         },
@@ -168,6 +172,11 @@ def test_v2_finalization_writes_only_binary_score_release(tmp_path: Path) -> Non
     assert "place_reason" not in table.column_names
     manifest = json.loads((output / "manifest.json").read_text())
     assert manifest["statistics"]["place_counts"] == {"no": 1, "yes": 1}
+    assert manifest["geometry"] == {
+        "column": "geometry",
+        "encoding": "GeoJSON",
+        "source": "pinned_input_polygon_shards",
+    }
     validate_v2_publication(output)
 
 
@@ -216,9 +225,32 @@ def test_v2_card_is_public_facing_and_navigable(tmp_path: Path) -> None:
         "model-generated",
         "decoded token itself is",
         "missing_coordinate_count",
+        "geometry",
         "@dataset",
     ):
         assert token in card
+
+
+def test_v2_card_documents_split_and_exact_model_input(tmp_path: Path) -> None:
+    """The card documents the immutable split stage and substituted request."""
+
+    _input_path, output, _store = _make_release(tmp_path)
+    card = (output / "README.md").read_text()
+    released = pq.read_table(output / "sentences.parquet")
+    target = released["sentence_text_raw"][0].as_py()
+    for token in (
+        "Sentence splitting and canonicalization",
+        "wtpsplit",
+        "sat-12l-sm",
+        "sentence_text_raw",
+        "previous_sentence",
+        "next_sentence",
+        "TARGET SENTENCE:",
+        "html.escape",
+        "Polygon metadata, language, source",
+    ):
+        assert token in card
+    assert f"<target>{target}</target>" in card
 
 
 def test_v2_finalization_uses_smoke_row_limit_before_sampling_target(
@@ -311,6 +343,7 @@ def test_v2_finalization_rejects_input_hash_and_score_set_mismatches(
         ("prompt", "prompt version"),
         ("model_repo", "model repository"),
         ("model_file", "model file"),
+        ("geometry", "geometry"),
         ("analytics", "analytics"),
         ("readme", "README"),
     ],
@@ -352,6 +385,8 @@ def test_v2_publication_validation_rejects_tampering(
             (output / "sentences.parquet").read_bytes()
         ).hexdigest()
         manifest["artifact_sha256"]["sentences.parquet"] = manifest["parquet_sha256"]
+    elif mutation == "geometry":
+        manifest["geometry"]["encoding"] = "WKT"
     elif mutation in {"prompt", "model_repo", "model_file"}:
         key = {
             "prompt": "prompt_version",
