@@ -8,8 +8,9 @@ import urllib.error
 import urllib.request
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Protocol, cast
+from typing import Protocol, cast
 
+from .http_transport import _post_json
 from .v2_contracts import V2LogitRecord
 from .worker_pool import _ReusableWorkerPool
 
@@ -35,15 +36,13 @@ class V2Engine(Protocol):
 def _http_transport(
     endpoint: str, payload: Mapping[str, object], timeout: float
 ) -> Mapping[str, object]:
-    request = urllib.request.Request(
-        endpoint,
-        data=json.dumps(payload, ensure_ascii=False).encode(),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            value: Any = json.load(response)
+        value = _post_json(
+            endpoint,
+            payload,
+            timeout,
+            urlopen=urllib.request.urlopen,
+        )
     except (OSError, urllib.error.URLError, json.JSONDecodeError) as exc:
         raise V2EngineError("binary inference request failed") from exc
     if not isinstance(value, dict):

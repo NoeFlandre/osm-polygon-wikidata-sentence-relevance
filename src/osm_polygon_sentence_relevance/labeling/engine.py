@@ -7,8 +7,9 @@ import urllib.error
 import urllib.request
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Protocol
+from typing import Protocol, cast
 
+from .http_transport import _post_json
 from .prompt import LABEL_RESPONSE_JSON_SCHEMA
 from .worker_pool import _ReusableWorkerPool
 
@@ -30,20 +31,18 @@ Transport = Callable[[Mapping[str, object], float], Mapping[str, object]]
 def _http_transport(
     endpoint: str, payload: Mapping[str, object], timeout: float
 ) -> Mapping[str, object]:
-    request = urllib.request.Request(
-        endpoint,
-        data=json.dumps(payload, ensure_ascii=False).encode(),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            value: Any = json.load(response)
+        value = _post_json(
+            endpoint,
+            payload,
+            timeout,
+            urlopen=urllib.request.urlopen,
+        )
     except (OSError, urllib.error.URLError, json.JSONDecodeError) as exc:
         raise EngineError("inference request failed") from exc
     if not isinstance(value, dict):
         raise EngineError("inference server returned an invalid response")
-    return value
+    return cast(Mapping[str, object], value)
 
 
 class OpenAICompatibleEngine:
