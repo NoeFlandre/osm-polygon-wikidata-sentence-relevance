@@ -11,7 +11,6 @@ import json
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, replace
-from datetime import datetime
 from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 from typing import Any
@@ -20,10 +19,11 @@ from osm_polygon_sentence_relevance.labeling.v2_contracts import (
     V2_LOGIT_PROMPT_VERSION,
 )
 from osm_polygon_sentence_relevance.operator.config import Stage
-from osm_polygon_sentence_relevance.operator.earliest_start import policy_type_for
 from osm_polygon_sentence_relevance.operator.label_lanes import LabelLanePlan
+from osm_polygon_sentence_relevance.operator.label_submission import (
+    submit_preferred_label,
+)
 from osm_polygon_sentence_relevance.operator.oar import (
-    GRID5000_TZ,
     ExitClass,
     JobState,
     is_live_state,
@@ -33,7 +33,6 @@ from osm_polygon_sentence_relevance.operator.storage import (
     LABEL_STAGING_HEADROOM_BYTES,
 )
 from osm_polygon_sentence_relevance.operator.workflows import (
-    PREFERRED_LABEL_WALLTIME_SECONDS,
     RemoteLayout,
 )
 
@@ -330,16 +329,11 @@ def resume_run(run_id: str, args: SimpleNamespace, services: ResumeServices) -> 
                     layout=layout,
                     relay_root=Path(relay_root_value),
                 )
-            job_id = controller.submit(
-                component=Stage.LABEL,
+            job_id = submit_preferred_label(
+                controller,
                 input_parquet=assets.input_parquet,
                 model_file=assets.model_file,
                 tokenizer_dir=assets.tokenizer_dir,
-                walltime_seconds=PREFERRED_LABEL_WALLTIME_SECONDS,
-                policy_type=policy_type_for(
-                    datetime.now(tz=GRID5000_TZ),
-                    walltime_seconds=PREFERRED_LABEL_WALLTIME_SECONDS,
-                ),
                 gpu_memory_mb=getattr(args, "gpu_memory_mb", 40_000),
                 label_plan=current_label_plan,
             )

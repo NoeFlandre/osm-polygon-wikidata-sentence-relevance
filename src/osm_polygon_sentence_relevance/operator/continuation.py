@@ -8,16 +8,16 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 from typing import Any
 
 from osm_polygon_sentence_relevance.operator.config import OperatorConfig, Stage
-from osm_polygon_sentence_relevance.operator.earliest_start import policy_type_for
 from osm_polygon_sentence_relevance.operator.label_lanes import LabelLanePlan
+from osm_polygon_sentence_relevance.operator.label_submission import (
+    submit_preferred_label,
+)
 from osm_polygon_sentence_relevance.operator.oar import (
-    GRID5000_TZ,
     ExitClass,
     JobState,
     is_live_state,
@@ -26,7 +26,6 @@ from osm_polygon_sentence_relevance.operator.recorded_job import ResumeInspectio
 from osm_polygon_sentence_relevance.operator.result_text import result_text
 from osm_polygon_sentence_relevance.operator.state import RunPhase, StateStore
 from osm_polygon_sentence_relevance.operator.workflows import (
-    PREFERRED_LABEL_WALLTIME_SECONDS,
     RemoteLayout,
 )
 
@@ -293,22 +292,13 @@ def classify_or_continue(
             )
         if is_label:
             iteration_label_plan = services.current_label_plan(store, config, layout_d)
-            new_job_id = controller_d.submit(
-                component=Stage.LABEL,
+            new_job_id = submit_preferred_label(
+                controller_d,
                 input_parquet=layout_d.root / "input/sentences.parquet",
                 model_file=layout_d.root / "model" / config.label_model_file,
                 tokenizer_dir=layout_d.root / "tokenizer",
-                walltime_seconds=PREFERRED_LABEL_WALLTIME_SECONDS,
-                policy_type=policy_type_for(
-                    datetime.now(tz=GRID5000_TZ),
-                    walltime_seconds=PREFERRED_LABEL_WALLTIME_SECONDS,
-                ),
                 gpu_memory_mb=getattr(args, "gpu_memory_mb", 40_000),
-                **(
-                    {"label_plan": iteration_label_plan}
-                    if iteration_label_plan is not None
-                    else {}
-                ),
+                label_plan=iteration_label_plan,
             )
             continuation_log_name = "labeling.stdout.log"
         else:

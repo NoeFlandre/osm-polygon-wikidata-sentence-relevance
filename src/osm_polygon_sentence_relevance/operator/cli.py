@@ -60,6 +60,9 @@ from osm_polygon_sentence_relevance.operator.label_lanes import (
     LabelLanePlan,
     label_lane_plan,
 )
+from osm_polygon_sentence_relevance.operator.label_submission import (
+    submit_preferred_label,
+)
 from osm_polygon_sentence_relevance.operator.llama_server import ensure_llama_server
 from osm_polygon_sentence_relevance.operator.oar import (
     GRID5000_TZ,
@@ -137,7 +140,6 @@ from osm_polygon_sentence_relevance.operator.supervisor import (
     start_detached_supervisor,
 )
 from osm_polygon_sentence_relevance.operator.workflows import (
-    PREFERRED_LABEL_WALLTIME_SECONDS,
     RemoteLayout,
     label_submission,
     split_submission,
@@ -1334,16 +1336,11 @@ def _run(args: SimpleNamespace) -> int:
         while True:
             label_plan = _current_label_plan(store, config, layout)
             for allocation in range(1, 101):
-                job_id = controller.submit(
-                    component=Stage.LABEL,
+                job_id = submit_preferred_label(
+                    controller,
                     input_parquet=assets.input_parquet,
                     model_file=assets.model_file,
                     tokenizer_dir=assets.tokenizer_dir,
-                    walltime_seconds=PREFERRED_LABEL_WALLTIME_SECONDS,
-                    policy_type=policy_type_for(
-                        datetime.now(tz=GRID5000_TZ),
-                        walltime_seconds=PREFERRED_LABEL_WALLTIME_SECONDS,
-                    ),
                     gpu_memory_mb=getattr(args, "gpu_memory_mb", 40_000),
                     label_plan=label_plan,
                 )
