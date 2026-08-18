@@ -11,6 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Protocol, cast
 
 from .v2_contracts import V2LogitRecord
+from .worker_pool import _ReusableWorkerPool
 
 
 class V2EngineError(RuntimeError):
@@ -115,24 +116,16 @@ class V2LogitEngine:
         self.concurrency = concurrency
         self.timeout_seconds = timeout_seconds
         self.transport = transport
-        self._executor: ThreadPoolExecutor | None = None
-        self._closed = False
-
-    def _worker_pool(self) -> ThreadPoolExecutor:
-        if self._closed:
-            raise V2EngineError("inference engine is closed")
-        if self._executor is None:
-            self._executor = ThreadPoolExecutor(max_workers=self.concurrency)
-        return self._executor
+        self._workers = _ReusableWorkerPool(
+            max_workers=self.concurrency,
+            error_type=V2EngineError,
+            executor_factory=ThreadPoolExecutor,
+        )
 
     def close(self) -> None:
         """Release the reusable request workers after a run."""
 
-        if self._closed:
-            return
-        self._closed = True
-        if self._executor is not None:
-            self._executor.shutdown(wait=True, cancel_futures=True)
+        self._workers.close()
 
     def _one(self, messages: list[dict[str, str]]) -> V2LogitRecord:
         payload: dict[str, object] = {
@@ -180,7 +173,7 @@ class V2LogitEngine:
         )
         if len(ids) != len(messages):
             raise ValueError("sentence_ids must match message count")
-        executor = self._worker_pool()
+        executor = self._workers.get()
         records = list(executor.map(self._one, messages))
         return [
             V2LogitRecord(
