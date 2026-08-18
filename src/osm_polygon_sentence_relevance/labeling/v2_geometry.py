@@ -12,10 +12,10 @@ import json
 import os
 import shutil
 import tempfile
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pyarrow as pa
 import pyarrow.compute as pc
@@ -31,6 +31,20 @@ _RANGE_BLOCK_SIZE = 4 * 1024 * 1024
 _DEFAULT_BATCH_SIZE = 8192
 _WRITE_BATCH_SIZE = 256
 _MAX_ROWS_PER_PAGE = 256
+
+
+def _select_polygon_rows(table: pa.Table, polygon_ids: set[str]) -> pa.Table:
+    """Select requested polygons while preserving the source shard order."""
+
+    # ``pyarrow.compute.is_in`` is available at runtime but missing from the
+    # installed type definitions, so keep the compatibility cast local.
+    is_in = cast(Callable[..., pa.Array], pc.__dict__["is_in"])
+    return table.filter(
+        is_in(
+            table["polygon_id"],
+            value_set=pa.array(sorted(polygon_ids)),
+        )
+    )
 
 
 def _validate_geometry(value: object) -> str:
@@ -330,12 +344,7 @@ def download_and_add_v2_geometry(
         # but give each worker its own real client.
         reader = supplied_filesystem or _default_filesystem()
         table = _read_geometry_shard(reader, path)
-        selected = table.filter(
-            pc.is_in(
-                table["polygon_id"],
-                value_set=pa.array(sorted(needed_by_region[region])),
-            )
-        )
+        selected = _select_polygon_rows(table, needed_by_region[region])
         expected = needed_by_region[region]
         found = set(selected["polygon_id"].to_pylist())
         if found != expected:

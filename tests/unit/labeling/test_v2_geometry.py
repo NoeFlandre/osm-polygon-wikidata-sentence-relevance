@@ -8,6 +8,7 @@ import pyarrow.parquet as pq
 import pytest
 
 from osm_polygon_sentence_relevance.labeling.v2_geometry import (
+    _select_polygon_rows,
     add_v2_geometry,
     add_v2_geometry_from_paths,
     download_and_add_v2_geometry,
@@ -35,6 +36,20 @@ def _metadata(
         "alpha-latest": pa.table({"polygon_id": ["p1"], "geometry": [p1]}),
         "beta-latest": pa.table({"polygon_id": ["p2"], "geometry": [p2]}),
     }
+
+
+def test_select_polygon_rows_preserves_shard_order() -> None:
+    table = pa.table(
+        {
+            "polygon_id": ["p2", "p1", "ignored"],
+            "geometry": ["g2", "g1", "ignored-geometry"],
+        }
+    )
+
+    selected = _select_polygon_rows(table, {"p1", "p2"})
+
+    assert selected["polygon_id"].to_pylist() == ["p2", "p1"]
+    assert selected["geometry"].to_pylist() == ["g2", "g1"]
 
 
 def test_add_v2_geometry_preserves_rows_and_appends_keyed_geometry() -> None:
