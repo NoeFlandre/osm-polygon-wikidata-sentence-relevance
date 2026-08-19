@@ -305,13 +305,10 @@ def inspect_remote_resume(
         # recorded in every checkpoint sidecar (and validated by the final
         # manifest).  Do not reject a valid V2 run merely because the mutable
         # progress record has no identity field.
-        progress_identity_matches = (
-            progress_identity is None
-            or (
-                isinstance(progress_identity, Mapping)
-                and _identity_matches_overlap(
-                    cast(Mapping[str, object], progress_identity), expected_identity
-                )
+        progress_identity_matches = progress_identity is None or (
+            isinstance(progress_identity, Mapping)
+            and _identity_matches_overlap(
+                cast(Mapping[str, object], progress_identity), expected_identity
             )
         )
         try:

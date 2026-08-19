@@ -130,8 +130,8 @@ def test_guard_exports_compute_environment_bootstrap_contract() -> None:
 
 def test_worldwide_profile_uses_label_runtime_without_segmentation_stack() -> None:
     text = GUARD.read_text(encoding="utf-8")
-    assert 'worldwide-label)' in text
-    assert '--extra hub --extra operator' in text
+    assert "worldwide-label)" in text
+    assert "--extra hub --extra operator" in text
     assert "import h3, huggingface_hub, pyarrow, typer" in text
     assert "import h3, huggingface_hub, pyarrow, torch, typer, wtpsplit" in text
 

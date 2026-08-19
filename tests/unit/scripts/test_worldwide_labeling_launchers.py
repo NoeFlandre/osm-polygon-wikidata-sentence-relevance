@@ -53,7 +53,9 @@ def test_payload_discovers_the_staged_llama_server_on_compute_nodes() -> None:
     assert 'LLAMA_SERVER_DIR="${RUN_ROOT}/llama-server-bin"' in payload
     assert '[ -x "${LLAMA_SERVER_DIR}/llama-server" ]' in payload
     assert 'export PATH="${LLAMA_SERVER_DIR}:${PATH}"' in payload
-    assert 'export LD_LIBRARY_PATH="${LLAMA_SERVER_DIR}:${LD_LIBRARY_PATH:-}"' in payload
+    assert (
+        'export LD_LIBRARY_PATH="${LLAMA_SERVER_DIR}:${LD_LIBRARY_PATH:-}"' in payload
+    )
 
 
 def test_payload_gives_server_slots_headroom_without_changing_label_identity() -> None:
@@ -62,8 +64,10 @@ def test_payload_gives_server_slots_headroom_without_changing_label_identity() -
     payload = _text("run_worldwide_labeling.sh")
 
     assert 'SERVER_PER_SLOT_CONTEXT="${LLAMA_PER_SLOT_CONTEXT}"' in payload
-    assert 'SERVER_PER_SLOT_CONTEXT=12288' in payload
-    assert 'SERVER_TOTAL_CONTEXT=$((LLAMA_PARALLEL * SERVER_PER_SLOT_CONTEXT))' in payload
+    assert "SERVER_PER_SLOT_CONTEXT=12288" in payload
+    assert (
+        "SERVER_TOTAL_CONTEXT=$((LLAMA_PARALLEL * SERVER_PER_SLOT_CONTEXT))" in payload
+    )
     assert '--ctx-size "${SERVER_TOTAL_CONTEXT}"' in payload
     # The logical runtime passed to probe/label/finalize remains the persisted
     # identity; only the llama.cpp server gets extra admission capacity.

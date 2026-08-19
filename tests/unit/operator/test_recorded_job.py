@@ -241,9 +241,12 @@ def test_v2_progress_without_identity_uses_checkpoint_identity(
     )
 
     assert inspection.identity_matches is True
-    assert recorded_job.classify_terminal(
-        JobStatus(2971727, JobState.TERMINATED), inspection
-    ) is ExitClass.COMPLETE
+    assert (
+        recorded_job.classify_terminal(
+            JobStatus(2971727, JobState.TERMINATED), inspection
+        )
+        is ExitClass.COMPLETE
+    )
 
 
 def _exit_file(content: str) -> str:
