@@ -375,7 +375,9 @@ def _restage_split_snapshot(
 ) -> str:
     """Stage an already validated Seagate snapshot to another trial site."""
 
-    from scripts.streaming.resume_bundle import validate_resume_bundle
+    from osm_polygon_sentence_relevance.operator.resume_bundle import (
+        validate_resume_bundle,
+    )
 
     inventory = validate_resume_bundle(local_root, _split_state_identity(config))
     destination_ssh = SshClient(target=destination_site, command_timeout=600)

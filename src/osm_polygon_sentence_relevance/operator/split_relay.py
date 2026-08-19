@@ -10,14 +10,6 @@ import uuid
 from collections.abc import Mapping
 from pathlib import Path
 
-from scripts.streaming.resume_bundle import (
-    MANIFEST_NAME,
-    ResumeBundle,
-    ResumeBundleError,
-    create_resume_bundle,
-    validate_resume_bundle,
-)
-
 from osm_polygon_sentence_relevance.operator.relay import _validate_destination_root
 from osm_polygon_sentence_relevance.operator.relay_transport import (
     FILE_MODE,
@@ -26,6 +18,13 @@ from osm_polygon_sentence_relevance.operator.relay_transport import (
     RemoteTransfer,
     list_remote_dir,
     validate_safe_remote_path,
+)
+from osm_polygon_sentence_relevance.operator.resume_bundle import (
+    MANIFEST_NAME,
+    ResumeBundle,
+    ResumeBundleError,
+    create_resume_bundle,
+    validate_resume_bundle,
 )
 
 
