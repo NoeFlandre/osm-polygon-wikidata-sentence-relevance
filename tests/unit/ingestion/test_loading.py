@@ -93,6 +93,34 @@ class TestProjection:
                 "polygons", fpath, columns=("polygon_id", "nonexistent_col")
             )
 
+    def test_unknown_projection_is_rejected_before_table_read(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from osm_polygon_sentence_relevance.ingestion import loading
+
+        monkeypatch.setattr(
+            loading.pq,
+            "read_schema",
+            lambda _path: pa.schema([pa.field("known", pa.string())]),
+        )
+        monkeypatch.setattr(loading, "validate_table_schema", lambda *_args: None)
+
+        def unexpected_read(*_args, **_kwargs):
+            raise AssertionError("table read must not happen for an unknown column")
+
+        monkeypatch.setattr(loading.pq, "read_table", unexpected_read)
+
+        with pytest.raises(ValueError, match="Unknown projection columns") as exc_info:
+            loading.load_validated_table(
+                "polygons",
+                Path("unused.parquet"),
+                columns=("unknown",),
+            )
+        assert str(exc_info.value) == (
+            "Unknown projection columns for 'polygons': ['unknown']"
+        )
+
 
 class TestEmptyColumnsProjection:
     """Projection to an empty column set yields a zero-column table."""

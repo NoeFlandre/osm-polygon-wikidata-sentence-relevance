@@ -7,6 +7,7 @@ from osm_polygon_sentence_relevance.labeling.v2_contracts import (
     V2_MODEL_REPO_ID,
     V2_MODEL_REVISION,
     V2LogitRecord,
+    _validate_logprob,
 )
 
 
@@ -37,13 +38,14 @@ def test_v2_logit_record_rejects_non_binary_labels_and_non_finite_scores() -> No
 
     import pytest
 
-    with pytest.raises(ValueError, match="place_relevance"):
+    with pytest.raises(ValueError, match="place_relevance") as label_error:
         V2LogitRecord(
             sentence_id="s1",
             place_relevance="uncertain",
             yes_logprob=-1.0,
             no_logprob=-1.0,
         )
+    assert str(label_error.value) == "place_relevance must be yes or no"
     with pytest.raises(ValueError, match="finite"):
         V2LogitRecord(
             sentence_id="s1",
@@ -56,8 +58,9 @@ def test_v2_logit_record_rejects_non_binary_labels_and_non_finite_scores() -> No
 def test_v2_logit_record_rejects_empty_ids_and_boolean_scores() -> None:
     import pytest
 
-    with pytest.raises(ValueError, match="sentence_id"):
+    with pytest.raises(ValueError, match="sentence_id") as id_error:
         V2LogitRecord("", "yes", -1.0, -1.0)
+    assert str(id_error.value) == "sentence_id must be a non-empty string"
     with pytest.raises(ValueError, match="yes_logprob"):
         V2LogitRecord("s1", "yes", True, -1.0)
     with pytest.raises(ValueError, match="no_logprob"):
@@ -68,3 +71,7 @@ def test_v2_logit_record_uses_negative_margin_probability_branch() -> None:
     record = V2LogitRecord("s1", "no", -2.0, -1.0)
     assert record.logit_margin == -1.0
     assert record.two_class_probability < 0.5
+
+
+def test_v2_logprob_validator_accepts_finite_numeric_values() -> None:
+    assert _validate_logprob("yes_logprob", -1.0) == -1.0

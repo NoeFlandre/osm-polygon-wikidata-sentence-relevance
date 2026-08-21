@@ -153,8 +153,29 @@ def test_site_decision_reports_each_hard_constraint() -> None:
         "insufficient_persistent_storage",
         "invalid_queue_count",
     )
-    with pytest.raises(NoCompatibleSiteError, match="no Grid"):
+    with pytest.raises(NoCompatibleSiteError, match="no Grid") as exc_info:
         select_site([])
+    assert str(exc_info.value) == "no Grid'5000 sites were probed"
+
+
+def test_site_requirements_accept_exact_gpu_storage_and_cuda_boundaries() -> None:
+    requirements = SiteRequirements(
+        gpu_memory_mb=40_000,
+        cuda_capability=(7, 0),
+        persistent_free_bytes=8 * 1024**3,
+    )
+    exact = SiteProbe(
+        "exact",
+        "exact",
+        True,
+        40_000,
+        (7, 0),
+        8 * 1024**3,
+        0,
+    )
+    decision = evaluate_site(exact, requirements)
+    assert decision.compatible
+    assert decision.reasons == ()
 
 
 def test_oar_parsing_and_expected_walltime_continuation() -> None:

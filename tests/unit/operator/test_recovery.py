@@ -108,13 +108,14 @@ def test_transition_terminal_refuses_an_unexpected_phase() -> None:
         def transition(self, **_kwargs: object) -> None:
             raise AssertionError("transition must not be called")
 
-    with pytest.raises(RuntimeError, match="unexpected durable phase"):
+    with pytest.raises(RuntimeError, match="unexpected durable phase") as exc_info:
         recovery.transition_terminal(  # type: ignore[arg-type]
             Store(),
             expected=(RunPhase.RUNNING,),
             target=RunPhase.COMPLETE,
             facts={},
         )
+    assert str(exc_info.value) == "operator reached an unexpected durable phase"
 
 
 @pytest.mark.parametrize(

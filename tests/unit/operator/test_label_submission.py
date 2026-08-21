@@ -50,3 +50,16 @@ def test_submit_preferred_label_preserves_long_window_and_lane_arguments() -> No
             "label_plan": label_plan,
         }
     ]
+
+
+def test_submit_preferred_label_uses_the_default_gpu_requirement() -> None:
+    controller = _RecordingController()
+
+    submit_preferred_label(
+        controller,
+        input_parquet=PurePosixPath("/remote/input.parquet"),
+        model_file=PurePosixPath("/remote/model.gguf"),
+        tokenizer_dir=PurePosixPath("/remote/tokenizer"),
+    )
+
+    assert controller.calls[0]["gpu_memory_mb"] == 40_000

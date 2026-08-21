@@ -116,6 +116,24 @@ def test_cleanup_cannot_help_when_storage_is_sufficient() -> None:
     assert not cleanup_can_restore_compatibility([ok], requirements)
 
 
+def test_cleanup_can_help_at_exact_gpu_and_cuda_requirements() -> None:
+    requirements = SiteRequirements(
+        gpu_memory_mb=40_000,
+        persistent_free_bytes=10_000,
+    )
+    exact = SiteProbe("x", "x", True, 40_000, (7, 0), 1, 0)
+    assert cleanup_can_restore_compatibility([exact], requirements)
+
+
+def test_cleanup_cannot_help_when_storage_equals_requirement() -> None:
+    requirements = SiteRequirements(
+        gpu_memory_mb=40_000,
+        persistent_free_bytes=10_000,
+    )
+    exact = SiteProbe("x", "x", True, 40_000, (7, 0), 10_000, 0)
+    assert not cleanup_can_restore_compatibility([exact], requirements)
+
+
 # -----------------------------------------------------------------------
 # ensure_home_headroom
 # -----------------------------------------------------------------------

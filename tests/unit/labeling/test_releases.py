@@ -10,6 +10,7 @@ from osm_polygon_sentence_relevance.labeling.releases import (
     release_lane,
     remote_release_path,
     trackio_space_id,
+    trackio_space_url,
 )
 
 
@@ -30,8 +31,9 @@ def test_sampling_identity_is_worldwide_v2_on_same_main_tree() -> None:
 
 
 def test_release_lane_rejects_unknown_explicit_lane() -> None:
-    with pytest.raises(ValueError, match="release lane"):
+    with pytest.raises(ValueError, match="release lane") as exc_info:
         release_lane({"release_lane": "other"})
+    assert str(exc_info.value) == "release lane is invalid"
 
 
 def test_checkpoint_prefix_is_run_scoped_and_same_main() -> None:
@@ -40,5 +42,12 @@ def test_checkpoint_prefix_is_run_scoped_and_same_main() -> None:
 
 @pytest.mark.parametrize("run_id", ["A" * 20, "short", "a" * 19, "a" * 21])
 def test_checkpoint_prefix_rejects_invalid_run_ids(run_id: str) -> None:
-    with pytest.raises(ValueError, match="run ID"):
+    with pytest.raises(ValueError, match="run ID") as exc_info:
         checkpoint_prefix(run_id)
+    assert str(exc_info.value) == "run ID must be 20 lowercase hexadecimal characters"
+
+
+def test_trackio_space_url_uses_the_selected_release_lane() -> None:
+    assert trackio_space_url(ReleaseLane.V2_WORLDWIDE) == (
+        "https://huggingface.co/spaces/" + V2_TRACKIO_SPACE_ID
+    )

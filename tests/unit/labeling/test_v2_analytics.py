@@ -35,6 +35,7 @@ def test_v2_analytics_is_derived_from_rows() -> None:
     assert analytics.unique_polygons == 2
     assert analytics.unique_languages == 2
     assert analytics.place_counts == {"no": 1, "yes": 1}
+    assert analytics.place_percentages == {"no": 0.5, "yes": 0.5}
     assert analytics.missing_coordinate_count == 1
     assert analytics.to_dict()["area_bucket_counts"] == {"large": 1, "small": 1}
 

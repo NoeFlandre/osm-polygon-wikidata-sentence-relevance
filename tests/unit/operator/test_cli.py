@@ -58,6 +58,254 @@ def _run_args(
     )
 
 
+def test_restage_split_snapshot_validates_and_stages_exact_bundle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = SimpleNamespace(run_id="run-1")
+    local_root = Path("/seagate/runs/run-1/snapshot")
+    inventory = object()
+    identity = {"run_id": "run-1", "source_commit": "a" * 40}
+    seen: dict[str, object] = {}
+
+    def validate(root: Path, observed_identity: object) -> object:
+        seen["local_root"] = root
+        seen["identity"] = observed_identity
+        return inventory
+
+    class FakeSsh:
+        def __init__(self, **kwargs: object) -> None:
+            seen["ssh"] = kwargs
+
+    def stage(**kwargs: object) -> str:
+        seen.update(kwargs)
+        return "/remote/bundle"
+
+    monkeypatch.setattr(
+        "osm_polygon_sentence_relevance.operator.resume_bundle.validate_resume_bundle",
+        validate,
+    )
+    monkeypatch.setattr(cli, "_split_state_identity", lambda observed: (
+        identity if observed is config else None
+    ))
+    monkeypatch.setattr(cli, "SshClient", FakeSsh)
+
+    def remote_home(observed: object) -> PurePosixPath:
+        assert isinstance(observed, FakeSsh)
+        return PurePosixPath("/remote/home")
+
+    monkeypatch.setattr(cli, "_remote_home", remote_home)
+    monkeypatch.setattr(cli.split_relay, "stage_to_destination", stage)
+
+    assert cli._restage_split_snapshot(
+        config=config,
+        local_root=local_root,
+        destination_site="grenoble",
+    ) == "/remote/bundle"
+    assert seen["local_root"] == local_root
+    assert seen["identity"] is identity
+    assert seen["ssh"] == {"target": "grenoble", "command_timeout": 600}
+    assert seen["inventory"] is inventory
+    destination = seen["destination"]
+    assert destination.ssh_target == "grenoble"  # type: ignore[union-attr]
+    assert seen["destination_resume_root"] == (
+        "/remote/home/osm-polygon-operator/run-1/split-resume"
+    )
+    assert seen["expected_identity"] is identity
+
+
+def test_stage_hf_token_calls_only_callable_stager_hook() -> None:
+    layout = object()
+    calls: list[object] = []
+
+    class Stager:
+        def stage_hf_token(self, observed_layout: object) -> None:
+            calls.append(observed_layout)
+
+    cli._stage_hf_token(Stager(), layout)
+    cli._stage_hf_token(object(), layout)
+    assert calls == [layout]
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (1, True),
+        (2_147_483_647, True),
+        (0, False),
+        (-1, False),
+        (True, False),
+        (1.0, False),
+        ("1", False),
+        (None, False),
+    ],
+)
+def test_positive_job_id_accepts_only_positive_ints(
+    value: object,
+    expected: bool,
+) -> None:
+    assert cli._positive_job_id(value) is expected
+
+
+@pytest.mark.parametrize(
+    ("site", "job_id", "deadline_at", "expected"),
+    [
+        ("grenoble", 1, 1, True),
+        ("grenoble", 17, 123.5, True),
+        ("sophia", 18, 0, True),
+        ("", 19, 1, True),
+        (None, 20, 1, False),
+        ("grenoble", True, 1, False),
+        ("grenoble", 0, 1, False),
+        ("grenoble", -1, 1, False),
+        ("grenoble", 1.0, 1, False),
+        ("grenoble", 21, None, False),
+        ("grenoble", 22, "123", False),
+    ],
+)
+def test_valid_trial_record_requires_exact_job_and_numeric_deadline(
+    site: object,
+    job_id: object,
+    deadline_at: object,
+    expected: bool,
+) -> None:
+    assert cli._valid_trial_record(site, job_id, deadline_at) is expected
+
+
+def test_append_detached_option_omits_none_and_stringifies_values() -> None:
+    values = ["run"]
+
+    cli._append_detached_option(values, "--missing", None)
+    cli._append_detached_option(values, "--count", 7)
+
+    assert values == ["run", "--count", "7"]
+
+
+def test_detached_run_arguments_preserve_all_options_and_sites() -> None:
+    args = _run_args(sites=["grenoble", "sophia"])
+    args.region = "europe"
+    args.input_revision = "r" * 40
+    args.sampling_target = 123
+    args.request_concurrency = 4
+
+    assert cli._detached_run_arguments(args) == (
+        "run",
+        "--scope",
+        "region",
+        "--stage",
+        "label",
+        "--batch-size",
+        "128",
+        "--row-limit",
+        "0",
+        "--sampling-seed",
+        "sentence-relevance-v2",
+        "--sampling-h3-resolution",
+        "3",
+        "--llama-parallel",
+        "8",
+        "--llama-per-slot-context",
+        "8192",
+        "--gpu-memory-mb",
+        "40000",
+        "--remote-free-bytes",
+        str(8 * 1024**3),
+        "--poll-seconds",
+        "0.0",
+        "--region",
+        "europe",
+        "--input-revision",
+        "r" * 40,
+        "--sampling-target",
+        "123",
+        "--request-concurrency",
+        "4",
+        "--site",
+        "grenoble",
+        "--site",
+        "sophia",
+    )
+
+
+@pytest.mark.parametrize("sampling_target", [None, 200_000])
+def test_detached_resume_arguments_preserve_optional_target_and_sites(
+    sampling_target: int | None,
+) -> None:
+    values = cli._detached_resume_arguments(
+        "run-1",
+        site=["grenoble", "sophia"],
+        gpu_memory_mb=40_000,
+        poll_seconds=30.0,
+        sampling_target=sampling_target,
+    )
+    expected = [
+        "resume",
+        "run-1",
+        "--gpu-memory-mb",
+        "40000",
+        "--poll-seconds",
+        "30.0",
+    ]
+    if sampling_target is not None:
+        expected.extend(("--sampling-target", str(sampling_target)))
+    expected.extend(("--site", "grenoble", "--site", "sophia"))
+    assert values == tuple(expected)
+
+
+@pytest.mark.parametrize(
+    ("record_function", "message"),
+    [
+        (cli._record_split_continuation, "Valid remote checkpoints preserved; continuing."),
+        (cli._record_label_continuation, "Validated label checkpoints preserved; continuing."),
+    ],
+)
+def test_record_continuation_transitions_and_flushes(
+    monkeypatch: pytest.MonkeyPatch,
+    record_function,
+    message: str,
+) -> None:
+    current = SimpleNamespace(phase=RunPhase.QUEUED)
+    transitions: list[dict[str, object]] = []
+    print_calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
+
+    class FakeStore:
+        def load(self) -> SimpleNamespace:
+            return current
+
+        def transition(self, **kwargs: object) -> None:
+            transitions.append(kwargs)
+
+    def fake_print(*args: object, **kwargs: object) -> None:
+        print_calls.append((args, kwargs))
+
+    monkeypatch.setattr("builtins.print", fake_print)
+    record_function(SimpleNamespace(store=FakeStore()), 321)
+
+    assert transitions == [
+        {
+            "expected": RunPhase.QUEUED,
+            "target": RunPhase.REMOTE_PREPARED,
+            "facts": {"continued_after_job": 321},
+        }
+    ]
+    assert print_calls == [((message,), {"flush": True})]
+
+
+@pytest.mark.parametrize(
+    ("record_function", "message"),
+    [
+        (cli._record_split_continuation, "split continuation has invalid durable state"),
+        (cli._record_label_continuation, "label continuation has invalid durable state"),
+    ],
+)
+def test_record_continuation_rejects_unexpected_durable_phase(
+    record_function,
+    message: str,
+) -> None:
+    store = SimpleNamespace(load=lambda: SimpleNamespace(phase=RunPhase.CREATED))
+    with pytest.raises(RuntimeError, match=f"^{re.escape(message)}$"):
+        record_function(SimpleNamespace(store=store), 321)
+
+
 def test_typer_help_exposes_exact_command_set() -> None:
     result = runner.invoke(cli.app, ["--help"], color=False)
 
